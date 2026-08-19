@@ -1,0 +1,28 @@
+# ========== 虚拟�?境配�? ==========
+.venv_lab/
+.venv/
+env/
+venv/
+
+# ========== Python编译缓存 ==========
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# ========== 日志、临时文�? ==========
+*.log
+*.tmp
+*.temp
+
+# ========== VSCode 局部配�? ==========
+.vscode/settings.json
+.vscode/.ropeproject
+
+# ========== 切�?�点云大文件，文物项�?，点云、模型、扫描数�?不�?�上传git，数�?安全�? ==========
+*.ply
+*.las
+*.laz
+*.obj
+*.stl
+*.fbx
