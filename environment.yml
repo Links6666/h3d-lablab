@@ -1,0 +1,15 @@
+name: h3d-env
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10
+  - pip
+  - pip:
+    - open3d>=0.18
+    - numpy>=1.24
+    - py4dgeo>=0.8
+    - colour-science>=0.4
+    - pyyaml>=6.0
+    - tqdm>=4.66
+    - pytest>=8.0
+    - mypy>=1.8

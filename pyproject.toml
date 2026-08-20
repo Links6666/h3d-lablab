@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "h3d"
+version = "0.1.0"
+description = "造像类文物三维建模自动化系统(路线E)"
+requires-python = ">=3.10"
+dependencies = [
+  "open3d>=0.18",
+  "numpy>=1.24",
+  "py4dgeo>=0.8",
+  "pyyaml>=6.0",
+  "colour-science>=0.4",
+  "tqdm>=4.66"
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "mypy>=1.8"]
+
+[project.scripts]
+h3d = "h3d.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

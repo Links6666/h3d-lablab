@@ -1,0 +1,29 @@
+# configs/example.yaml 单尊造像建模任务配置样例
+project:
+  name: dazu_rock_carving_001
+  operator: ""
+  raw_dir: data/raw
+  formats: [ply, pcd, obj]
+
+preprocess:
+  voxel_down_sample: 0.005
+  remove_outlier_std: 2.0
+  normal_estimate_k: 30
+
+register:
+  fpfh_radius: 0.02
+  ransac_distance: 0.05
+  icp_distance: 0.02
+  max_iter: 2000
+
+change:
+  enabled: false
+  core_radius: 0.05
+
+colour:
+  enabled: false
+
+runner:
+  fail_isolation: true
+  resume: true
+  manifest: output/run_manifest.json
