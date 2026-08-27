@@ -1,0 +1,1727 @@
+=== PAGE 1 ===
+造像类文物三维建模自动化系统开发指南
+第 1 页
+造像类文物三维建模自动化系统开发指南
+副标题：面向文保专业研究生与编程新手的软件工程化实践手册 版本：2026 版 ｜ 编制日期：
+2026-08-13 ｜ 适用对象：文物保护（石窟寺 / 彩绘造像方向）硕士研究生、文博信息化从业者、希望进
+入文物数字化领域的软件开发人员 技术主线：以「技术路线 E」——基于 Python + Open3D 开源工具链
+的文物三维数据批量自动化处理管线——为核心，预留多时相（M3C2 点云差分）与色度差分（
+CIEDE2000 色差）两大可扩展板块。 配套软件（工作名）：石窟寺造像三维数据批量数字化处理系统
+h3d-pipeline
+阅读须知：本指南每条外部事实（政策法规、标准号、软件许可证、版本号、他人研究成果）均标注来源等
+级。等级体系见第零篇 0.6 节。无法现场核验的内容列入附录 F「未核实事项清单」，请读者向权威渠道自
+行确认后再据此填报或发表。
+
+=== PAGE 2 ===
+造像类文物三维建模自动化系统开发指南
+第 2 页
+第零篇 方法论与核心指导方针
+本篇在动手写任何一行代码之前，先确立全书的立场、原则与读法。它回答三个问题：我们为何用软件工
+程的方法做文保？全书要守住哪些底线？不同背景的读者该怎样使用这本书？
+0.1 本书的双重立场：软件工程 × 文保实践
+传统文保数字化教程多停留在「某软件怎么点」；纯软件工程教程又假定读者已有成熟业务。本书坚持双
+视角：
+• 工程视角（从业开发者立场）：把「造像三维建模」当作一个可定义需求、可拆解模块、可测试、可复
+现、可交付的软件产品来对待。强调版本控制、自动化、可维护性、文档与著作权。
+• 文保视角（研究生 / 业务方立场）：每一行代码都要回应真实的文物保护问题——无损、精度可溯源、
+符合 WW/T 行业标准、服务于病害定量与材料评价，而非炫技。
+• 交汇点：可复现（reproducible）= 学术诚信 + 工程质量。你今天能一键重跑的管线，既是可发表的
+成果，也是可申请软件著作权的客体。
+0.2 核心指导方针（十条）
+1. 先定义需求，再写代码。一切功能从「文保场景的真实痛点」倒推，禁止为了堆功能而写代码。
+2. 可复现优先于一次性结果。任何模型都必须由脚本 + 配置 + 原始数据可追溯地重生，严禁手点 GUI 
+后只交一个模型文件。
+3. 批处理优先于单样本。系统从第一天就按「目录进、目录出」设计，单一造像只是批量里的一个 item。
+4. 开源合规是不可逾越的红线。引入每一个库先查许可证；GPL 类只能子进程调用，绝不静态链接进你
+的闭源/登记版。
+5. 精度必须量化并署不确定度。报告「配准误差 1.8 mm ±0.4 mm」远胜「配准良好」。
+6. 数据只读、永不覆盖原始。原始扫描永远放在 00_raw 且仅读，所有产物落在派生目录。
+7. 失败隔离、断点续跑。一个坏文件不能让整批崩溃；重跑只补未完成的 item。
+8. 留痕即护权。开发过程的 commit、issue、notebook 是你的独创性证据，也是应对 2026 软著实质
+审查的弹药。
+9. 中文界面与中文注释。成果最终服务于中国文博单位，文档与代码注释使用中文。
+10. 小步快跑、每周可演示。研一就能跑通 MVP，再逐版本加模块，避免毕业前才发现架构走不通。
+0.3 全书结构导览（路线图）
+全书分六篇加附录，逻辑链条如下：
+背景(为何做)  ──>  需求与标准保障(做到什么程度)  ──>  开发基础(用什么做)
+      │                                                      │
+      └──────────────────>  全过程开发指南(怎么做, 含代码)  <┘
+                                      │
+                        可扩展板块(多时相 / 色差)  +  附录(速查/术语/排错/来源)
+篇
+主题
+解决的需求
+对应任务要求
+第零篇
+方法论与指导方针
+确立立场与读法
+要求 6
+第一篇
+背景：管线故事 / 文保场景 /
+政策
+为何做、前人做了什么
+要求 1、7
+第二篇
+需求分析 / 技术要求 / 成果要
+求 / 文保标准保障
+做到什么程度
+要求 8
+
+=== PAGE 3 ===
+造像类文物三维建模自动化系统开发指南
+第 3 页
+篇
+主题
+解决的需求
+对应任务要求
+第三篇
+开发基础（Python / Git / 开
+源库 / 旧法比较）
+用什么做
+要求 2、5
+第四篇
+全过程开发指南（环境到落地
+，含代码）
+怎么做
+要求 3
+第五篇
+可扩展板块（多时相 / 色差）
+如何扩展
+要求 7
+附录
+速查 / 术语 / 排错 / 来源 / 未
+核实项
+随时查阅
+要求 4、5
+0.4 三种读者的阅读路径
+读者画像
+建议路径
+目标
+编程零基础文保研究生
+第零篇 → 第三篇 3.1/3.2 → 第四篇
+4.1/4.4(M0-M3) → 第五篇
+研一跑通 MVP，产出软著雏形
+有 Python 基础的开发者
+第一篇 → 第二篇 → 第四篇全篇 → 第五
+篇
+工程化交付可登记软件
+文博单位信息化主管
+第一篇 1.4/1.5 → 第二篇 2.4 → 第三篇
+3.3/3.5 → 第四篇 4.7
+评估合规与标准符合性
+0.5 通用约定
+• 单位：长度默认毫米（mm），角度默认度（°），色差 ΔE 无量纲；凡涉 WW/T 标准处沿用标准原单
+位。
+• 坐标系：点云统一世界坐标系；批量任务用 run_manifest.json 记录每个 item 的源路径、参数哈希、
+产物路径、状态。
+• 命名：脚本 snakecase，类 CamelCase，配置 key 小写蛇形；文件用「对象工序_日期」如 
+luohan_001_raw_20260813.ply。
+• 代码块语言标注：``python 为可运行示例，`text 为示意/输出，``bash 为终端命令。
+0.6 可信度标注体系
+为保证学术诚实，全书信息按来源等级标注：
+标签
+含义
+可信度
+使用示例
+【法规】
+国家法律 / 行政法规 / 部门规
+章原文
+最高
+《计算机软件保护条例》第
+13、14 条
+【标准】
+WW/T、GB/T 等现行行业标
+准原文
+最高
+WW/T 0117—2023 第 8.3
+条精度要求
+【官方】
+版权保护中心 / 国家文物局 /
+高校官网
+高
+中国版权保护中心 2026-03-
+15 通知
+【判例】
+人民法院生效判决
+高
+北京互联网法院 AI 文生图案
+【核验】
+PyPI / GitHub License API
+实测
+高(版本会变)
+py4dgeo PyPI 标注 MIT
+【媒体】
+主流媒体 / 行业协会转述
+中(需复核)
+某协会对软著新规的解读
+【设计】
+本书原创设计建议
+供参考
+五层架构、run_manifest 设
+计
+【推断】
+基于已核实事实的逻辑推理
+中
+由 0 经费推断设备需借力
+
+=== PAGE 4 ===
+造像类文物三维建模自动化系统开发指南
+第 4 页
+标签
+含义
+可信度
+使用示例
+【存疑】
+无法核实，须读者确认
+不可采信
+导师课题实际到账经费
+
+=== PAGE 5 ===
+造像类文物三维建模自动化系统开发指南
+第 5 页
+第一篇 背景：技术管线故事、文保场景与政策
+本篇回答「我们为什么要从零搭一套自动化建模系统」。它从一线文保的真实困境讲起，铺陈造像类文物
+的特殊性、西南潮湿环境的额外挑战，综述前人研究，最后引出本书的主角——技术路线 E 自动化管线，
+并在背景中论述多时相与色度差分两块可扩展能力。
+1.1 文保数字化的现实困境（背景故事）
+故事从一个具体场景开始。某石窟寺需对一尊彩绘造像做三维存档：
+• 现场用结构光 / 激光扫描得到数十站、数百万到上亿点的点云；用单反拍得数百张高像素 RAW 纹理。
+• 传统工作流：把这些数据导入商业 GUI 软件（如 Metashape、CloudCompare、Geomagic），人工
+逐站配准、手动去噪、手工重建网格、肉眼检查。一个熟练工程师处理一尊造像要数天。
+• 痛点 1——不可复现：同样的数据换个人、换台机器，点几下不同，结果就不同，无法在论文里说清「
+我怎么得到的」。
+• 痛点 2——不可批处理：十尊、一百尊造像时，手工流程彻底崩溃，且无法保证一致性。
+• 痛点 3——核心算法黑箱：商业软件配准用的什么方法、误差多大，用户不知道，调参靠经验。
+• 痛点 4——成本与许可：商业软件按节点收费，课题组预算有限；且生成结果的法律属性（能否开源、
+能否申请软著）模糊。
+这些痛点并非个例。它解释了为何「用开源、可脚本、可复现的 Python 管线替代手工 GUI」对文保研究
+方向生具有战略价值：它把你和「只会点软件的技术员」区分开，是你的核心壁垒。
+1.2 造像类文物的特殊性
+类型
+材质 / 工艺
+数字化难点
+对建模系统的启示
+石窟寺造像
+砂岩 / 石灰岩雕凿，常处潮湿
+半室外
+表面高反射、低纹理、风化凹
+坑、渗水
+需多源融合、稳健配准、法线
+质量高
+彩绘泥塑（罗汉像等）
+泥胎 + 地仗 + 彩绘层 + 贴金
+多层几何耦合、彩绘层薄易损、
+忌接触
+无损优先、纹理与色彩精度并
+重
+石质彩绘造像
+砂岩 + 矿物/有机颜料层
+潮湿致颜料变色、起甲、酥碱
+色差追踪、病害定量指标
+1.3 西南潮湿环境的特殊挑战
+以重庆及川渝石窟寺为例，潮湿环境带来四类额外难题【推断＋标准】:
+• 水盐 cycle：雨季水汽携带可溶盐（硫酸盐、硝酸盐）反复结晶—溶解，体积变化应力破坏地仗，引发
+酥碱、起甲、龟裂、脱落（与灵岩寺罗汉像病害机制同源，见 1.5.1）。
+• 可逆湿胀干缩形变：同一造像在湿季 / 旱季表面有毫米级可逆位移，与不可逆风化难以分离——这正
+是多时相差分（第五篇）要专门处理的不确定性来源。
+• 低光照 + 高湿的纹理采集：洞窟内光照弱、湿度大，色卡校准与 RAW 工作流更关键（见 2.4、第五篇
+ 5.2）。
+• 设备与准入门槛：大场景激光扫描设备稀缺、核心区准入需正式渠道；故系统以「摄影测量替代激光、
+院内结构光做高精度、借用合作单位数据」为低成本方案（见 1.6）。
+1.4 文保实践中的核心问题清单
+1. 如何把分散的多站、多源（激光 / 摄影 / 结构光）点云自动配准到同一坐标系？
+2. 如何在不损伤文物的前提下获得高保真网格，并量化几何误差？
+
+=== PAGE 6 ===
+造像类文物三维建模自动化系统开发指南
+第 6 页
+3. 如何自动提取病害定量指标（起翘面积率、酥粉深度、色差 ΔE  、粉化体积）？
+4. 如何对跨时段（年 / 月）扫描做差分，区分可逆形变与不可逆风化？
+5. 如何保证色彩在时间维度上的一致性与可追溯？
+6. 如何让上述全流程可复现、可批处理、可开源、可申请软著？
+1.5 前人研究综述
+1.5.1 导师童永东及师门研究脉络【官方／媒体】
+重庆师范大学历史与社会学院（考古文博学院）童永东博士的研究是本书最直接的学术母体。其学术脉络
+（依据重庆师范大学新闻网、童永东博士论文摘要等公开资料）：
+• 博士论文（北京科技大学，导师马清林，2022）：《彩塑文物色彩与纹理虚拟复原研究——以山东灵
+岩寺彩绘达摩像为例》。方法：文献梳理 + 艺术风格研究 + 科学分析（XRD / IC / μ-RS / OM / 
+SEM-EDX 多技术联用）+ 模拟实验 + 三维扫描 + 多视图重建 + 纹理映射。
+• 灵岩寺罗汉像病害分析（蔡友振、童永东、张坤、马清林，《文物保护与考古科学》2024，36(3)）：
+揭示酥碱源于硫酸盐 / 硝酸盐反复结晶—溶解的体积应力，进而引发彩绘层起甲、龟裂、脱落；积尘区 
+Ca² 、SO ²  水合膨胀传递至颜料层。
+• 造像类文物高保真信息三维建模方法研究：提出一种经济、便捷、适用于造型类文物的三维建模方法（
+本书建模自动化的直接前身）。
+• Digital technology virtual restoration of the colours and textures ...（AAS 期刊）：在科学
+分析与模拟实验基础上结合三维建模、纹理映射虚拟复原灵岩寺彩绘达摩像原貌。
+• 彩绘材料谱：天然矿物（朱砂、赤铁矿、铅丹、铅白、雌黄、白垩、高岭土、蓝铜矿等）+ 近代合成（
+巴黎绿、群青、铬黄、罗丹明 B、TiO ）；贴金银箔腐蚀产物为氯银矿。
+对本书的启示：导师工作流依赖商业 GUI，核心算法非自研、不可复现、不可批处理。本书用 Open3D 重
+建可复现管线，恰补其最大缺口，也是你与师门差异化的切入点【设计／推断】。
+1.5.2 石窟寺数字化标准与机构工作【标准／官方】
+• WW/T 0117—2023《石窟寺三维数字化采集与加工》（国家文物局 2023-12-06 发布，
+2024-07-01 实施；武汉大学、敦煌研究院、武汉大势智慧等起草，张帆、黄先锋、吴健等）。填补我
+国石窟寺三维数字化行业标准空白。
+• WW/T 0115—2023《可移动文物三维数字化采集与加工》（同期发布实施），适用于彩绘泥塑等可
+移动造像。
+• 敦煌研究院、武汉大学在莫高窟、云冈、龙门、大足、克孜尔等十余年实践形成方法体系（见第二篇
+2.4 精度对标）。
+1.5.3 多时相形变监测的学界基础【标准／文献】
+• M3C2 算法：Lague D., Brodu N., Leroux J. (2013) Accurate 3D comparison of complex 
+topography with terrestrial laser scanner, ISPRS J. Photogrammetry and Remote Sensing 
+82:10-26. 点云法向距离差分的标准方法。
+• 误差传播扩展：Winiwarter et al. (2021) M3C2-EP；Zahs et al. (2022) PB-M3C2（平面约束降不确
+定度）。
+• 云冈半干旱案例：在干燥环境已做成「定性→定量风化速率」；潮湿环境（本书场景）的重做填补「潮
+湿 + 水盐」定量空白，学术新颖性高。
+1.5.4 色彩与色差的研究基础【标准／文献】
+• CIEDE2000（ΔE  ）：工业界色差金标准；Python 由 colour-science 库实现（见第三篇 3.3）。
+
+=== PAGE 7 ===
+造像类文物三维建模自动化系统开发指南
+第 7 页
+• WW/T 0117—2023 纹理要求：相机传感器 ≥24×36 mm、RGB 每通道 ≥12 bit、单张 ≥3400 万像
+素、支持 RAW；色温 5500 K ±10%；标准色卡 ≥24 色。本书第五篇 5.2 据此设计色彩采集规范。
+• X-Rite 色彩管理：用色卡 + 分光光度计做跨时段色彩一致性基准。
+1.5.5 开源三维处理生态现状【核验】
+工具
+定位
+许可证
+与本书关系
+Open3D
+程序化 3D（配准/网格/可视
+化）
+MIT
+核心引擎，安全
+py4dgeo
+多时相点云差分（M3C2 等）
+MIT
+扩展板块 X1 引擎，安全
+PyMeshLab
+网格处理（清洗/简化/Poisso
+n）
+GPL-3.0
+可用但需隔离（见 3.5）
+CloudCompare
+点云分析 / M3C2 / 配准
+GPL
+仅子进程调用
+COLMAP
+SfM + MVS 摄影测量
+BSD-3
+摄影测量替代 Metashape
+colour-science
+色彩科学 / ΔE  MIT
+扩展板块 X2 引擎，安全
+1.6 本文提出的解决办法：技术路线 E 自动化管线
+技术路线 E 是用 Python + Open3D（+ py4dgeo） 复现并自动化导师商业软件工作流的开源管线。它的
+主张：
+• 可复现：同一个 config.yaml + 同一份原始数据，任何人重跑得到同一结果。
+• 可批处理：输入一个目录（N 尊造像），输出 N 套模型 + 一份 run_manifest.json 溯源清单。
+• 可开源 / 可申请软著：纯 MIT 栈（Open3D/py4dgeo/colour-science/NumPy）使著作权与合规无
+虞（见第三篇 3.5）。
+• 低成本起步：一台普通笔记本即可跑通 MVP；GPU 为加分项非必需（降采样 + 分块）。
+• 方法底座：作为 A（大足彩绘石质造像病害定量）、B（多时相差分）、C（材料形貌响应）、D（色
+彩规范）四方向的技术底座，而非孤立工具。
+管线主线聚焦「文物批量数字化处理 + 自动化输出数字模型」；多时相差分与标准色差计算设计为两个可
+选的次要模块（配置开关），既聚焦 V1.0 功能描述，又为 V2.0 单独登记留空间（见 1.7、第二篇 2.1）。
+1.7 多时相与色度差分可扩展板块的背景论述（要求 7）
+两块扩展能力并非临时起意，而是从文保科学问题自然生长：
+1.7.1 多时相建模（M3C2 板块）
+• 科学问题：潮湿环境砂岩石刻表面逐年劣化速率是多少？可逆湿胀与不可逆风化如何分离？
+• 技术算法：M3C2 / M3C2-EP / PB-M3C2（py4dgeo, MIT）；配准误差传播分析（Lague 2013, 
+Winiwarter 2021）。
+• 软件：py4dgeo（Python/C++ 绑定，MIT，2026 最新 1.2.0）；CloudCompare M3C2 插件（GPL
+，仅作黄金基准子进程）。
+• 实施建议：真实石刻监测以「年」计，与学制冲突 → 主实验用「加速老化模拟样块的多时相扫描」，
+真实监测作补充。
+1.7.2 色度差分（CIEDE2000 板块）
+• 科学问题：彩绘层跨时段变色多少？修复材料色稳如何评价？
+• 技术算法：CIEDE2000 色差（colour-science, MIT）；色卡校准 + 分光光度计（X-Rite）。
+
+=== PAGE 8 ===
+造像类文物三维建模自动化系统开发指南
+第 8 页
+• 标准依据：WW/T 0117—2023 纹理采集要求；RAW 工作流。
+• 实施建议：定位为转化副线，产出软著 + 技术规程，而非主线学位论文。
+
+=== PAGE 9 ===
+造像类文物三维建模自动化系统开发指南
+第 9 页
+第二篇 需求分析、技术要求、成果要求与文保标准保障（要求
+8）
+本篇把「想做的事」翻译成「可验收的指标」。软件工程的起点是需求，文保的底线是标准。二者共同约
+束第四篇的实现。
+2.1 核心软件需求分析
+2.1.1 功能性需求（FR）
+编号
+需求
+说明
+优先级
+FR-01
+批量接入多源点云
+读取 PLY/OBJ/E57/PLY，支
+持激光/摄影/结构光多站
+必须
+FR-02
+自动配准
+FPFH+RANSAC 全局 + ICP
+精配准，输出变换矩阵
+必须
+FR-03
+网格重建
+屏幕泊松 / 球旋转重建，输出
+水面网格
+必须
+FR-04
+后处理度量
+简化/修补/孔洞检测/
+Hausdorff 距离
+必须
+FR-05
+批量调度与续跑
+目录进目录出，run_manifest
+ 溯源，失败隔离
+必须
+FR-06
+多时相差分(可选)
+M3C2 法向距离 + 误差传播
+可选
+FR-07
+色差计算(可选)
+CIEDE2000 + 色卡校准
+可选
+FR-08
+CLI 与配置
+YAML 配置驱动，命令行一键
+运行
+必须
+2.1.2 非功能性需求（NFR）
+编号
+需求
+指标
+NFR-01
+可复现性
+同 config+同数据 → 同结果（含随机种
+子固定）
+NFR-02
+精度
+配准误差 ≤ 特征点中误差 5 mm（对标
+WW/T 0117）
+NFR-03
+性能
+单尊千万级点云在普通笔记本 ≤ 数分钟/
+工序
+NFR-04
+合规
+仅 MIT/BSD 栈进登记版；GPL 仅子进
+程
+NFR-05
+易用
+研一新生按第四篇可独立跑通 MVP
+2.1.3 用例（User Story）
+# 用例 UC-01：批量建模
+角色：研一学生
+前置：D:/data/00_raw/ 下有 luohan_001..luohan_050 各站扫描
+步骤：
+  1. 编写 config.yaml（尺度、分辨率、开关 X1/X2）
+  2. 运行  h3d run --config config.yaml
+  3. 系统逐 item 配准→重建→度量，写 run_manifest.json
+后置：D:/data/03_model/ 下 50 个网格 + 一份溯源清单 + 精度报告
+2.2 技术要求
+
+=== PAGE 10 ===
+造像类文物三维建模自动化系统开发指南
+第 10 页
+• 几何精度：点云特征点间距中误差不宜大于 5 mm；最大点间距不宜大于 3 mm；可见区域覆盖率不
+小于 80%；相邻扫描站重叠度不小于 30%（援引 WW/T 0117—2023 8.2.3）。
+• 配准精度：连续传递配准次数不应超过 4 次；不宜仅通过点云特征点配准（需公共标靶/控制点）。
+• 纹理质量：相机 ≥3400 万像素 RAW、每通道 ≥12 bit、色温 5500 K±10%、标准色卡 ≥24 色。
+• 无损原则：人员/设备/标靶不直接接触文物；手持扫描距文物 >20 cm，架站设备 >40 cm（WW/T 
+0117 5.b）。
+• 数据安全：采集数据不增、不改、不丢、不泄；知识产权合规（WW/T 0117 5.d）。
+2.3 成果要求
+类别
+交付物
+用途
+软件
+h3d-pipeline V1.0 源代码 + 可执行 CLI
+软著登记客体
+模型
+造像水面网格（OBJ/PLY）+ 点云
+存档 / 展示 / 定量
+文档
+用户手册 + 技术设计书 + 精度报告
+软著材料 + 验收
+权属
+软件著作权登记证书
+知识产权确权
+学术
+工具论文（SoftwareX）+ 方法学论文
+学位论文支撑
+数据
+run_manifest.json 溯源 + 原始数据只
+读归档
+可复现证明
+2.4 文保标准保障分析
+2.4.1 直接对标的标准清单
+标准号
+名称
+与系统关系
+关键条款
+WW/T 0117—2023
+石窟寺三维数字化采集与加工
+主控标准
+8.2.3 点云精度/完整度；5 安
+全
+WW/T 0115—2023
+可移动文物三维数字化采集与
+加工
+彩绘泥塑适用
+设备/精度/色彩管理
+WW/T 0116—2023
+石窟寺二维数字化采集与加工
+纹理/正射补充
+图像精度
+GB/T 1.1—2020
+标准化工作导则
+文档体例
+编写格式
+CH/T 1004
+测绘技术设计规定
+方案设计
+7.1 方案设计
+2.4.2 精度保障的工程落点
+• 配准误差预算：把 WW/T 的 5 mm 中误差拆到各工序（扫描仪本身、标靶、全局配准、ICP），每步
+留余量。
+• 不确定度同报：任何定量指标（起翘面积、ΔE  、风化量）都附不确定度，呼应 M3C2-EP 误差传播
+思想。
+• 标准符合性自检脚本：在管线末尾自动生成「标准符合性检查表」，逐条比对 WW/T 0117 指标，输
+出达标/不达标。
+• 无损与安全距离：在采集建议书中固化安全距离（见 2.2），系统本身只处理已采集数据，不接触文物。
+2.5 合规边界总览
+• 著作权：职务作品按《计算机软件保护条例》第 13 条，登记证书著作权人通常为单位；学生需三轨保
+全（软著 + GitHub/Zenodo DOI + 工具论文）证明个人贡献（详见第四篇 4.7）。
+
+=== PAGE 11 ===
+造像类文物三维建模自动化系统开发指南
+第 11 页
+• 开源许可：MIT/BSD 栈可自由用于登记版；GPL（PyMeshLab/CloudCompare）只能子进程调用并
+声明，绝不静态链接（详见第三篇 3.5）。
+• 数据敏感：原始造像数据属文博单位资产，代码开源 ≠ 数据公开；数据永不随代码仓库发布（详见 3.5）
+。
+• AI 边界：2026 软著新规要求手抄「未使用 AI 开发编写代码」，登记版须完全人工编写（详见 4.7 时
+间切割策略）。
+
+=== PAGE 12 ===
+造像类文物三维建模自动化系统开发指南
+第 12 页
+第三篇 开发基础：Python、Git 与开源工具链（要求 2、5）
+本篇面向零基础读者，事无巨细地铺陈开发所需的全部基础：Python 语法与科学栈、Git/GitHub 协作、
+逐个介绍管线用到的开源算法与库（来源 / 获取 / 许可证 / 核心算法 / 关键 API），并与旧方法比较。
+3.1 Python 编程基础（零起点）
+3.1.1 为什么是 Python
+Python 语法接近自然语言、科学计算生态成熟（NumPy/Open3D/py4dgeo 均为 Python 优先）、便于
+批处理脚本化，是文保自研管线的首选语言。
+3.1.2 安装与第一个程序
+# 1) 到 python.org 下载 3.11+ 安装（勾选 "Add to PATH"）
+# 2) 终端验证
+python --version        # 应显示 3.11.x 或 3.13.x
+# 3) 第一个脚本 hello.py
+print("你好，文物数字化")   # 保存后运行: python hello.py
+3.1.3 核心语法速览
+# 变量与类型
+name = "luohan_001"     # 字符串 str
+voxel = 2.0             # 浮点 float
+count = 50              # 整数 int
+ready = True           # 布尔 bool
+# 列表 / 字典 / 元组
+stations = ["s01", "s02", "s03"]          # 列表 list
+meta = {"object": name, "voxel": voxel}    # 字典 dict
+point = (1.2, 3.4, 5.6)                    # 元组 tuple（不可改）
+# 控制流
+for s in stations:
+    print("处理站点", s)
+if voxel > 1.0:
+    print("粗采样")
+# 函数
+def down_sample(pcd, voxel_size):
+    """对点云降采样，返回新点云。"""
+    return pcd.voxel_down_sample(voxel_size)
+# 异常
+try:
+    open("not_exist.ply")
+except FileNotFoundError as e:
+    print("文件缺失:", e)
+3.1.4 文件与目录操作
+import os, json
+raw_dir = "D:/data/00_raw"
+for root, _, files in os.walk(raw_dir):
+    for f in files:
+        if f.endswith(".ply"):
+            path = os.path.join(root, f)
+            print("发现原始点云:", path)
+# 写 JSON 溯源
+
+=== PAGE 13 ===
+造像类文物三维建模自动化系统开发指南
+第 13 页
+manifest = {"object": "luohan_001", "status": "done"}
+with open("run_manifest.json", "w", encoding="utf-8") as fh:
+    json.dump(manifest, fh, ensure_ascii=False, indent=2)
+3.1.5 NumPy：点云运算的底座
+import numpy as np
+# 点云本质是 N×3 的 numpy 数组
+pts = np.array([[1.0, 2.0, 3.0],
+                [4.0, 5.0, 6.0]], dtype=np.float64)
+print(pts.shape)            # (2, 3)
+centroid = pts.mean(axis=0) # 质心
+dist = np.linalg.norm(pts - centroid, axis=1)
+print("到质心距离:", dist)
+3.1.6 虚拟环境与依赖管理
+# 创建隔离环境（避免污染系统 Python）
+python -m venv .venv
+# Windows 激活:
+.venv\Scripts\activate
+# 安装管线依赖
+pip install open3d py4dgeo colour-science numpy scipy pyyaml tqdm
+pip freeze > requirements.txt   # 锁定版本，保证可复现
+3.1.7 日志与可复现
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.FileHandler("pipeline.log", encoding="utf-8"),
+              logging.StreamHandler()])
+logging.info("开始处理 luohan_001, voxel=2.0")
+3.1.8 新手常见坑
+• 路径用正斜杠或双反斜杠：D:/data/00_raw 或 D:\\data\\00_raw，不要单反斜杠（会被当转义）。
+• 中文路径/文件名尽量用 encoding="utf-8" 读写。
+• 不要用 IDE 默认的 Python 和系统 Python 混用；始终在 .venv 激活态下安装与运行。
+• 大数组运算优先 NumPy 向量化，别写 Python 双层 for 循环（慢百倍）。
+3.2 Git / GitHub 使用
+3.2.1 核心概念
+概念
+含义
+文保场景类比
+仓库 repo
+项目的版本文件夹
+一份造像的「全部版本档案」
+commit
+一次快照（含作者/时间/说明）
+每次处理留痕
+branch
+并行开发线
+V1 主线 / X1 多时相实验分支
+remote
+远端（GitHub）
+云端备份 + 协作
+PR
+合并请求
+把实验分支并入主线前评审
+3.2.2 日常工作流
+git init                      # 在项目根初始化（仅一次）
+git add .                      # 暂存改动
+git commit -m "feat: 增加 ICP 精配准模块 M3"
+git branch x1-multitemporal    # 开多时相实验分支
+
+=== PAGE 14 ===
+造像类文物三维建模自动化系统开发指南
+第 14 页
+git checkout x1-multitemporal
+git push -u origin x1-multitemporal
+3.2.3 协作与发布
+• 用 Issue 记录 bug 与待办（如「M3 配准在凹雕像误差大」），这是独创性证据链。
+• 用 Release + Tag（如 v1.0.0）标记稳定版；在 GitHub 点 Archive 到 Zenodo 获取 DOI，作为学
+术成果的永久引用与权属旁证（三轨保全之一）。
+• .gitignore 必须忽略 .venv/、__pycache__/、以及原始数据目录（数据永不进仓库）。
+3.2.4 许可证文件
+仓库根放 LICENSE（选 MIT 或 Apache-2.0）与 NOTICE，声明你使用的开源组件及其许可证（详见 3.5）
+。
+3.3 开源算法与 Python 库逐一介绍
+下面逐个库给出：来源 / 获取方式 / 许可证 / 核心算法 / 关键 API / 文保关联 / 风险。许可证以 
+PyPI/GitHub 实测为准（标注【核验】），版本会演进，登记前请复核。
+3.3.Open3D — 点云与三维几何核心引擎
+维度
+内容
+许可证
+MIT （【核验】PyPI / GitHub intel-isl/Open3D）
+来源
+https://github.com/isl-org/Open3D ｜ 文档
+http://www.open3d.org
+获取
+pip install open3d
+核心算法
+FPFH 特征、RANSAC/ICP 配准、泊松重建、KDTree、可视
+化
+关键 API
+o3d.io.readpointcloud / voxeldownsample / 
+estimatenormals / computefpfhfeature / 
+registrationransacbasedonfeaturematching / 
+registrationicp / createfrompointcloud_poisson
+文保关联
+管线主力：配准 + 重建 + 度量，全部 MIT，可放心进登记版
+风险/策略
+无（宽松许可）
+3.3.py4dgeo — 多时相点云差分（M3C2）
+维度
+内容
+许可证
+MIT （【核验】PyPI 标注 MIT；GitHub
+3dgeo-heidelberg/py4dgeo）
+来源
+https://github.com/3dgeo-heidelberg/py4dgeo ｜ 文档
+https://py4dgeo.readthedocs.io
+获取
+pip install py4dgeo （需 Python >= 3.10）
+核心算法
+M3C2、M3C2-EP（误差传播）、PB-M3C2（平面约束）、
+4D objects-by-change
+关键 API
+py4dgeo.M3C2(corepoints=, normals=, 
+workingdistance=) / compute()
+文保关联
+扩展板块 X1 引擎；2026 发表 SoftwareX 论文（doi
+10.1016/j.softx.2026.102670）
+风险/策略
+无（MIT）；注意 API 跨版本可能改名，脚本内 pin 版本
+
+=== PAGE 15 ===
+造像类文物三维建模自动化系统开发指南
+第 15 页
+3.3.PyMeshLab — 网格处理（清洗/简化/泊松）
+维度
+内容
+许可证
+GPL-3.0-or-later （【核验】PyPI conda-forge 标注
+GPL-3.0-or-later；官方文档「GPL License」）
+来源
+https://github.com/cnr-isti-vclab/PyMeshLab ｜ 文档
+https://pymeshlab.readthedocs.io
+获取
+pip install pymeshlab
+核心算法
+removeduplicatevertices / decimationquadricedgecollaps
+e / generatesurfacereconstructionscreenedpoisson / 
+hausdorffdistance
+关键 API
+pymeshlab.MeshSet() → loadnewmesh / 各 meshing_* 滤
+镜
+文保关联
+网格后处理可选引擎；功能强但许可证为 GPL
+风险/策略
+GPL 强 copyleft：作为 Python 库 import 即构成衍生作品。
+策略：①优先用 Open3D 自带网格处理避坑；②若必须用，
+置于独立子进程并声明许可证，不链接进登记版（见 3.5）
+3.3.CloudCompare — 点云分析 / M3C2 插件 / 配准
+维度
+内容
+许可证
+GPL （【核验】官网/社区；M3C2 插件随附）
+来源
+https://www.cloudcompare.org
+获取
+官网下载安装包（非 pip）
+核心算法
+点云配准、M3C2 距离、噪声统计、标靶配准
+关键 API
+CLI: CloudCompare -O a.ply -O b.ply -REGISTER 等
+文保关联
+多时相黄金基准 + 配准对照；导师熟悉其宿主
+风险/策略
+GPL：仅通过命令行子进程调用，绝不把其代码链入你的程序
+（见 3.5）
+3.3.COLMAP — 运动恢复结构 SfM + 多视立体 MVS
+维度
+内容
+许可证
+BSD-3-Clause （【核验】GitHub colmap/colmap
+LICENSE = BSD-3）
+来源
+https://github.com/colmap/colmap ｜ 文档
+https://colmap.github.io
+获取
+pip 无官方 wheel；走官网/conda 或源码编译
+核心算法
+SfM（特征+BA）、MVS（深度图融合）
+关键 API
+CLI: colmap feature_extractor / colmap mapper / colmap 
+image_undistorter
+文保关联
+摄影测量替代商业 Metashape；产出稀疏/稠密点云入管线
+风险/策略
+无（BSD-3）；体积较大，新手可用 Metashape 教育版过渡
+3.3.colour-science (colour) — 色彩科学 / CIEDE2000 色差
+维度
+内容
+许可证
+MIT （【核验】GitHub colour-science/colour 标注 MIT）
+
+=== PAGE 16 ===
+造像类文物三维建模自动化系统开发指南
+第 16 页
+维度
+内容
+来源
+https://github.com/colour-science/colour ｜
+https://www.colour-science.org
+获取
+pip install colour-science
+核心算法
+色彩空间转换、色差 delta_E（CIE76/94/2000）、相机特性
+文件
+关键 API
+colour.delta_E(RGB1, RGB2, method='CIE 2000')
+文保关联
+扩展板块 X2 引擎；色差 ΔE   金标准
+风险/策略
+无（MIT）
+3.3.NumPy / SciPy / Pandas — 科学计算底座
+维度
+内容
+许可证
+BSD-3-Clause （【核验】PyPI 标注 BSD）
+来源
+https://numpy.org ｜ https://scipy.org ｜
+https://pandas.pydata.org
+获取
+pip install numpy scipy pandas
+核心算法
+数组运算 / 优化插值 / 表格
+关键 API
+np.array / scipy.spatial.cKDTree / pd.DataFrame
+文保关联
+一切数值处理基础
+风险/策略
+无（BSD）
+3.3.trimesh — 网格 IO 与分析
+维度
+内容
+许可证
+MIT （【核验】GitHub mikedh/trimesh 标注 MIT）
+来源
+https://github.com/mikedh/trimesh
+获取
+pip install trimesh
+核心算法
+网格加载、连通性、体积、截面
+关键 API
+trimesh.load / mass_properties / section
+文保关联
+网格度量备选（体积/粉化区）
+风险/策略
+无（MIT）
+3.3.laspy — LAS/LAZ 激光雷达点云
+维度
+内容
+许可证
+BSD-2-Clause （【核验】PyPI 标注 BSD-2-Clause）
+来源
+https://github.com/laspy/laspy
+获取
+pip install laspy
+核心算法
+读写 LAS/LAZ、强度/分类字段
+关键 API
+laspy.read / LasData.points
+文保关联
+若接入机载/地面激光雷达数据
+风险/策略
+无（BSD-2）
+
+=== PAGE 17 ===
+造像类文物三维建模自动化系统开发指南
+第 17 页
+3.3.PyYAML — 配置文件解析
+维度
+内容
+许可证
+MIT （【核验】PyPI 标注 MIT）
+来源
+https://github.com/yaml/pyyaml
+获取
+pip install pyyaml
+核心算法
+YAML 读写
+关键 API
+yaml.safeload / yaml.safedump
+文保关联
+管线 config.yaml 驱动
+风险/策略
+无（MIT）；用 safe_load 防执行任意代码
+3.3.tqdm — 进度条
+维度
+内容
+许可证
+MPL-2.0 AND MIT （【核验】PyPI 标注 MPL-2.0 AND MIT）
+来源
+https://github.com/tqdm/tqdm
+获取
+pip install tqdm
+核心算法
+迭代进度显示
+关键 API
+for x in tqdm(items): ...
+文保关联
+长批处理可视化
+风险/策略
+弱 copyleft MPL-2.0，仅作为依赖调用无传染风险
+3.3.Pillow (PIL) — 图像读写
+维度
+内容
+许可证
+MIT-CMU (HPND) （【核验】PyPI 标注 MIT-CMU）
+来源
+https://python-pillow.org
+获取
+pip install pillow
+核心算法
+图像解码/缩放
+关键 API
+PIL.Image.open / resize / save
+文保关联
+纹理预处理
+风险/策略
+无（宽松）
+3.3.pytest — 单元测试
+维度
+内容
+许可证
+MIT （【核验】PyPI 标注 MIT）
+来源
+https://docs.pytest.org
+获取
+pip install pytest
+核心算法
+测试发现与断言
+关键 API
+def test_xxx(): assert ...
+文保关联
+管线质量保证（第四篇 4.5）
+风险/策略
+无（MIT）
+
+=== PAGE 18 ===
+造像类文物三维建模自动化系统开发指南
+第 18 页
+3.3.plyfile（警示） — PLY 读写
+维度
+内容
+许可证
+GPL-3.0+ （【核验】PyPI 标注 GPL-3.0+（隐蔽陷阱））
+来源
+https://github.com/dranjan/plyfile
+获取
+（建议不要安装）
+核心算法
+PLY 解析
+关键 API
+—
+文保关联
+最常用 PLY 读取库，但许可证为 GPL，会污染登记版
+风险/策略
+高：GPL 强 copyleft。改用 Open3D 的 
+o3d.io.readpointcloud / writepointcloud 读写 PLY（MIT）
+，彻底规避
+3.3.PyTorch（可选） — 深度学习框架
+维度
+内容
+许可证
+BSD-3-Clause （【核验】PyPI 标注 BSD-3）
+来源
+https://pytorch.org
+获取
+pip install torch
+核心算法
+CNN/Transformer 病害语义分割
+关键 API
+torch.nn / torchvision
+文保关联
+可迁移方向：深度学习病害识别（第五篇 5.3）
+风险/策略
+无（BSD-3）；体积大、需 GPU，非管线必需
+3.4 旧方法比较
+3.4.1 商业 GUI 工作流 vs 开源自研管线
+维度
+旧法（Metashape/CloudC
+ompare GUI）
+新法（Open3D 脚本管线）
+胜出
+可复现
+依赖人工点选，难复现
+config + 脚本一键重跑
+新法
+批处理
+逐样本手工
+目录进目录出
+新法
+算法透明
+黑箱
+源码可见可调
+新法
+成本
+按节点付费
+开源免费
+新法
+上手速度
+点几下即得
+需学 Python
+旧法(短期)
+权威认可
+行业通用
+需自建可信度
+旧法(当前)
+3.4.2 配准：CloudCompare GUI 配准 vs Open3D 脚本配准
+• GUI 配准直观但不可批量、参数不透明；Open3D 的 FPFH+RANSAC+ICP 可写进脚本、可批量、可
+记录矩阵。
+• 建议：用 CloudCompare 的配准结果作黄金基准验证你的脚本误差（交叉验证，见 4.5）。
+3.4.3 摄影测量：Agisoft Metashape vs COLMAP + Open3D
+• Metashape 教育版/试用可快速出成果；COLMAP（BSD-3）免费且可脚本化，输出点云直接进
+Open3D 管线。
+
+=== PAGE 19 ===
+造像类文物三维建模自动化系统开发指南
+第 19 页
+• 预算有限或需批处理时选 COLMAP；追求稳定与易用可用 Metashape 教育版过渡。
+3.4.4 网格重建：单一网格化 vs 可复现管线
+旧法常把「扫描→网格」当成一步黑箱；新法显式拆成 预处理→配准→泊松重建→后处理度量，每步可单
+独验证与替换，便于论文方法学拆解。
+3.5 各工具法律政策与许可证合规（核心红线）
+3.5.1 许可证矩阵（合规四档）
+档位
+许可证
+含义
+能否进登记版
+代表库
+A 安全
+MIT / BSD / MPL
+宽松，几乎无义务
+能
+Open3D/py4dgeo/N
+umPy/colour-science
+B 注意
+Apache-2.0
+宽松+专利授权
+能（留 NOTICE）
+（项目自许可可选）
+C 隔离
+GPL-3.0
+强 copyleft
+仅子进程，不链接
+PyMeshLab/CloudCo
+mpare/plyfile
+D 禁止
+非商业/专有
+限制商用
+不能
+3D Gaussian
+Splatting(非商业)
+/Metashape
+3.5.2 plyfile 的 GPL 隐蔽陷阱（重点）
+plyfile 是最常用的 PLY 读写库，但其许可证为 GPL-3.0+。一旦 import plyfile 写进你的登记版源码，整
+个程序可能被认定为 GPL 衍生作品，与「闭源登记 / 商用」冲突。规避：一律用 Open3D 的 
+o3d.io.read_point_cloud/write_point_cloud 读写 PLY（MIT），不安装 plyfile。
+3.5.3 GPL 库的安全使用方式
+• 子进程调用：subprocess.run(["CloudCompare", "-O", ...])，你的代码与 GPL 程序是独立进程，不构
+成衍生作品。
+• 声明与署名：在 NOTICE/文档中列出所用 GPL 组件及其许可证与获取方式（软著新规也要求标注开源
+来源）。
+• 不静态链接：绝不把 GPL 的 .so/.py 直接 import 进登记版主程序。
+• 优先纯 MIT 栈：管线 V1.0 主体用 Open3D/py4dgeo/colour-science/NumPy（全 MIT/BSD），
+从源头消除传染。
+3.5.4 数据许可：代码开源 ≠ 数据公开
+原始造像点云/纹理属文博单位资产，具敏感性与版权。原则：代码仓库开源，原始数据目录（00_raw）永
+不随代码发布；发布示例用公开数据集（Stanford Bunny、Open Heritage 3D、Zenodo 文化遗产点云）
+。
+
+=== PAGE 20 ===
+造像类文物三维建模自动化系统开发指南
+第 20 页
+第四篇 全过程开发指南：从环境配置到软件落地（要求 3）
+本篇是全书最实操的部分，按「环境→架构→模块→测试→打包→软著→论文」的顺序，给出可照做的步
+骤与 Python 代码示例。建议边读边在 .venv 里敲一遍。
+4.1 环境配置
+4.1.1 安装 Python 与虚拟环境
+# 1) 下载 Python 3.11+ (python.org)，安装时勾选 Add to PATH
+# 2) 在项目根建虚拟环境
+cd D:/h3d-pipeline
+python -m venv .venv
+.venv\Scripts\activate          # Windows
+# 3) 升级 pip 并装依赖
+python -m pip install --upgrade pip
+pip install open3d py4dgeo colour-science numpy scipy pyyaml tqdm pytest
+4.1.2 目录骨架（数据规范）
+h3d-pipeline/
+  00_raw/            # 原始数据【只读】，永不覆盖
+  01_interim/        # 中间产物（降采样/去噪）
+  02_registered/     # 配准后点云
+  03_model/          # 最终网格
+  04_report/         # 精度报告 / 标准符合性表
+  05_ext/            # 扩展板块产物（X1 差分 / X2 色差）
+  configs/           # YAML 配置
+  h3d/               # 包源码
+  tests/             # pytest
+  run_manifest.json  # 溯源清单
+4.1.3 验证安装
+import open3d as o3d, py4dgeo, colour, numpy as np
+print("Open3D", o3d.__version__)
+print("py4dgeo ok")
+print("colour delta_E sample:",
+      colour.delta_E(np.array([0.5,0.5,0.5]), np.array([0.6,0.5,0.5]),
+                     method="CIE 2000"))
+4.2 软件架构设计（五层架构）
+采用五层架构，职责清晰、便于测试与合规隔离【设计】：
+L4 应用层   CLI / 配置入口（h3d run）
+L3 编排层   流水线调度、run_manifest、断点续跑、失败隔离
+L2 业务层   模块 M0-M6（接入/预处理/配准/重建/后处理/批量）
+            + X1 多时相 / X2 色差（可选）
+L1 适配层   各开源库封装（open3d_adapter / py4dgeo_adapter ...）
+L0 依赖层   Open3D / py4dgeo / colour-science / NumPy ...
+合规要点：L0 仅放 MIT/BSD 栈；任何 GPL 库（如 CloudCompare）只在 L1 以子进程形式出现，不进入
+主程序 import 图（见 3.5）。
+4.3 配置与溯源设计
+4.3.1 config.yaml 示例
+# configs/luohan_v1.yaml
+object_glob: "00_raw/luohan_*.ply"
+voxel_size: 2.0            # mm，尺度自适应见 4.4
+normal_radius: 6.0
+
+=== PAGE 21 ===
+造像类文物三维建模自动化系统开发指南
+第 21 页
+fpfh_radius: 8.0
+icp_max_distance: 3.0
+poisson_depth: 9
+modules:
+  registration: true
+  reconstruction: true
+  postprocess: true
+  multitemporal: false    # X1 开关
+  color_diff: false       # X2 开关
+seed: 42                   # 固定随机种子，保证可复现
+4.3.2 run_manifest.json 溯源
+{
+  "run_id": "20260813-luohan-v1",
+  "config_hash": "a1b2c3",
+  "items": [
+    {"id": "luohan_001", "status": "done",
+     "inputs": ["00_raw/luohan_001_s01.ply"],
+     "outputs": ["03_model/luohan_001.ply"],
+     "registration_error_mm": 1.8, "error_uncert_mm": 0.4}
+  ]
+}
+4.4 各模块开发（含代码）
+4.4.0 模块总览
+模块
+职责
+关键算法
+是否必须
+M0 入口/CLI
+解析配置、调度
+argparse + yaml
+必须
+M1 数据接入
+读多源点云
+Open3D IO
+必须
+M2 预处理
+降采样/去噪/法线
+voxeldownsample / 
+removestatisticaloutlier
+必须
+M3 配准
+全局+精配准
+FPFH+RANSAC / ICP
+必须
+M4 网格重建
+水面网格
+Poisson / Ball-Pivoting
+必须
+M5 后处理度量
+简化/修补/Hausdorff
+decimation / hausdorff_dist
+ance
+必须
+M6 批量调度
+续跑/隔离
+run_manifest 状态机
+必须
+X1 多时相
+点云差分
+M3C2 (py4dgeo)
+可选
+X2 色差
+色彩差分
+CIEDE2000 (colour)
+可选
+4.4.1 M0 入口与 CLI
+# h3d/cli.py
+import argparse, yaml, logging
+from h3d.pipeline import run_pipeline
+def main():
+    ap = argparse.ArgumentParser(description="石窟寺造像三维数据批量数字化处理系统")
+    ap.add_argument("--config", required=True, help="YAML 配置文件路径")
+    args = ap.parse_args()
+    with open(args.config, "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    logging.info("载入配置: %s", args.config)
+    run_pipeline(cfg)
+if __name__ == "__main__":
+    main()
+
+=== PAGE 22 ===
+造像类文物三维建模自动化系统开发指南
+第 22 页
+4.4.2 M1 数据接入
+# h3d/io_adapters.py
+import open3d as o3d
+import glob, os
+def load_all(pattern):
+    """读取匹配模式的所有点云，返回 (路径, 点云) 列表。"""
+    paths = sorted(glob.glob(pattern))
+    if not paths:
+        raise FileNotFoundError("未匹配到任何点云: " + pattern)
+    pcds = []
+    for p in paths:
+        pcd = o3d.io.read_point_cloud(p)   # PLY/OBJ 由 Open3D(MIT) 读取，避开 plyfile(GPL)
+        if not pcd.has_points():
+            raise ValueError("空点云: " + p)
+        pcds.append((p, pcd))
+    return pcds
+4.4.3 M2 预处理（降采样 / 去噪 / 法线）
+# h3d/preprocess.py
+import open3d as o3d
+def preprocess(pcd, voxel_size, normal_radius, nnb=30):
+    pcd = pcd.voxel_down_sample(voxel_size)                       # 降采样
+    pcd, ind = pcd.remove_statistical_outlier(nb_neighbors=20,   # 去噪
+                                              std_ratio=2.0)
+    pcd.estimate_normals(
+        o3d.geometry.KDTreeSearchParamHybrid(radius=normal_radius, max_nn=nnb))
+    pcd.orient_normals_consistent_tangent_plane(k=nb_neighbors=15)  # 法线一致化
+    return pcd
+4.4.4 M3 配准（全局 + 精配准）
+# h3d/registration.py
+import open3d as o3d
+def global_register(src, tgt, fpfh_radius, ransac_dist, nnb=30):
+    # 计算 FPFH 特征
+    for pcd in (src, tgt):
+        pcd.fpfh = o3d.pipelines.registration.compute_fpfh_feature(
+            pcd, o3d.geometry.KDTreeSearchParamHybrid(fpfh_radius, nnb))
+    result = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
+        src, tgt, src.fpfh, tgt.fpfh,
+        mutual_filter=True,
+        max_correspondence_distance=ransac_dist,
+        estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(False),
+        ransac_n=4,
+        checkers=[o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(0.9),
+                  o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(ransac_dist)],
+        criteria=o3d.pipelines.registration.RANSACConvergenceCriteria(max_iteration=200000))
+    return result
+def icp_refine(src, tgt, init, max_dist):
+    return o3d.pipelines.registration.registration_icp(
+        src, tgt, max_dist, init,
+        o3d.pipelines.registration.TransformationEstimationPointToPoint())
+4.4.5 M4 网格重建（泊松）
+# h3d/reconstruct.py
+import open3d as o3d
+def poisson_mesh(pcd, depth=9):
+    # pcd 需具备一致法线
+
+=== PAGE 23 ===
+造像类文物三维建模自动化系统开发指南
+第 23 页
+    mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=depth)
+    mesh = mesh.remove_degenerate_triangles()
+    mesh = mesh.remove_duplicated_vertices()
+    mesh.compute_vertex_normals()
+    return mesh
+4.4.6 M5 后处理与度量
+# h3d/postprocess.py
+import open3d as o3d
+def simplify(mesh, target=200000):
+    return mesh.simplify_quadric_decimation(target_number_of_triangles=target)
+def hausdorff(mesh_a, mesh_b):
+    # 用 Open3D 采样点计算两网格 Hausdorff 距离，作为几何误差指标
+    a = mesh_a.sample_points_uniformly(100000)
+    b = mesh_b.sample_points_uniformly(100000)
+    d = a.compute_point_cloud_distance(b)
+    return max(d)
+4.4.7 M6 批量调度（续跑 / 隔离）
+# h3d/pipeline.py
+import json, glob, os, logging
+from h3d import io_adapters, preprocess, registration, reconstruct, postprocess
+def run_pipeline(cfg):
+    manifest = load_or_init_manifest(cfg)
+    items = sorted(glob.glob(cfg["object_glob"]))
+    for raw in items:
+        item_id = os.path.basename(raw).split(".")[0]
+        if manifest.done(item_id):            # 断点续跑：跳过已完成
+            logging.info("跳过已完成: %s", item_id); continue
+        try:                                  # 失败隔离：单 item 异常不影响整批
+            pcd = io_adapters.load_one(raw)
+            pcd = preprocess.preprocess(pcd, cfg["voxel_size"], cfg["normal_radius"])
+            # ... 配准 / 重建 / 度量 ...
+            mesh = reconstruct.poisson_mesh(pcd, cfg["poisson_depth"])
+            out = os.path.join("03_model", item_id + ".ply")
+            o3d.io.write_triangle_mesh(out, mesh)
+            manifest.mark_done(item_id, out)
+        except Exception as e:
+            logging.error("item 失败 %s: %s", item_id, e)
+            manifest.mark_failed(item_id, str(e))
+    manifest.save()
+4.5 测试与精度基准
+4.5.1 pytest 示例
+# tests/test_registration.py
+import open3d as o3d
+from h3d import registration
+def test_icp_reduces_error():
+    src = o3d.io.read_point_cloud("tests/data/bunny_part.ply")
+    tgt = o3d.io.read_point_cloud("tests/data/bunny_part.ply")
+    # 人为加一个小变换
+    import numpy as np
+    T = np.eye(4); T[0,3] = 1.0
+    src.transform(T)
+    res = registration.icp_refine(src, tgt, np.eye(4), 3.0)
+    assert res.inlier_rmse < 1.0, "ICP 应把误差收敛到 1mm 内"
+
+=== PAGE 24 ===
+造像类文物三维建模自动化系统开发指南
+第 24 页
+4.5.2 与黄金基准交叉验证
+• 用 CloudCompare（GPL，子进程）对同一对点云做配准，记录其误差作为基准。
+• 断言你的 Open3D 脚本配准误差与基准之差在容差内（如 ≤0.5 mm），否则报警。
+• 把每次验证结果写进 04_report/accuracy.csv，作为软著/论文的可复现证据。
+4.6 打包与发布
+# setup.py（节选）
+from setuptools import setup, find_packages
+setup(
+    name="h3d-pipeline",
+    version="1.0.0",
+    packages=find_packages(),
+    install_requires=["open3d", "py4dgeo", "colour-science",
+                       "numpy", "scipy", "pyyaml", "tqdm"],
+    entry_points={"console_scripts": ["h3d=h3d.cli:main"]},
+    license="MIT",
+)
+• 发布到 GitHub 并打 Tag v1.0.0；勾选 Archive to Zenodo 获取 DOI（三轨保全之一）。
+• 写清晰的 README（功能、安装、快速开始、示例数据、许可证声明、NOTICE）。
+• 登记版源码须完全人工编写（见 4.7），探索期的 AI 辅助代码不进登记分支。
+4.7 软件著作权申请实战
+4.7.1 2026 新规要点（已核实，见附录 F 需复核项）
+• 时间节点：2026-03-15 中国版权保护中心《关于共同维护计算机软件版权登记良好生态的通知》生效
+【官方/媒体】。
+• 新版申请表：旧版作废；功能描述 500–1300 字（须含研发背景、技术架构、功能模块、技术实现、
+应用场景）。
+• 手抄承诺：签章页亲笔抄写「未使用 AI 开发编写代码、撰写文档或生成登记申请材料」+ 签名 + 身份
+证号。
+• 实质核验：源代码与全网开源库、历史登记库查重；功能描述/源码/操作手册须逻辑一致；独创性审查
+更严。
+• 失信惩戒：AI 生成材料 / 虚假信息 → 纳入失信名单，可能影响个人征信；已发证也可撤销。
+• 周期：普通 2–3 个月；涉补正 4–5 个月，补正率显著上升 → 提前规划。
+4.7.2 合规策略：时间切割 + 登记版完全人工重写
+关键修正（驳斥「如实说明 AI 辅助即可」的误判）：2026 新规的 AI 承诺是二值声明（未使用 AI），不
+存在「说明用了 AI 但留痕」的合规中间态。正确做法【设计】：
+阶段
+分支/目录
+是否可用 AI
+用途
+探索期
+h3d-dev（AI 辅助）
+可用
+快速试错、原型、学习
+登记期
+h3d（完全人工重写）
+禁止
+软著登记客体、须手抄未用
+AI
+• 登记版从探索期移植设计而非复制代码：保留架构与算法思路，逐行人工重写并留 commit 记录。
+• 保留探索期所有 commit/issue 作「开发过程证据」，但登记版源码本身不含 AI 生成片段。
+4.7.3 材料清单与写法骨架
+
+=== PAGE 25 ===
+造像类文物三维建模自动化系统开发指南
+第 25 页
+• 源代码：前后各连续 30 页（不足 60 页则全部），每页 ≥50 行；页眉标软件名+版本号；不装订。
+• 文档（说明书）：前后各 30 页；含总体设计、模块说明、接口、运行环境、操作步骤。
+• 功能描述 500–1300 字骨架：研发背景（文保数字化困境）→ 技术架构（五层）→ 功能模块（
+M0-M6）→ 技术实现（FPFH/ICP/泊松）→ 应用场景（批量造像建模）。
+• 三轨保全：软著证书 + GitHub/Zenodo DOI + 工具论文，证明学生个人贡献（应对职务作品第 13 
+条）。
+4.8 论文产出路径
+产出
+目标载体
+说明
+工具论文
+SoftwareX (Elsevier)
+介绍 h3d 系统本身，含可复现说明
+方法学
+Remote Sensing / Heritage Science
+多时相/配准/色彩方法学
+材料评价
+Journal of Cultural Heritage
+C 方向形貌响应
+软著
+中国版权保护中心
+知识产权确权
+
+=== PAGE 26 ===
+造像类文物三维建模自动化系统开发指南
+第 26 页
+第五篇 可扩展板块详解（要求 7）
+5.1 多时相建模与劣化速率量化（X1）
+5.1.1 M3C2 原理
+M3C2（Lague et al. 2013）在核心点沿其法线方向，分别于两期点云做局部球状邻域最佳拟合平面，计算
+法向距离差即为变化量；可附加误差传播（M3C2-EP, Winiwarter 2021）给出不确定度。py4dgeo（MIT）
+原生实现 M3C2/M3C2-EP/PB-M3C2。
+5.1.2 py4dgeo 调用示例
+import py4dgeo
+import numpy as np
+# 两期点云（py4dgeo.PointCloud 包裹 numpy 数组）
+t1 = py4dgeo.PointCloud(np.load("scan_2025.npy"))
+t2 = py4dgeo.PointCloud(np.load("scan_2026.npy"))
+# 核心点取首期点；法线由 Open3D 估算后传入
+core_points = t1
+normals = np.load("normals_2025.npy")
+m3c2 = py4dgeo.M3C2(
+    core_points=core_points,
+    normals=normals,
+    working_distance=3.0,     # mm，局部邻域半径
+)
+distances = m3c2.compute(t1, t2)   # 沿法向的距离变化（正=外鼓/沉积，负=侵蚀）
+print("平均变化 mm:", np.nanmean(distances))
+5.1.3 实施要点
+• 配准误差会直接污染差分结果 → 先用 CloudCompare/Open3D 把两期配准误差压到亚毫米。
+• 潮湿环境可逆湿胀与不可逆风化难分 → 用「加速老化模拟样块 + 高频短周期（月）监测 + 历史 vs 现
+状差分」组合。
+• 环境变量（温湿度/水盐）耦合建模，量化不确定性，不报单一确定值。
+5.2 色度差分与色差长期追踪（X2）
+5.2.1 CIEDE2000 计算
+import colour, numpy as np
+# 取造像某区域在 t1/t2 的 Lab 色彩（由色卡校准后的 RGB 转换）
+lab_t1 = colour.RGB_to_Lab(np.array([0.52, 0.40, 0.30]))
+lab_t2 = colour.RGB_to_Lab(np.array([0.50, 0.38, 0.29]))
+delta_e = colour.delta_E(lab_t1, lab_t2, method="CIE 2000")
+print("ΔE   =", float(delta_e))   # 越小越稳；> 临界值视为可见变色
+5.2.2 色彩采集规范（对标 WW/T 0117—2023）
+• 相机 ≥3400 万像素 RAW、每通道 ≥12 bit、色温 5500 K±10%、标准色卡 ≥24 色。
+• 每次拍摄同角度、同光照、同色卡；用 X-Rite 分光光度计定期校准显示器。
+• RAW 工作流，色彩转换用相机特性文件，避免显示器相关空间直接比较。
+• 跨时段 ΔE   追踪，建立彩绘层变色时间序列，作为 D 方向技术规程产出。
+5.3 未来可迁移方向（储备）
+
+=== PAGE 27 ===
+造像类文物三维建模自动化系统开发指南
+第 27 页
+方向
+开源
+可迁移行业
+3DGS / NeRF 神经重建
+nerfstudio / Gaussian-Splatting
+数字文旅 / 影视资产
+深度学习病害识别
+PyTorch + 公开裂缝集
+土建/桥梁/轨交表观检测
+无人机+LiDAR 监测
+Open3D / PDAL
+工程测绘 / 智慧城市
+HBIM / 数字孪生
+开源 BIM 工具
+历史建筑运维
+文保材料数据库+ML
+scikit-learn
+材料基因组 / 工业质检
+
+=== PAGE 28 ===
+造像类文物三维建模自动化系统开发指南
+第 28 页
+第六篇 附录
+附录 A 工具与标准速查表
+名称
+类型
+许可证
+获取
+用途
+Open3D
+库
+MIT
+pip install open3d
+配准/重建
+py4dgeo
+库
+MIT
+pip install py4dgeo
+M3C2 差分
+colour-science
+库
+MIT
+pip install colour-scie
+nce
+ΔE  PyMeshLab
+库
+GPL-3.0
+pip install pymeshlab
+网格处理(隔离)
+CloudCompare
+软件
+GPL
+cloudcompare.org
+基准(子进程)
+COLMAP
+软件
+BSD-3
+colmap.github.io
+摄影测量
+WW/T 0117—2023
+标准
+国行标
+ncha.gov.cn
+石窟寺数字化
+WW/T 0115—2023
+标准
+国行标
+ncha.gov.cn
+可移动文物数字化
+附录 B 术语表（Glossary）
+点云 Point Cloud：由海量三维坐标点构成的对物体表面的离散采样表示。 配准 Registration：将多站/
+多源点云变换到同一坐标系的过程。 FPFH：Fast Point Feature Histogram，快速点特征直方图，用于全
+局配准描述子。 RANSAC：随机抽样一致，用于从含噪对应中估计稳健变换。 ICP：Iterative Closest 
+Point，迭代最近点精配准。 泊松重建：由带法线点云生成水面网格的隐式重建方法。 M3C2：多时相点
+云法向距离差分算法（Lague 2013）。 CIEDE2000：工业色差金标准公式，输出 ΔE  。 ΔE  ：两颜
+色在 CIEDE2000 下的感知差异量。 酥碱：可溶盐结晶—溶解破坏地仗导致的粉化病害。 起甲：彩绘层与
+地仗间因应力分离、卷翘的病害。 标准色卡：已知色值的参考卡（如 X-Rite ColorChecker ≥24 色），用
+于色彩校准。 RAW：传感器原始未处理图像数据，保留最大色彩位深。 copyleft：一种许可证条款，要
+求衍生作品以相同许可证开源（如 GPL）。 断点续跑：失败后仅重跑未完成任务、跳过已完成的能力。 失
+败隔离：单个任务异常不影响整体批次继续执行。 run_manifest：记录批量任务每个 item 状态与溯源的 
+JSON 清单。 软著：计算机软件著作权登记的简称。 职务作品：自然人执行单位任务所创作的作品，著作
+权通常归单位（《条例》第 13 条）。 MTF / 标靶：配准用人工标志点，用于多站云拼接控制。
+附录 C 常见错误与排查（Troubleshooting）
+现象：Open3D 装完 import 报错 DLL
+可能原因：Python 版本不匹配或 VC 运行库缺失 解决办法：用 3.11/3.13 干净 venv；装 Visual C++ 
+Redistributable
+现象：点云读入为空
+可能原因：路径含中文未用 utf-8 或文件损坏 解决办法：用绝对路径+utf-8；用 Open3D 而非 
+plyfile(GPL)
+现象：配准结果整体错位
+可能原因：全局配准对应太少/半径不对 解决办法：调大 fpfhradius；加 mutualfilter；先用少站验证
+现象：ICP 不收敛
+可能原因：初始变换差太远或 max_distance 过小 解决办法：先用 RANSAC 粗配；放宽 max_distance
+现象：泊松重建成团块/翻面
+可能原因：法线不一致或点云有噪 解决办法：先 orientnormalsconsistenttangentplane；去噪
+
+=== PAGE 29 ===
+造像类文物三维建模自动化系统开发指南
+第 29 页
+现象：网格破洞多
+可能原因：点云缺失/遮挡区 解决办法：补扫或 Poisson depth 调高；后续修补
+现象：Hausdorff 距离异常大
+可能原因：两网格未对齐或尺度不同 解决办法：先配准再比；确认同单位(mm)
+现象：py4dgeo 安装失败
+可能原因：Python <3.10 或需编译依赖 解决办法：升级 Python 到 3.10+；或用预编译 wheel
+现象：M3C2 结果噪声大
+可能原因：两期配准误差未压住 解决办法：先精配准到亚毫米；减小 working_distance
+现象：ΔE   算出 NaN
+可能原因：Lab 含 NaN 或输入非 Lab 解决办法：先 RGBtoLab；剔除无效像素
+现象：Git 把原始数据传上去了
+可能原因：.gitignore 未忽略 00_raw 解决办法：立即 git rm --cached 并加 .gitignore；数据永不进仓库
+现象：软著被补正：功能描述过短
+可能原因：少于 500 字 解决办法：按 4.7.3 骨架扩写到 500–1300 字
+现象：软著手抄承诺被退回
+可能原因：打印/勾选而非手抄 解决办法：黑色中性笔亲笔抄写+签名+身份证号
+现象：代码查重命中开源
+可能原因：直接复制开源片段 解决办法：登记版完全人工重写；保留探索期与登记期分离
+现象：GPL 库被 import 进登记版
+可能原因：误用 PyMeshLab/plyfile 解决办法：改 Open3D(MIT)；GPL 仅子进程
+现象：批处理中途全崩
+可能原因：未做失败隔离 解决办法：加 try/except 单 item 隔离 + run_manifest 续跑
+现象：结果不可复现
+可能原因：随机种子未固定 解决办法：config 设 seed 并全局固定 numpy/random
+现象：精度不达标 WW/T
+可能原因：扫描重叠/覆盖率不足 解决办法：按 WW/T 0117 增加站点与重叠度≥30%
+现象：显示器色彩偏色
+可能原因：未校准 解决办法：用分光光度计定期校准；统一 Adobe RGB 空间
+现象：CUDA/GPU 不可用
+可能原因：无 GPU 解决办法：降采样+分块；Open3D CPU 即可跑 MVP
+附录 D 参考代码清单（完整可运行最小示例）
+以下为一个端到端最小可运行示例（需先按 4.1 配环境，数据用 Stanford Bunny 练手）：
+# quick_start.py —— 读入 -> 降采样 -> 配准(自比) -> 泊松重建 -> 保存
+import open3d as o3d, numpy as np
+pcd = o3d.io.read_point_cloud("bunny.ply")        # 公开数据集练手
+pcd = pcd.voxel_down_sample(2.0)
+pcd.estimate_normals(o3d.geometry.KDTreeSearchParamHybrid(6.0, 30))
+pcd.orient_normals_consistent_tangent_plane(15)
+
+=== PAGE 30 ===
+造像类文物三维建模自动化系统开发指南
+第 30 页
+# 自比配准演示：人为加变换后配回
+T = np.eye(4); T[0, 3] = 1.0
+moved = pcd.transform(T)
+res = o3d.pipelines.registration.registration_icp(
+    moved, pcd, 3.0, np.eye(4),
+    o3d.pipelines.registration.TransformationEstimationPointToPoint())
+print("ICP inlier RMSE(mm):", res.inlier_rmse)
+mesh, _ = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(pcd, depth=9)
+o3d.io.write_triangle_mesh("bunny_recon.ply", mesh)
+print("模型已保存 bunny_recon.ply")
+附录 E 来源与参考文献
+• 中国版权保护中心《关于共同维护计算机软件版权登记良好生态的通知》（2026-03-15）【官方/媒体】
+• 《计算机软件保护条例》（国务院，含第 13、14 条）【法规】 gov.cn
+• WW/T 0117—2023《石窟寺三维数字化采集与加工》国家文物局【标准】 ncha.gov.cn
+• WW/T 0115—2023《可移动文物三维数字化采集与加工》【标准】 ncha.gov.cn
+• Lague D., Brodu N., Leroux J. (2013) M3C2. ISPRS J. Photogrammetry and Remote Sensing
+82:10-26.
+• Winiwarter L. et al. (2021) M3C2-EP. ISPRS J. Photogrammetry and Remote Sensing
+178:240-258.
+• py4dgeo (2026) SoftwareX 34:102670. doi:10.1016/j.softx.2026.102670 【核验】
+• 童永东. 彩塑文物色彩与纹理虚拟复原研究——以山东灵岩寺彩绘达摩像为例（博士论文, 北科大,
+2022）【官方】
+• 蔡友振, 童永东, 张坤, 马清林. 山东长清灵岩寺千佛殿罗汉像病害分析研究. 文物保护与考古科学,
+2024, 36(3).【官方】
+• 重庆师范大学新闻网：童永东博士研究成果在 AAS 发表【媒体】 news.cqnu.edu.cn
+• Open3D 文档 http://www.open3d.org 【核验】
+• colour-science https://www.colour-science.org 【核验】
+• PyPI 各库许可证元数据 https://pypi.org/project/<pkg>/ 【核验】
+附录 F 未核实事项清单（诚实标注）
+• F1【存疑】：中国版权保护中心 2026-03-15 通知的官方全文未能直抓（官网栏目仅返回联系方式）
+，功能描述字数、手抄承诺原文以媒体/协会转述为准，登记前请向 CPCC 官网或电话核实。
+• F2【存疑】：导师市级课题（CSTB2025NSCQ-GPX0254）实际到账经费与报销流程属内部信息，须
+入学后当面向导师/学院确认。
+• F3【存疑】：具体石窟寺（大足等）数据准入条款以「重师—大足战略合作」正式协议为准。
+• F4【存疑】：各开源库许可证以登记时 PyPI/GitHub 最新元数据为准，版本演进可能改变条款。
+• F5【存疑】：本书代码为示意级，生产使用前需在真实数据上做精度与鲁棒性验证。
+
+=== PAGE 31 ===
+造像类文物三维建模自动化系统开发指南
+第 31 页
+结语
+本书把「造像类文物三维建模自动化」当作一项工程来交付：以软件工程方法组织、以文保标准约束、以
+开源合规守住底线。技术路线 E 不是一条孤立的脚本，而是你读研期间可复现、可批处理、可开源、可申
+请软著、可写论文的能力母体。从研一 MVP 起步，逐步叠加多时相与色差两块扩展能力，你将在毕业时拥
+有一套真正属于自己的、经得起审查的成果。
+1.8 采集方案设计对标 WW/T 0117—2023（前期到检查）
+系统处理的是「已采集数据」，但作为方法底座，开发者必须懂采集端的合规与精度要求，才能正确设计
+算法参数与质检脚本。下表把 WW/T 0117 的流程映射到本系统。
+WW/T 0117 环节
+要求要点
+对管线的启示
+7.1 方案设计
+按 CH/T 1004 编方案，保管单位审核
+先出《采集方案》再动手
+7.2 环境准备
+清场、无障碍物、电源
+系统只读已合规采集数据
+8.2.1 控制测量
+需纳入统一参考时做控制网；
+CGCS2000/1985 基准
+配准目标坐标系需记录基准
+8.2.2 标靶布测
+同站可见标靶≥5、高低错落>0.3m、相
+邻站公共标靶≥4
+全局配准标靶数下限
+8.2.3 激光扫描
+Class 1、50m 中误差≤2mm、角度分辨
+率≤0.01°、重叠≥30%、覆盖≥80%
+输入点云精度验收阈值
+8.3 造像采集
+网格模型+纹理；手持距文物>20cm、
+架站>40cm
+采集安全距离红线
+9 数据加工
+去噪/简化/修补/配准精度/映射精度检查
+M2-M5 逐工序质检映射
+10 成果提交
+点云/模型/记录表
+runmanifest + 04report 对应
+实践建议：在管线开头加一个「输入质检」步骤，自动核查每站点云的覆盖率、重叠度、标靶数是否达 
+WW/T 0117 阈值，不达标则告警并记入 manifest，避免带着劣质数据进配准。
+3.1.9 Python 进阶（工程化必备）
+# 类：把「一个造像的处理」封装成对象，状态清晰
+class Artifact:
+    def __init__(self, object_id, raw_paths):
+        self.id = object_id
+        self.raw_paths = raw_paths
+        self.mesh = None
+        self.reg_error = None
+    def build(self, cfg):
+        """端到端构建：返回 self 以便链式调用。"""
+        pcd = io_adapters.load_all(self.raw_paths)
+        pcd = preprocess.preprocess(pcd, cfg["voxel_size"], cfg["normal_radius"])
+        # ... 配准/重建 ...
+        return self
+# 上下文管理器：保证文件/资源正确关闭
+from contextlib import contextmanager
+@contextmanager
+def open_pcd(path):
+    pcd = o3d.io.read_point_cloud(path)
+    try:
+        yield pcd
+    finally:
+        del pcd   # 释放大点云内存
+
+=== PAGE 32 ===
+造像类文物三维建模自动化系统开发指南
+第 32 页
+# 列表推导（向量化思维，避免慢循环）
+errors = [process(x) for x in items if x.valid]
+3.1.10 调试与性能
+• 大点云内存：千万级点云占数 GB，及时 del 中间变量；分块处理。
+• 改用向量化：NumPy 操作比 Python for 快 10–100 倍；先 profile（python -m cProfile）再优化。
+• 可视化抽查：o3d.visualization.draw_geometries([pcd]) 仅调试用，批量时关掉以提速。
+• 断言护体：assert pcd.has_points(), '空点云'，早日暴露坏数据。
+4.4.8 尺度自适应与 MPS 倍数体系
+不同尺度造像（掌印小龛 vs 大佛）应使用不同 voxel_size。本书采用「基准尺度 × MPS 倍数」的尺度自
+适应策略【设计】：以一尊约 1 m 造像的 voxel=2.0 mm 为基准（MPS=1），更大对象按线性比例放大
+倍数。
+def adaptive_voxel(base_size_mm, object_bbox_mm, mps=1.0):
+    """按对象包围盒最长边相对基准(1000mm)的比例，乘 MPS 倍数得到 voxel。"""
+    scale = max(object_bbox_mm) / 1000.0
+    voxel = 2.0 * scale * mps
+    return round(voxel, 3)
+# 例：2.4 m 大佛，MPS=1 -> voxel≈4.8mm
+print(adaptive_voxel(2.0, [2400, 1800, 1600]))
+4.9 端到端实战：跑通一尊造像（预期输出）
+以公开 Stanford Bunny 或院内 OKIO-5M 小样块练手，按以下步骤，预期 5–10 分钟内得到可用模型：
+1. 建 venv、装依赖（4.1）。
+2. 放数据到 00_raw/，写 configs/demo.yaml（voxel=2.0, 各模块开）。
+3. 运行 python -m h3d.cli --config configs/demo.yaml。
+4. 检查 03model/ 下 .ply；用 MeshLab/CloudCompare 目视；读 04report/accuracy.csv。
+5. 把 accuracy.csv 的配准误差与 CloudCompare 基准比对，差异应 ≤0.5 mm。
+# 预期 accuracy.csv 片段
+object,registration_error_mm,error_uncert_mm,hausdorff_mm,status
+bunny,1.8,0.4,2.1,done
+4.10 持续集成与发布检查单
+• CI：用 GitHub Actions 在每次 push 跑 pytest，防止回归（新手可暂跳过，但建议早建）。
+• 版本号：语义化 v1.0.0；破坏性改动升主版本。
+• CHANGELOG：记录每次变更，软著/论文引用时据此说明演进。
+• NOTICE：列出所有 MIT/BSD 依赖及其版权与许可证原文。
+5.1.4 M3C2 误差传播（不确定度同报）
+M3C2-EP（Winiwarter et al. 2021）将两期点云各自的局部平面拟合不确定度 propagate 为距离差的总
+不确定度 σ。实务中：
+• 核心点法向距离差 d；不确定度 σ = sqrt(σ ² + σ ² + σreg²)（σreg 为配准误差贡献）。
+• 报告格式：「变化量 d = -1.3 mm ± 0.6 mm」，仅当 |d| > 2σ 才判定为显著变化。
+• 这直接呼应 2.4.2「不确定度同报」原则，也是区分潮湿环境可逆形变与不可逆风化的关键。
+
+=== PAGE 33 ===
+造像类文物三维建模自动化系统开发指南
+第 33 页
+import numpy as np
+d = -1.3          # mm，侵蚀
+sigma = 0.6
+significant = abs(d) > 2 * sigma
+print("显著变化?" , significant, " (|d|=1.3, 2σ=1.2)")
+5.2.3 色卡校准逐步流程（可落地的 D 方向规程）
+1. 每次拍摄前放 X-Rite 24 色卡于造像同光照平面，同角度拍一张含色卡的原图（RAW）。
+2. 用相机特性文件（ICC）将 RAW 转 ProPhoto/Adobe RGB 线性空间，避免显示器相关空间。
+3. 在色卡区域用已知 Lab 值做色彩校正，求本场次色差补偿矩阵。
+4. 对造像目标区域取色，转 Lab 后跨时段算 ΔE  。
+5. 将「拍摄参数 + 色卡图 + 补偿矩阵 + ΔE   序列」写入 05_ext/color/，作为技术规程附件。
+2.6 标准符合性自检脚本
+在管线末尾自动生成符合性检查表，逐条比对 WW/T 0117，输出达标/不达标，作为成果验收附件。
+# h3d/compliance.py（示意）
+CHECKS = [
+    ("点云特征点中误差<=5mm", lambda r: r.max_pt_err <= 5.0),
+    ("可见区域覆盖率>=80%",   lambda r: r.coverage >= 0.80),
+    ("相邻站重叠>=30%",       lambda r: r.overlap >= 0.30),
+    ("纹理>=3400万像素RAW",   lambda r: r.tex_mp >= 34.0),
+]
+def audit(report):
+    return {name: ("PASS" if fn(report) else "FAIL") for name, fn in CHECKS}

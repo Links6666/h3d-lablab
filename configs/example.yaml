@@ -16,14 +16,60 @@ register:
   icp_distance: 0.02
   max_iter: 2000
 
+mesh:
+  enabled: true
+  method: poisson
+  poisson_depth: 8
+  density_ratio: 0.05
+  ball_radii: [2.0, 4.0, 6.0]
+  alpha: 0.05
+  simplify_target: 0
+  fill_holes: false
+
+texture:
+  enabled: true
+  paint_mode: vertex        # vertex=顶点色 / uv=xatlas 图集烘焙
+  export_formats: [ply, obj, glb]
+  lod_levels: [1.0, 0.3, 0.1]
+  max_vertices: 0
+
+quality:
+  enabled: true
+  rmse_threshold_mm: 5.0
+  coverage_threshold: 0.80
+  coverage_k_mps: 3.0
+  samples: 50000
+
+publish:
+  enabled: true
+  formats: [ply, obj, glb]
+  embed_meta: true
+  copy_qc: true
+
 change:
   enabled: false
-  core_radius: 0.05
+  cores: 4
+  change_mm: 2.0
+  normal_radius_k: 10.0
+  cyl_radius_k: 3.0
+  max_distance_k: 50.0
+  registration_error: 0.0012
+  grid: [32, 32]
 
 colour:
   enabled: false
+  illuminant: D65
+  delta_e_method: CIE2000
+  use_calibration: true
+  jnd_threshold: 2.3
 
 runner:
   fail_isolation: true
   resume: true
   manifest: output/run_manifest.json
+  workers: 1              # >1 时按造像并行（进程池）
+
+report:
+  enabled: true
+  formats: [csv, png, html]
+  output_dir: output/report

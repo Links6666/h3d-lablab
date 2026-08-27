@@ -1,0 +1,1293 @@
+=== PAGE 1 ===
+造像类文物三维建模自动化系统 软件开发项目设计书
+附录 E 合规与未核实事项
+造像类文物三维建模自动化系统 管线骨架构建分析
+第 1 页
+目 录
+3
+造像类文物三维建模自动化系统 管线骨架构建分析
+4
+第 1 章 目的与范围
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 4
+1.1 什么是「管线骨架」
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 4
+1.2 文档范围
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 4
+1.3 三层规模与骨架的关系
+5
+第 2 章 总体设计思想
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 5
+2.1 管线本质：分阶段的确定性数据流
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 5
+2.2 五层架构在骨架上的投影
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 5
+2.3 骨架是抽象架构的「可编译投影」
+6
+第 3 章 目录结构说明
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 6
+3.1 完整软著版目录树
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 7
+3.2 目录职责清单
+8
+第 4 章 模块划分与职责
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 8
+4.1 P0 底座与 S1~S4 流水线
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 8
+4.2 子包内部文件职责
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 8
+4.3 与设计书模块标识的映射（概念→目录 投影）
+10
+第 5 章 依赖关系分析
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 10
+5.1 包内依赖（子包自洽）
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 10
+5.2 包间依赖矩阵
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 10
+5.3 外部依赖与合规约束
+11
+第 6 章 基础文件与生成逻辑
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 11
+6.1 占位文件的设计意图
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 11
+6.2 __init__.py 的作用
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 11
+6.3 工程元数据文件
+
+=== PAGE 2 ===
+造像类文物三维建模自动化系统 软件开发项目设计书
+附录 E 合规与未核实事项
+造像类文物三维建模自动化系统 管线骨架构建分析
+第 2 页
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 12
+6.4 run_manifest 溯源元数据（关键设计）
+13
+第 7 章 生成脚本设计分析（PowerShell）
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 13
+7.1 脚本职责边界
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 13
+7.2 关键设计属性
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 13
+7.3 生成逻辑的数据流
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 13
+7.4 运行方式
+14
+第 8 章 骨架与软件各部分的关系
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 14
+8.1 与「软件开发项目设计书」的关系
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 14
+8.2 与「教学版开发指南」的关系
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 14
+8.3 与「软件著作权」的关系
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 14
+8.4 与「文保标准（WW/T 0117 / 0115）」的关系
+15
+第 9 章 从骨架到交付的演进路线
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 15
+9.1 三阶段填充策略
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 15
+9.2 工程纪律：单文件上限与 cloc 口径
+ .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  . 15
+9.3 依赖安装与首次运行
+16
+附录 A 完整 PowerShell 一键生成脚本
+21
+附录 B 目录清单对照表
+22
+附录 C 模块—职责—设计书映射对照表
+23
+附录 D 三版本规模对照表
+24
+附录 E 合规与未核实事项
+
+=== PAGE 3 ===
+造像类文物三维建模自动化系统 软件开发项目设计书
+附录 E 合规与未核实事项
+造像类文物三维建模自动化系统 管线骨架构建分析
+第 3 页
+造像类文物三维建模自动化系统 管线骨架构建分析
+副标题：基于《项目目录草案》与既有设计书 / 教学指南，阐述管线（pipeline）系统基础骨架的结构、模
+块、依赖、生成逻辑及其与软件各部分的关系
+文档版本：V1.0 编制日期：2026 年 8 月 密级：内部（限项目相关方） 文档类型：骨架构建分析说明书（
+Skeleton Construction Analysis） 文档状态：送审稿 --- 修订历史
+版本
+日期
+说明
+V0.1
+2026-08
+依据《项目目录草案》整理骨架目标结
+构
+V1.0
+2026-08
+补充模块划分、依赖关系、生成逻辑与
+软件关系分析，附一键生成脚本
+文档目标读者
+• 项目负责人 / 立项方：理解骨架规模、演进路线与交付基线
+• 系统架构师：确认目录与包边界、依赖约束
+• 研发工程师：按骨架从零启动开发，明确各模块占位职责
+• 测试与质量保障：理解 tests 布局与 cloc 统计口径
+• 软著与合规审查：确认纯 MIT/BSD 依赖栈与数据/产物隔离策略
+编写说明：本文件由 AI 辅助生成，供项目论证、立项与开发实施内部参考。文中所称「骨架」指目录结构
+与基础文件占位（占位 = 空实现 / 待填 TODO），不包含任何业务算法实现；骨架由独立的 PowerShell 脚
+本（见附录 A）一键生成，本文档不执行该脚本、不直接产出骨架目录。涉及开源协议与软件著作权合规的
+条款以最新官方规定为准，不作为法律意见。
+本分析说明书与既有两份交付物构成「同一系统的三层表达」：
+文档
+定位
+与本骨架的关系
+软件开发项目设计书（2026）
+抽象层：需求 / 架构 / 算法 / 界面 / 合
+规
+骨架是其目录级投影（抽象→具体）
+教学版开发指南（2026）
+过程层：从零手把手教学
+骨架是其「工程组织」一章的实例化
+管线骨架构建分析（本文件）
+结构层：骨架本身的设计说明
+直接定义骨架结构、模块、依赖与生成
+逻辑
+
+=== PAGE 4 ===
+造像类文物三维建模自动化系统 软件开发项目设计书
+造像类文物三维建模自动化系统 管线骨架构建分析
+造像类文物三维建模自动化系统 管线骨架构建分析
+第 4 页
+第 1 章 目的与范围
+1.1 什么是「管线骨架」
+管线骨架（pipeline skeleton）指软件最外层的可运行工程容器：一组约定俗成的目录、包边界、占位文
+件与工程元数据文件。它不含算法实现，却决定了后续所有代码「放在哪里、如何被导入、如何被测试、
+如何被打包」。骨架的价值在于：在写第一行业务代码之前，先固定工程的拓扑结构与契约，使多人协作、
+增量演进、软著登记与自动化测试都站在同一套坐标上。 对造像类文物三维建模自动化系统而言，骨架即
+《项目目录草案》所定义的路线 E（Open3D 开源管线）工程布局：以 src/h3d 为核心业务包，向下挂 8
+个业务子包，向外挂测试、配置、文档与数据/产物隔离目录。
+1.2 文档范围
+在本文件中
+不在本文件中
+骨架目录结构与命名规范
+配准 / M3C2 / CIEDE2000 的具体算法实现
+8 个子包与 P0 底座的职责划分
+GUI 界面完整实现（见设计书第五篇）
+包内 / 包间 / 外部依赖关系
+软著申报全流程（见设计书第七篇）
+PowerShell 一键生成逻辑分析
+教学式 Python 基础讲解（见教学指南）
+骨架与设计书 / 教学指南 / 软著的映射
+精度阈值实测标定（以验收细则为准）
+1.3 三层规模与骨架的关系
+《项目目录草案》按代码规模将系统划分为三档，骨架本身是「完整软著版」的目录投影；MVP 与增强版
+只是在该骨架上做「裁剪 / 增补」：
+版本档
+业务源码规模
+与骨架的关系
+目录差异
+MVP 最小可用版
+800 ~ 1300 行
+骨架的精简子集
+仅 core/io/preprocess/regis
+ter + cli，tests 不全
+完整软著版（核心目标）
+2200 ~ 3200 行
+骨架的完整形态
+8 子包全建，tests 完整，含
+configs/docs
+增强扩展版
+4000 ~ 5500 行
+骨架的扩增形态
+增 exporter（glTF）、api（
+FastAPI）子包
+注：骨架采用「完整软著版」全量布局生成，MVP 阶段只需填充其中部分子包；这样无需在后期为新增子包
+而重构目录，符合「从一开始就把地基打全」的工程原则。
+
+=== PAGE 5 ===
+造像类文物三维建模自动化系统 软件开发项目设计书
+1.3 三层规模与骨架的关系
+造像类文物三维建模自动化系统 管线骨架构建分析
+第 5 页
+第 2 章 总体设计思想
+2.1 管线本质：分阶段的确定性数据流
+三维建模自动化管线是一条「输入原始影像 / 点云 → 输出高保真模型 + 质检报告」的确定性数据流。其抽
+象可表达为：
+原始数据 raw
+  -> [IO 适配]        读取 / 格式归一
+  -> [预处理]         去噪 / 降采样 / 法线
+  -> [配准]           异源点云 FPFH+RANSAC+ICP
+  -> [建模核心]       稠密重建 / 网格化 / 纹理
+  -> [可选 X1 多时相] M3C2 形变检测
+  -> [可选 X2 色彩]   CIEDE2000 色差量化
+  -> [质检/报表]      误差评估 / CSV / 图表
+  -> 产物 output (模型 + run_manifest.json)
+骨架必须让上述每一个阶段都拥有稳定的「家」（目录 + 包 + 占位文件），使得阶段之间只能通过显式导
+入 / 配置耦合，而不是散落在脚本根目录的扁平 .py 文件。
+2.2 五层架构在骨架上的投影
+设计书提出的五层架构（L0 依赖 / L1 适配 / L2 业务 / L3 编排 / L4 应用）在骨架目录中体现为清晰的层
+级归属：
+架构层
+骨架落点
+对应子包 / 文件
+L0 依赖
+pyproject.toml / environment.yml
+声明 Open3D / py4dgeo /
+colour-science / numpy
+L1 适配
+src/h3d/io
+pointcloudio.py / meshio.py 隔离第三
+方格式差异
+L2 业务
+src/h3d/{preprocess,register,change,
+colour,report}
+各阶段算法封装
+L3 编排
+src/h3d/runner + core
+task.py / batch_processor.py /
+config.py 编排调度
+L4 应用
+src/h3d/cli.py
+h3d init / run / validate / report 命令
+入口
+2.3 骨架是抽象架构的「可编译投影」
+设计书的模块标识（M0~M6、X1、X2）是逻辑概念；骨架将其映射为物理包名，使概念可被文件系统直
+接验证。这种「概念→目录」的投影关系见第 4 章映射表。骨架因此成为架构一致性的第一道守门员：若
+某段业务代码无法归入 8 个子包之一，说明模块边界或需求定义存在问题，应回到设计书修订，而非随意
+新增扁平脚本。
+
+=== PAGE 6 ===
+造像类文物三维建模自动化系统 软件开发项目设计书
+2.3 骨架是抽象架构的「可编译投影」
+造像类文物三维建模自动化系统 管线骨架构建分析
+第 6 页
+第 3 章 目录结构说明
+3.1 完整软著版目录树
+h3d_pipeline/                       # 项目根目录
+├─ src/
+│   └─ h3d/                         # 主源码包（核心业务，8 个子模块）
+│       ├── __init__.py
+│       ├── core/                   # 核心底座：配置 / 日志 / 元数据 / 异常
+│       │   ├── __init__.py
+│       │   ├── config.py
+│       │   ├── logging.py
+│       │   ├── metadata.py
+│       │   └── exceptions.py
+│       ├── io/                     # IO 模块：点云 / 网格读写
+│       │   ├── __init__.py
+│       │   ├── pointcloud_io.py
+│       │   └── mesh_io.py
+│       ├── preprocess/              # 预处理：滤波 / 降采样 / 法线
+│       │   ├── __init__.py
+│       │   ├── filter.py
+│       │   ├── downsample.py
+│       │   └── normal_estimate.py
+│       ├── register/                # 异源配准 FPFH / RANSAC / ICP
+│       │   ├── __init__.py
+│       │   ├── feature.py
+│       │   ├── ransac.py
+│       │   ├── icp.py
+│       │   └── evaluate.py
+│       ├── change/                  # M3C2 多时相形变检测（X1）
+│       │   ├── __init__.py
+│       │   ├── m3c2_wrapper.py
+│       │   └── validation.py
+│       ├── colour/                  # 色彩量化 CIEDE2000（X2）
+│       │   ├── __init__.py
+│       │   ├── color_calib.py
+│       │   └── delta_e.py
+│       ├── runner/                  # 任务调度：批量 / 断点续跑 / 失败隔离
+│       │   ├── __init__.py
+│       │   ├── task.py
+│       │   └── batch_processor.py
+│       ├── report/                  # 报表输出：CSV / 图表 / 统计
+│       │   ├── __init__.py
+│       │   ├── csv_export.py
+│       │   └── plot_gen.py
+│       └── cli.py                   # 命令行入口
+├─ tests/                            # 单元测试（不计入业务源码行数）
+│   ├── __init__.py
+│   ├── test_core/  test_io/  test_preprocess/
+│   ├── test_register/  test_change/  test_colour/
+│   └── test_runner.py
+├─ configs/                          # 示例 yaml 配置（非源码）
+├─ docs/                             # md 文档 / 软著说明书草稿
+├─ examples/                         # 最小使用示例脚本（可选）
+├─ data/                             # 测试样例数据（gitignore 忽略）
+├─ output/                           # 程序输出产物（gitignore 忽略）
+├─ notebooks/                        # jupyter 探索实验（不计入发布源码）
+├─ pyproject.toml                    # 工程 / 依赖声明
+├─ environment.yml                  # conda 环境声明
+└─ README.md
+
+=== PAGE 7 ===
+造像类文物三维建模自动化系统 软件开发项目设计书
+3.1 完整软著版目录树
+造像类文物三维建模自动化系统 管线骨架构建分析
+第 7 页
+3.2 目录职责清单
+目录 / 文件
+类型
+职责
+是否计入业务源码
+src/h3d/core
+包
+全局底座：配置校验、分级日
+志、溯源元数据、自定义异常
+是
+src/h3d/io
+包
+点云 / 网格读写与格式适配
+是
+src/h3d/preprocess
+包
+滤波、降采样、法线估计
+是
+src/h3d/register
+包
+FPFH+RANSAC 粗配准 +
+ICP 精配准 + 评估
+是
+src/h3d/change
+包
+M3C2 多时相封装与交叉校验
+（X1）
+是
+src/h3d/colour
+包
+色卡校准 + CIEDE2000 色差
+（X2）
+是
+src/h3d/runner
+包
+批量调度、断点续跑、失败隔
+离
+是
+src/h3d/report
+包
+CSV / 图表 / 统计报表
+是
+src/h3d/cli.py
+文件
+命令行入口（init/run/validat
+e/report）
+是
+tests/
+目录
+pytest 单元测试，按子包分
+子目录
+否（单独统计）
+configs/
+目录
+示例 yaml；运行参数外部化
+否
+docs/
+目录
+说明文档、软著草稿
+否
+examples/
+目录
+最小可运行示例
+少量可选
+data/ output/
+目录
+样例数据 / 产物，隔离不入库
+否
+notebooks/
+目录
+探索实验，不计入发布
+否
+pyproject.toml
+environment.yml
+文件
+依赖与环境声明
+否
+README.md
+文件
+项目说明
+否
+
+=== PAGE 8 ===
+造像类文物三维建模自动化系统 软件开发项目设计书
+3.2 目录职责清单
+造像类文物三维建模自动化系统 管线骨架构建分析
+第 8 页
+第 4 章 模块划分与职责
+4.1 P0 底座与 S1~S4 流水线
+《项目目录草案》将业务划分为 P0 底座与 S1~S4 阶段；骨架以子包承载之，并补充 runner/report 两个
+横切包：
+草案阶段
+骨架落点
+核心职责
+P0 底座（CLI/日志/配置/工具）
+core + cli.py
+参数校验、分级日志、run_manifest 溯
+源、异常层级、命令入口
+S1 IO 与预处理
+io + preprocess
+格式适配、去噪、降采样、法线
+S2 异源点云配准
+register
+FPFH 特征、RANSAC 粗配准、ICP 精
+配准、RMSE/fitness 评估
+S3 M3C2 多时相
+change（X1，可选）
+py4dgeo 封装、LoD 不确定性、
+CloudCompare CLI 交叉校验
+S4 CIEDE2000 色彩
+colour（X2，可选）
+色卡校准、批量色差计算
+横切：调度/异常/报表
+runner + report
+批量任务隔离、断点续跑、CSV/图表报
+表
+4.2 子包内部文件职责
+子包
+文件
+占位职责
+core
+config.py
+dataclass + 描述符元编程实现参数校验
+与 yaml 解析
+core
+logging.py
+分级日志（DEBUG/INFO/WARN/ERR
+OR）
+core
+metadata.py
+SHA256 校验与 run_manifest 溯源元数
+据
+core
+exceptions.py
+管线自定义异常类层级
+io
+pointcloud_io.py
+点云读写与格式适配
+io
+mesh_io.py
+网格读写
+preprocess
+filter.py / downsample.py /
+normal_estimate.py
+去噪 / 降采样 / 法线估计
+register
+feature.py / ransac.py / icp.py /
+evaluate.py
+FPFH / RANSAC / ICP / 误差评估
+change
+m3c2_wrapper.py / validation.py
+M3C2 封装 / 交叉校验
+colour
+colorcalib.py / deltae.py
+色卡校准 / CIEDE2000
+runner
+task.py / batch_processor.py
+任务状态机 / 批量处理器
+report
+csvexport.py / plotgen.py
+CSV 导出 / 图表生成
+（顶层）
+cli.py
+命令行入口 main()
+4.3 与设计书模块标识的映射（概念→目录 投影）
+设计书使用 M0~M6、X1、X2 作为逻辑模块标识；骨架将其投影为物理包名。两者命名体系不同，须通过
+下表对齐，避免协作时指代错位：
+
+=== PAGE 9 ===
+造像类文物三维建模自动化系统 软件开发项目设计书
+4.3 与设计书模块标识的映射（概念→目录 投影）
+造像类文物三维建模自动化系统 管线骨架构建分析
+第 9 页
+设计书逻辑模块
+骨架物理落点
+说明
+M0 底座 / CLI
+core + cli.py
+配置、日志、异常、命令入口
+M1 IO 与预处理
+io + preprocess
+格式适配与预处理
+M2 配准
+register
+FPFH+RANSAC+ICP
+M3 稠密重建 / M4 网格纹理
+（建模核心，草案归入「建模核心」阶
+段）
+设计书 M3/M4 对应稠密重建与纹理；
+草案以 S2 配准为骨架重点，建模核心在
+后期补足
+X1 多时相
+change
+M3C2，可选扩展
+X2 色彩
+colour
+CIEDE2000，可选扩展
+M5 调度 / 断点续跑
+runner
+批量、失败隔离、run_manifest
+M6 质检 / 报表
+report
+误差评估与导出
+警告：设计书 M3（稠密重建）/M4（网格纹理）在草案骨架中未单列子包，统一归入「建模核心」阶段。
+若后续引入独立稠密重建子包，应在 src/h3d/ 下新增 reconstruct/ 包并在设计书同步修订，保持概念—目
+录映射唯一。
+
+=== PAGE 10 ===
+造像类文物三维建模自动化系统 软件开发项目设计书
+4.3 与设计书模块标识的映射（概念→目录 投影）
+造像类文物三维建模自动化系统 管线骨架构建分析
+第 10 页
+第 5 章 依赖关系分析
+5.1 包内依赖（子包自洽）
+每个子包内部的高频依赖方向应自上而下、禁止反向环：
+core:        exceptions <- (config, logging, metadata)   # 异常为最底层，无人依赖它
+io:          pointcloud_io, mesh_io        (依赖 core.exceptions)
+preprocess:  filter, downsample, normal_estimate (依赖 io)
+register:    feature -> ransac -> icp -> evaluate (链式)
+change:      m3c2_wrapper -> validation    (依赖 register 结果)
+colour:      color_calib -> delta_e
+runner:      task -> batch_processor       (依赖上述所有业务包)
+report:      csv_export, plot_gen          (依赖 runner 产物)
+cli:         main() 编排上述全部            (顶层依赖)
+5.2 包间依赖矩阵
+“→”表示依赖（A → B 读作 A 导入 B）。核心约束：业务子包不得反向依赖 runner/report/cli；core
+不得依赖任何业务包（保证底座可被单独测试）。
+导入方 \
+被导入方
+core
+io
+preproce
+ss
+register
+change
+colour
+runner
+report
+cli
+core
+—
+io
+ —
+preproce
+ss
+  —
+register
+   —
+change
+    —
+colour
+ —
+runner
+      —
+report
+  —
+cli
+        —
+5.3 外部依赖与合规约束
+外部库
+用途
+许可证
+骨架中的声明位置
+合规要点
+Open3D
+点云 / 网格核心算法
+MIT
+pyproject.toml
+可闭源分发
+numpy
+数组 / 数值
+BSD-3
+pyproject.toml
+无限制
+py4dgeo
+M3C2 官方实现
+MIT
+pyproject.toml
+可闭源分发
+colour-science
+CIEDE2000 计算
+MIT
+pyproject.toml
+可闭源分发
+PyYAML
+配置解析
+MIT
+pyproject.toml
+无限制
+CloudCompare(CLI)
+M3C2 交叉校验子进程
+GPL-3.0+ / LGPL
+subprocess 调用
+仅子进程，不链入代码
+警告：纯 MIT/BSD 依赖栈是软著闭源分发的前提。任何 GPL-3.0 库（如 plyfile 曾有 GPL 传染性争议）均
+不得被 import 链入；仅允许以独立子进程方式调用（如 CloudCompare CLI），并写清隔离边界。
+
+=== PAGE 11 ===
+造像类文物三维建模自动化系统 软件开发项目设计书
+5.3 外部依赖与合规约束
+造像类文物三维建模自动化系统 管线骨架构建分析
+第 11 页
+第 6 章 基础文件与生成逻辑
+6.1 占位文件的设计意图
+骨架生成的每个 .py 均为占位（stub）：仅含模块 docstring 与 TODO 注释，不含实现。其意图是固定「
+导入路径」与「包边界」，使后续 import h3d.core.config 等语句在骨架阶段即可被解释器解析（即使功
+能为空），从而保证工程「一生成即可 pip install -e . 成功、pytest 可收集到空测试」。
+6.1.1 典型占位文件示例
+# h3d/core/config.py
+# 参数校验与配置加载（dataclass + 描述符元编程）。
+#
+# TODO: 实现 Config dataclass、字段描述符校验、yaml 解析。
+def load(path):
+    raise NotImplementedError("config.load 待实现（见设计书 M0）")
+6.2 _init_.py 的作用
+• 将目录标记为可导入 Python 包，使 h3d.core、h3d.register 等成为合法 import 目标
+• 可在其中暴露子模块公共符号（如 from h3d.core import Config），统一包对外 API
+• 顶层 src/h3d/_init.py 可声明 version_，供 cli 与 report 引用
+• tests 各子目录同样需要 _init_.py，保证 pytest 按包收集用例
+6.3 工程元数据文件
+文件
+作用
+关键内容
+pyproject.toml
+PEP 517/518 工程与依赖声明
+[project] name/version/deps；
+[project.scripts] h3d=...cli:main；
+packages.find where=src
+environment.yml
+conda 可复现环境
+channels + dependencies（python /
+open3d / py4dgeo ...）
+configs/example.yaml
+运行参数外部化样例
+project / input / preprocess /
+register / runner 分层参数
+README.md
+项目入口说明
+模块清单、开发步骤、合规提示
+.gitignore
+数据与产物隔离
+忽略 data/ output/ notebooks/ 
+_pycache_/ .venv/
+6.3.1 配置样例（configs/example.yaml）
+project:
+  name: dazu_rock_carving_001
+input:
+  raw_dir: data/raw
+  formats: [ply, pcd, obj]
+preprocess:
+  voxel_down_sample: 0.005
+  normal_estimate_k: 30
+register:
+  fpfh_radius: 0.02
+  ransac_distance: 0.05
+  icp_distance: 0.02
+change:                # 可选 X1
+
+=== PAGE 12 ===
+造像类文物三维建模自动化系统 软件开发项目设计书
+6.3 工程元数据文件
+造像类文物三维建模自动化系统 管线骨架构建分析
+第 12 页
+  enabled: false
+colour:                # 可选 X2
+  enabled: false
+runner:
+  fail_isolation: true
+  resume: true
+  manifest: output/run_manifest.json
+6.4 run_manifest 溯源元数据（关键设计）
+runner 输出的 run_manifest.json 记录每次运行的输入哈希、参数快照、各阶段耗时与产物路径，是「可
+复现 / 可审计 / 可软著溯源」的核心。骨架虽不实现，但通过 metadata.py 占位与 example.yaml 的
+manifest 字段，提前固化该契约，使后期实现不偏离。
+
+=== PAGE 13 ===
+造像类文物三维建模自动化系统 软件开发项目设计书
+6.4 run_manifest 溯源元数据（关键设计）
+造像类文物三维建模自动化系统 管线骨架构建分析
+第 13 页
+第 7 章 生成脚本设计分析（PowerShell）
+7.1 脚本职责边界
+生成脚本只做一件事：按《项目目录草案》的完整软著版布局，创建目录与占位文件。它不安装依赖、不
+下载数据、不执行任何业务代码——因此是「纯结构生成器」，可在任意干净机器上安全运行，且可重复
+执行。
+7.2 关键设计属性
+属性
+实现方式
+意义
+幂等（可重复执行）
+New-Item -Force + Test-Path 跳过已
+存在项
+重跑不会覆盖已有实现，安全增量
+参数化根目录
+param([string]$ProjectRoot)
+默认 ./h3d_pipeline，可指定任意路径
+统一辅助函数
+New-Dir / New-StubFile / New-File
+目录与文件创建逻辑集中，易维护
+utf-8 编码
+Set-Content -Encoding utf8
+中文注释 / 文档不乱码
+执行汇总
+输出新建目录/文件/跳过计数
+一眼看清生成结果
+不写业务实现
+占位仅含 docstring + TODO
+恪守「只建骨架」边界
+7.3 生成逻辑的数据流
+输入: $ProjectRoot (默认 ./h3d_pipeline)
+  |
+  v
+1) 组装 $dirs 列表 (src/h3d/8子包 + tests/* + configs/docs/examples/data/output/notebooks)
+  |  New-Dir 逐个创建（已存在则 SKIP）
+  v
+2) 逐子包 New-StubFile 生成 __init__.py 与各 .py 占位
+  |  (core/io/preprocess/register/change/colour/runner/report + cli.py)
+  v
+3) tests 占位（__init__.py + 各 test_* 包 + test_runner.py）
+  v
+4) New-File 写出 configs/example.yaml, pyproject.toml, environment.yml, README.md, .gitignore
+  v
+5) 汇总输出：新建目录数 / 文件数 / 跳过数 + 项目根路径
+7.4 运行方式
+# 在 PowerShell 中，进入脚本所在目录后：
+.\h3d_pipeline_skeleton.ps1                 # 默认生成到 ./h3d_pipeline
+.\h3d_pipeline_skeleton.ps1 -ProjectRoot D:\projects\h3d   # 指定根目录
+注：脚本完整源码见附录 A。本文档不执行该脚本，仅作分析；读者在本地 PowerShell 5.1+ 或
+PowerShell 7 中运行即可（建议以非管理员、普通用户身份执行，避免写入系统目录）。 警告：生成脚本
+会在指定 ProjectRoot 下创建文件。请确认目标路径为空或仅含你愿意被跳过的同名占位文件；脚本不会删
+除任何已存在的业务代码（幂等跳过），但首次生成会新建大量文件，建议先在一个临时目录试跑验证。
+
+=== PAGE 14 ===
+造像类文物三维建模自动化系统 软件开发项目设计书
+7.4 运行方式
+造像类文物三维建模自动化系统 管线骨架构建分析
+第 14 页
+第 8 章 骨架与软件各部分的关系
+8.1 与「软件开发项目设计书」的关系
+设计书是「为什么这样分、每个模块做什么、接口与精度如何」的权威说明；骨架是其在文件系统中的「
+可执行投影」。两者的对齐机制是：设计书每个模块标识（M0~M6/X1/X2）→ 骨架一个物理包（第 4.3
+节映射表）。当设计书修订模块职责时，应先检查是否影响包边界；若新增能力超出 8 子包，应同步扩充
+骨架（如新增 reconstruct/ 包），保持双向一致。
+8.2 与「教学版开发指南」的关系
+教学指南以「从零手把手」方式带读者实现系统，其「工程组织 / 包结构」一章即本骨架的逐步落地版。
+区别在于：教学指南是叙述性的（边讲边写），骨架脚本是确定性的（一次性建好容器）。读者可先跑骨
+架脚本获得空工程，再按教学指南逐章填充实现，二者互补。
+8.3 与「软件著作权」的关系
+• 纯 MIT/BSD 依赖栈在 pyproject.toml 中固化，从工程声明层面杜绝 GPL 传染风险
+• data/ 与 output/ 被 .gitignore 忽略，落实「数据开源 ≠ 数据公开」，保护原始文物数据
+• runner/manifest 与 metadata.py 占位预设溯源能力，支撑软著「实质 coding」举证
+• tests/ 独立统计、不混入业务源码，符合软著提交「前后各 30 页源码」的清晰边界
+• 软著登记版须为完全人工重写；骨架占位仅作开发起点，登记前应替换为真实、原创实现
+8.4 与「文保标准（WW/T 0117 / 0115）」的关系
+骨架本身不实现精度阈值，但通过 configs/example.yaml 的 preprocess/register 参数段与 report 子包
+占位，把「中误差≤5mm、覆盖≥80%、重叠≥30%」等标准的落点预留出来：后期在 register/evaluate
+与 report 中读取这些参数并输出合规报表，使标准从设计书条款变为可配置、可验证的工程字段。
+
+=== PAGE 15 ===
+造像类文物三维建模自动化系统 软件开发项目设计书
+8.4 与「文保标准（WW/T 0117 / 0115）」的关系
+造像类文物三维建模自动化系统 管线骨架构建分析
+第 15 页
+第 9 章 从骨架到交付的演进路线
+9.1 三阶段填充策略
+阶段
+目标
+骨架动作
+验收
+骨架（本文件）
+固定工程拓扑
+已建目录 + 占位
+pip install -e . 成功，pytest
+收集空用例
+MVP（S0~S2）
+跑通配准 Demo
+填充 core/io/preprocess/re
+gister + cli
+单尊可自动配准，导师汇报可
+演示
+完整软著版（S0~S4）
+路线 E 全实现
+填充 change/colour/runner
+/report + tests
+批量可复现，可申请软著 +
+小论文
+增强版（可选）
+作品集增强
+新增 exporter / api 子包
+可 HTTP / Web 调用，超出
+路线 E 原定义
+9.2 工程纪律：单文件上限与 cloc 口径
+《项目目录草案》给出两条关键工程经验，骨架生成后须长期遵守：
+• 单文件有效代码尽量不超过 350 行；某文件持续膨胀即拆分（如 register 拆分为
+feature/ransac/icp/evaluate 四个文件）
+• cloc 统计口径：只算 .py 业务源码，剔除注释、空行、yaml/md、测试、数据、缓存；tests 单独统计
+不计入业务行数
+• 高内聚、可复现、清晰接口优先于行数；约 2500 行高质量代码即可支撑硕士小论文 + 软著 + 求职作
+品集
+• 探索期草稿（notebooks/ 与临时脚本）不纳入发布与软著统计，登记前清理
+9.3 依赖安装与首次运行
+cd h3d_pipeline
+python -m venv .venv
+.venv\Scripts\activate        # Windows
+pip install -e ".[dev]"        # 安装 h3d 包 + pytest/mypy
+pytest                         # 此时收集到空占位测试
+
+=== PAGE 16 ===
+造像类文物三维建模自动化系统 软件开发项目设计书
+9.3 依赖安装与首次运行
+造像类文物三维建模自动化系统 管线骨架构建分析
+第 16 页
+附录 A 完整 PowerShell 一键生成脚本
+以下脚本由本分析说明书配套提供（文件 h3dpipelineskeleton.ps1）。本文档不执行该脚本。在本地 
+PowerShell 5.1+ / 7 中以普通用户运行即可。
+<#
+.SYNOPSIS
+    一键生成「造像类文物三维建模自动化系统」管线骨架（路线 E / 完整软著版）。
+.DESCRIPTION
+    创建标准目录结构与基础文件占位（仅脚手架，不写业务实现），用于从零启动开发。
+    对应《项目目录草案》完整软著版：11 个核心文件夹 + 8 个业务子包（src/h3d/*）。
+.PARAMETER ProjectRoot
+    项目根目录，默认为当前目录下的 h3d_pipeline。
+.EXAMPLE
+    .\h3d_pipeline_skeleton.ps1
+    .\h3d_pipeline_skeleton.ps1 -ProjectRoot "D:\projects\h3d"
+#>
+[CmdletBinding()]
+param(
+    [string]$ProjectRoot = (Join-Path $PWD "h3d_pipeline")
+)
+$ErrorActionPreference = "Stop"
+$createdDirs = 0
+$createdFiles = 0
+$skipped = 0
+function New-Dir {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) {
+        $null = New-Item -ItemType Directory -Path $Path -Force
+        Write-Host ("  [DIR ] " + $Path) -ForegroundColor Cyan
+        $script:createdDirs++
+    } else {
+        Write-Host ("  [SKIP] " + $Path) -ForegroundColor DarkGray
+        $script:skipped++
+    }
+}
+function New-StubFile {
+    param(
+        [string]$Path,
+        [string]$Module,
+        [string]$Desc
+    )
+    if (Test-Path -LiteralPath $Path) {
+        Write-Host ("  [SKIP] " + $Path) -ForegroundColor DarkGray
+        $script:skipped++
+        return
+    }
+    $content = @"
+# $Module
+# $Desc
+#
+# TODO: 此处仅生成占位骨架，请按《软件开发项目设计书》对应模块规格实现业务逻辑。
+"@
+    $null = New-Item -ItemType File -Path $Path -Force
+    Set-Content -Path $Path -Value $content -Encoding utf8
+    Write-Host ("  [FILE] " + $Path) -ForegroundColor Green
+    $script:createdFiles++
+}
+function New-File {
+
+=== PAGE 17 ===
+造像类文物三维建模自动化系统 软件开发项目设计书
+附录 A 完整 PowerShell 一键生成脚本
+造像类文物三维建模自动化系统 管线骨架构建分析
+第 17 页
+    param(
+        [string]$Path,
+        [string]$Content
+    )
+    if (Test-Path -LiteralPath $Path) {
+        Write-Host ("  [SKIP] " + $Path) -ForegroundColor DarkGray
+        $script:skipped++
+        return
+    }
+    $null = New-Item -ItemType File -Path $Path -Force
+    Set-Content -Path $Path -Value $Content -Encoding utf8
+    Write-Host ("  [FILE] " + $Path) -ForegroundColor Green
+    $script:createdFiles++
+}
+# ---------- 1. 目录骨架 ----------
+$root = $ProjectRoot
+$src = Join-Path $root "src"
+$pkg = Join-Path $src "h3d"
+$dirs = @(
+    (Join-Path $pkg "core"),
+    (Join-Path $pkg "io"),
+    (Join-Path $pkg "preprocess"),
+    (Join-Path $pkg "register"),
+    (Join-Path $pkg "change"),
+    (Join-Path $pkg "colour"),
+    (Join-Path $pkg "runner"),
+    (Join-Path $pkg "report"),
+    (Join-Path $root "tests"),
+    (Join-Path $root "tests\test_core"),
+    (Join-Path $root "tests\test_io"),
+    (Join-Path $root "tests\test_preprocess"),
+    (Join-Path $root "tests\test_register"),
+    (Join-Path $root "tests\test_change"),
+    (Join-Path $root "tests\test_colour"),
+    (Join-Path $root "configs"),
+    (Join-Path $root "docs"),
+    (Join-Path $root "examples"),
+    (Join-Path $root "data"),
+    (Join-Path $root "output"),
+    (Join-Path $root "notebooks")
+)
+Write-Host ("==> 创建目录骨架：" + $root) -ForegroundColor Yellow
+foreach ($d in $dirs) { New-Dir $d }
+# ---------- 2. 业务子包文件（8 个子包 + cli）----------
+Write-Host "==> 生成业务子包占位文件" -ForegroundColor Yellow
+# core 底座
+New-StubFile (Join-Path $pkg "core\__init__.py") "h3d.core" "核心底座：配置、日志、溯源元数据、自定义异常。"
+New-StubFile (Join-Path $pkg "core\config.py") "h3d.core.config" "参数校验与配置加载（dataclass + 描述符元编程）。"
+New-StubFile (Join-Path $pkg "core\logging.py") "h3d.core.logging" "分级日志系统。"
+New-StubFile (Join-Path $pkg "core\metadata.py") "h3d.core.metadata" "SHA256 校验与 run_manifest 溯源元数据。"
+New-StubFile (Join-Path $pkg "core\exceptions.py") "h3d.core.exceptions" "管线自定义异常类层级。"
+# io
+New-StubFile (Join-Path $pkg "io\__init__.py") "h3d.io" "IO 模块：点云读写、格式适配。"
+New-StubFile (Join-Path $pkg "io\pointcloud_io.py") "h3d.io.pointcloud_io" "点云读写与格式适配。"
+New-StubFile (Join-Path $pkg "io\mesh_io.py") "h3d.io.mesh_io" "网格读写。"
+# preprocess
+New-StubFile (Join-Path $pkg "preprocess\__init__.py") "h3d.preprocess" "预处理：滤波、降采样、法线估计。"
+
+=== PAGE 18 ===
+造像类文物三维建模自动化系统 软件开发项目设计书
+附录 A 完整 PowerShell 一键生成脚本
+造像类文物三维建模自动化系统 管线骨架构建分析
+第 18 页
+New-StubFile (Join-Path $pkg "preprocess\filter.py") "h3d.preprocess.filter" "去噪滤波。"
+New-StubFile (Join-Path $pkg "preprocess\downsample.py") "h3d.preprocess.downsample" "降采样。"
+New-StubFile (Join-Path $pkg "preprocess\normal_estimate.py") "h3d.preprocess.normal_estimate" "法线估计。"
+# register
+New-StubFile (Join-Path $pkg "register\__init__.py") "h3d.register" "异源点云配准：FPFH+RANSAC 粗配准 + ICP 精配准。"
+New-StubFile (Join-Path $pkg "register\feature.py") "h3d.register.feature" "FPFH 特征提取。"
+New-StubFile (Join-Path $pkg "register\ransac.py") "h3d.register.ransac" "RANSAC 粗配准。"
+New-StubFile (Join-Path $pkg "register\icp.py") "h3d.register.icp" "ICP 精配准。"
+New-StubFile (Join-Path $pkg "register\evaluate.py") "h3d.register.evaluate" "RMSE / fitness 误差评估。"
+# change (M3C2)
+New-StubFile (Join-Path $pkg "change\__init__.py") "h3d.change" "M3C2 多时相形变检测模块封装。"
+New-StubFile (Join-Path $pkg "change\m3c2_wrapper.py") "h3d.change.m3c2_wrapper" "py4dgeo M3C2 封装与 LoD 不确定性。"
+New-StubFile (Join-Path $pkg "change\validation.py") "h3d.change.validation" "与 CloudCompare CLI 交叉校验。"
+# colour (CIEDE2000)
+New-StubFile (Join-Path $pkg "colour\__init__.py") "h3d.colour" "色彩量化：色卡校准、CIEDE2000 批量色差。"
+New-StubFile (Join-Path $pkg "colour\color_calib.py") "h3d.colour.color_calib" "色卡校准。"
+New-StubFile (Join-Path $pkg "colour\delta_e.py") "h3d.colour.delta_e" "CIEDE2000 色差计算。"
+# runner
+New-StubFile (Join-Path $pkg "runner\__init__.py") "h3d.runner" "任务调度：批量、断点续跑、失败隔离。"
+New-StubFile (Join-Path $pkg "runner\task.py") "h3d.runner.task" "任务定义与状态机。"
+New-StubFile (Join-Path $pkg "runner\batch_processor.py") "h3d.runner.batch_processor" "批量处理器：失败隔离、断点续跑、run_mani
+# report
+New-StubFile (Join-Path $pkg "report\__init__.py") "h3d.report" "报表输出：CSV、图表、统计报表。"
+New-StubFile (Join-Path $pkg "report\csv_export.py") "h3d.report.csv_export" "CSV 导出。"
+New-StubFile (Join-Path $pkg "report\plot_gen.py") "h3d.report.plot_gen" "图表生成。"
+# cli
+New-StubFile (Join-Path $pkg "cli.py") "h3d.cli" "命令行入口（h3d init / run / validate / report）。"
+# ---------- 3. 测试占位 ----------
+Write-Host "==> 生成测试占位" -ForegroundColor Yellow
+New-StubFile (Join-Path $root "tests\__init__.py") "tests" "测试包根。"
+New-StubFile (Join-Path $root "tests\test_core\__init__.py") "tests.test_core" "core 底座测试。"
+New-StubFile (Join-Path $root "tests\test_io\__init__.py") "tests.test_io" "io 测试。"
+New-StubFile (Join-Path $root "tests\test_preprocess\__init__.py") "tests.test_preprocess" "preprocess 测试。"
+New-StubFile (Join-Path $root "tests\test_register\__init__.py") "tests.test_register" "register 测试。"
+New-StubFile (Join-Path $root "tests\test_change\__init__.py") "tests.test_change" "change 测试。"
+New-StubFile (Join-Path $root "tests\test_colour\__init__.py") "tests.test_colour" "colour 测试。"
+New-StubFile (Join-Path $root "tests\test_runner.py") "tests.test_runner" "runner 测试。"
+# ---------- 4. 配置 / 文档 / 工程文件 ----------
+Write-Host "==> 生成配置与工程文件" -ForegroundColor Yellow
+$exampleYaml = @"
+# 示例配置：单尊造像建模任务（运行时以 CLI 覆盖）
+project:
+  name: dazu_rock_carving_001
+  operator: ""
+input:
+  raw_dir: data/raw
+  formats: [ply, pcd, obj]
+preprocess:
+  voxel_down_sample: 0.005
+  normal_estimate_k: 30
+  remove_outlier_nb: 20
+  remove_outlier_std: 2.0
+register:
+  fpfh_radius: 0.02
+  ransac_distance: 0.05
+
+=== PAGE 19 ===
+造像类文物三维建模自动化系统 软件开发项目设计书
+附录 A 完整 PowerShell 一键生成脚本
+造像类文物三维建模自动化系统 管线骨架构建分析
+第 19 页
+  icp_distance: 0.02
+  max_iter: 2000
+change:
+  enabled: false
+  core_radius: 0.05
+colour:
+  enabled: false
+runner:
+  fail_isolation: true
+  resume: true
+  manifest: output/run_manifest.json
+"@
+New-File (Join-Path $root "configs\example.yaml") $exampleYaml
+$pyproject = @"
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+[project]
+name = "h3d"
+version = "0.1.0"
+description = "造像类文物三维建模自动化系统（路线E）"
+requires-python = ">=3.10"
+dependencies = [
+    "open3d>=0.18",
+    "numpy>=1.24",
+    "py4dgeo>=0.8",
+    "colour-science>=0.4",
+    "pyyaml>=6.0",
+    "tqdm>=4.66",
+]
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "mypy>=1.8"]
+[project.scripts]
+h3d = "h3d.cli:main"
+[tool.setuptools.packages.find]
+where = ["src"]
+"@
+New-File (Join-Path $root "pyproject.toml") $pyproject
+$envYml = @"
+name: h3d
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10
+  - pip
+  - pip:
+      - open3d>=0.18
+      - numpy>=1.24
+      - py4dgeo>=0.8
+      - colour-science>=0.4
+      - pyyaml>=6.0
+      - tqdm>=4.66
+      - pytest>=8.0
+"@
+New-File (Join-Path $root "environment.yml") $envYml
+$readme = @"
+# 造像类文物三维建模自动化系统（h3d / 路线 E）
+
+=== PAGE 20 ===
+造像类文物三维建模自动化系统 软件开发项目设计书
+附录 A 完整 PowerShell 一键生成脚本
+造像类文物三维建模自动化系统 管线骨架构建分析
+第 20 页
+本仓库为管线骨架（脚手架），由 h3d_pipeline_skeleton.ps1 一键生成，仅含目录与占位文件。
+## 模块
+- src/h3d/core        核心底座：配置 / 日志 / 溯源 / 异常
+- src/h3d/io          点云与网格读写
+- src/h3d/preprocess  预处理：滤波 / 降采样 / 法线
+- src/h3d/register    异源配准：FPFH+RANSAC+ICP
+- src/h3d/change      M3C2 多时相形变检测（可选 X1）
+- src/h3d/colour      CIEDE2000 色彩量化（可选 X2）
+- src/h3d/runner      批量调度 / 断点续跑 / 失败隔离
+- src/h3d/report      报表导出
+## 开发
+1. 创建虚拟环境并激活：
+   python -m venv .venv && .venv\Scripts\activate
+2. 安装依赖与开发工具：
+   pip install -e ".[dev]"
+3. 运行测试：
+   pytest
+## 合规
+纯 MIT/BSD 依赖栈；GPL 仅以子进程方式调用（如 CloudCompare CLI）。
+软著登记版须为完全人工重写。
+"@
+New-File (Join-Path $root "README.md") $readme
+$gitignore = @"
+# 数据 / 产物不入库
+data/
+output/
+notebooks/
+__pycache__/
+*.pyc
+.venv/
+"@
+New-File (Join-Path $root ".gitignore") $gitignore
+# ---------- 5. 汇总 ----------
+Write-Host ""
+Write-Host ("完成。新建目录：$createdDirs，新建文件：$createdFiles，跳过（已存在）：$skipped") -ForegroundColor Green
+Write-Host ("项目根：" + $root) -ForegroundColor Green
+
+=== PAGE 21 ===
+造像类文物三维建模自动化系统 软件开发项目设计书
+附录 A 完整 PowerShell 一键生成脚本
+造像类文物三维建模自动化系统 管线骨架构建分析
+第 21 页
+附录 B 目录清单对照表
+序号
+路径
+类型
+说明
+1
+src/h3d/core/
+包
+核心底座
+2
+src/h3d/io/
+包
+IO 适配
+3
+src/h3d/preprocess/
+包
+预处理
+4
+src/h3d/register/
+包
+配准
+5
+src/h3d/change/
+包
+M3C2（X1）
+6
+src/h3d/colour/
+包
+色彩（X2）
+7
+src/h3d/runner/
+包
+调度
+8
+src/h3d/report/
+包
+报表
+9
+src/h3d/cli.py
+文件
+命令入口
+10
+tests/
+目录
+单元测试
+11
+configs/
+目录
+示例配置
+12
+docs/
+目录
+文档
+13
+examples/
+目录
+示例脚本
+14
+data/
+目录
+样例数据（忽略）
+15
+output/
+目录
+产物（忽略）
+16
+notebooks/
+目录
+探索实验
+17
+pyproject.toml
+文件
+工程声明
+18
+environment.yml
+文件
+conda 环境
+19
+README.md
+文件
+说明
+
+=== PAGE 22 ===
+造像类文物三维建模自动化系统 软件开发项目设计书
+附录 B 目录清单对照表
+造像类文物三维建模自动化系统 管线骨架构建分析
+第 22 页
+附录 C 模块—职责—设计书映射对照表
+子包 / 文件
+占位职责
+设计书模块
+草案阶段
+core + cli.py
+配置/日志/异常/命令入口
+M0
+P0 底座
+io + preprocess
+读写/去噪/降采样/法线
+M1
+S1
+register
+FPFH+RANSAC+ICP
+M2
+S2
+change
+M3C2 封装
+X1
+S3
+colour
+CIEDE2000
+X2
+S4
+runner
+批量/断点续跑/隔离
+M5
+横切
+report
+CSV/图表报表
+M6
+横切
+
+=== PAGE 23 ===
+造像类文物三维建模自动化系统 软件开发项目设计书
+附录 C 模块—职责—设计书映射对照表
+造像类文物三维建模自动化系统 管线骨架构建分析
+第 23 页
+附录 D 三版本规模对照表
+维度
+MVP
+完整软著版
+增强版
+业务源码
+800~1300 行
+2200~3200 行
+4000~5500 行
+子包数量
+4（core/io/preprocess/regi
+ster）
+8（全建）
+10（+exporter/api）
+测试文件
+少
+10~14
+更多
+可选模块
+无
+X1/X2 占位
+X1/X2 + Web/glTF
+对应阶段
+S0~S2
+S0~S4
+后端 + 扩展
+
+=== PAGE 24 ===
+造像类文物三维建模自动化系统 软件开发项目设计书
+附录 D 三版本规模对照表
+造像类文物三维建模自动化系统 管线骨架构建分析
+第 24 页
+附录 E 合规与未核实事项
+警告：本分析说明书所依据的《项目目录草案》为内部讨论稿，以下事项需在实施前与导师 / 立项方确认：
+• 模块命名：设计书 M3（稠密重建）/M4（网格纹理）在草案骨架中未单列子包，须明确是否新增
+reconstruct/ 包
+• 精度阈值：中误差≤5mm、覆盖≥80%、重叠≥30% 等为通用基线，最终以《验收细则》与 WW/T
+0117/0115 实测为准
+• 开源协议：CloudCompare 以子进程调用规避 GPL 传染，须确认目标环境可部署该 CLI
+• 软著条款：2026 年软著申报对「未使用 AI」声明等要求以登记机构最新口径为准，建议咨询专业代理
+• 数据合规：data/ 忽略策略须与单位数据管理规定一致，避免敏感文物数据误入库
+交付说明：本文档仅输出分析内容与配套 PowerShell 脚本（h3dpipelineskeleton.ps1）。按用户要求，未
+执行该脚本、未直接生成骨架目录；读者在本地 PowerShell 中运行脚本即可获得完整骨架。

@@ -2,6 +2,12 @@
 requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+# 排除依赖源码目录（py4dgeo-1.2.0 自带测试，避免误收集）
+norecursedirs = ["py4dgeo-1.2.0", "output", "docs", "examples", "notebooks", "*.egg-info", ".*"]
+
 [project]
 name = "h3d"
 version = "0.1.0"
@@ -13,7 +19,11 @@ dependencies = [
   "py4dgeo>=0.8",
   "pyyaml>=6.0",
   "colour-science>=0.4",
-  "tqdm>=4.66"
+  "matplotlib>=3.7",
+  "trimesh>=4.0",
+  "tqdm>=4.66",
+  "jinja2>=3.1",
+  "xatlas>=0.0.11"
 ]
 
 [project.optional-dependencies]

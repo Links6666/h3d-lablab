@@ -1,0 +1,676 @@
+=== PAGE 1 ===
+技术路线E 可行性分析与学习路径
+第 1 页
+技术路线E 可行性分析与学习路径报告
+——基于开源工具链的文物三维数据自动化处理管线开发
+调研截止日期：2026 年 8 月 9 日 调研对象：技术路线 E（开源自研管线，技术主线） 调研主体：本人（2026 级
+拟入学研究生，方向初拟"西南潮湿环境石窟寺数字化保护"） 前置依据：①《导师童永东综合科研信息汇报
+_2026》；②《西南潮湿环境摩崖造像与石窟寺保护研究路径分析报告_2026》；③ 用户《方向.docx》五个切
+入点；④ 导师博士/硕士论文工作流参数。
+阅读须知：可信度标注体系
+本报告每条关键信息均标注来源与可信度等级（沿用前期汇报体系）：
+标注
+含义
+判断依据
+【官方】政府部门、高校官网、官方公示文件、软件官方许可文件
+可直接引用
+【文献】已发表论文、学位论文、软件官方文档
+可直接引用
+【计量】开源仓库元数据（GitHub API / 官方 LICENSE）
+数值随时间变动，已注明检索日
+【媒体】学院新闻稿、公众号、第三方百科
+事实基本可靠，表述可能有宣传色彩
+【推断】本报告基于已有事实的分析推理
+不是事实，是判断
+【存疑】无法核实或存在矛盾
+必须向导师/学院当面确认
+许可证检索说明：本文第三节所有开源项目的许可证均于 2026-08-09 通过各项目官方 GitHub 仓库的 
+LICENSE/COPYING 文件或官方文档核验（见附录 A）。个别仓库因分支/接口变动未能直接读取 LICENSE 文件
+者，已用官方文档与权威二次来源交叉确认并注明。
+零、核心结论速览
+1. 路线 E 是什么：用 Python + Open3D + PyMeshLab 复现并自动化导师依赖商业 GUI（Metashape / 
+CloudCompare / Geomagic）的工作流，并开源发布。它在五条路线中被升格为"贯穿 A/B/C/D 的技术主线 / 方法
+底座"，而非独立学位论文主线。【文献】【推断】
+1. 可行性结论：高。技术门槛集中在"异源配准自研 + M3C2 在 Open3D 的等价实现 + 工程化封装"三处，但均有
+成熟算法基础（ICP/FPFH/RANSAC、点到面距离+法向），且生态完善；资源门槛最低（★，普通笔记本即可
+起步，GPU 非必需），恰好匹配导师"市级课题 0 万元联合实施、无设备采购能力"的现实。【推断】【官方】
+1. 对导师研究的拓展价值（四个维度）：把导师工作流从"点击 GUI、不可复现、不可批处理、不可开源"升级为"
+脚本化、可复现、可批处理、可开源"，补上其最大缺口；同时把"看得清"（高保真复原）推进到"量得准"（定
+量表征 + 显式不确定性）。这是师门首次、唯一具备的能力增量。【推断】
+1. 最大风险：① M3C2 在 Open3D 无官方实现，需自研（点到面距离 + 法向 + 局部半径），正确性需以 
+CloudCompare M3C2 为基准交叉验证；② 异源配准精度需对标导师博士成果（RMS = 0.000545881）方有说服力
+；③ 许可证合规——PyMeshLab（GPL-3）、CloudCompare（GPL）、MPI-IS/mesh 与 Gaussian-Splatting（非商业）
+均为强 copyleft 或非商业许可，发布方式须谨慎（详见 §4.4）。【推断】【文献】
+1. 学习路径三阶段可落地：MVP（最小可用管线）约 3–4 个月（研 0 暑期 + 研一上）；研一–研三持续建设，
+与 A/B/C/D 主线不冲突、反支撑。产出形态：软著 1 项 + 工具论文（SoftwareX / Heritage Science 方法短讯）+ 就
+业作品集。【推断】
+第一部分 技术路线 E 的定位与技术画像
+
+=== PAGE 2 ===
+技术路线E 可行性分析与学习路径
+第 2 页
+1.1 定义与核心价值
+切入点 E：基于开源工具链的文物三维数据自动化处理管线开发。【文献】
+ 核心价值：用 Python + Open3D + PyMeshLab 复现并自动化导师商业软件工作流，开源发布。这是纯粹的"您
+的增量"——导师无此能力、师门无此先例。【文献】
+ 定位升格为技术主线：偏工程、单篇学术论文难度大，故不作为主线学位论文，而作为贯穿 A/B/C/D 的方法
+底座；产出 软著 + 工具论文 + 就业作品集。【文献】
+ 降维策略：无 GPU → 降采样 / 分块 / 云算力；算法正确性优先于数据规模。【文献】
+1.2 技术难点、数据来源、周期、门槛
+维度
+内容
+来源
+技术难
+点
+异源模型配准算法自研（替代 CloudCompare GUI）；批处理与可复现；M3C2 在 Open3D 的等价实现；工程化封
+装与开源发布
+【文献】
+数据来
+源
+导师博士/硕士论文工作流参数；灵岩寺罗汉像点云（导师数据可直接练手）；Stanford / Open Heritage 3D 公开数
+据集
+【文献】
+实施周
+期
+研一–研三持续建设，MVP 约 3–4 个月
+【文献】
+资源门
+槛
+★（一台普通笔记本即可起步，GPU 为加分项非必需）
+【文献】
+1.3 与 A/B/C/D 的关系（来自前期报告结构图）
+`` [技术主线 · 全程] E：Python/Open3D 自研管线（可复现、可批处理、开源） │ 支撑 ↓ [学术主线 · 
+学位论文章节] 研一：C 修复材料湿热-盐循环表面形貌响应（实验室，低风险） 研二：A 大足彩绘石质造像
+高保真+病害定量 + B 多时相点云差分 研三：整合 → "潮湿环境彩绘石质造像的数字化定量表征与材料响应
+评价" [转化副线] D：采集规范/色差追踪 → 软著/技术规程 ``
+即：E 是方法底座，A/B/C/D 是应用出口。E 的能力直接决定 A（配准+纹理）、B（M3C2 差分）、C（形貌量
+化）、D（色差 ΔE）能否"自动化、可复现、可批量"地完成。【推断】
+第二部分 可行性深度评估
+2.1 技术可行性
+2.1.1 算法层（核心三难，均有成熟基础）
+难点
+现有算法基础
+可行性判断
+异源模型配准（自研，替
+代 CloudCompare GUI）
+FPFH 全局特征 + RANSAC 粗配准 + ICP/点到
+面精配准（Open3D 原生支持）【文献】
+高。Open3D 已封装完整配准链；关键是把导师"几
+何+纹理融合"的工作流映射为可脚本化流程
+M3C2 等价实现
+点到面距离 + 法向 + 局部半径统计（Lague et
+al. 2013 方法学）【文献】
+中高。Open3D 无官方 M3C2，需自研；正确性须以
+ CloudCompare M3C2 为基准交叉验证
+批处理 / 可复现
+Python 脚本 + 配置文件 + 日志；
+Open3D/PyMeshLab 全可编程
+高。天然优势，正是商业 GUI 的短板
+2.1.2 工程层
+ Open3D 后端高度优化、支持并行，已被大量已发表论文部署于云端【文献：Open3D 论文 arXiv:1801.09847】
+；社区活跃，教程/示例完备（open3d.org/docs）。
+
+=== PAGE 3 ===
+技术路线E 可行性分析与学习路径
+第 3 页
+ PyMeshLab 提供 MeshLab 全部网格处理能力的 Python 绑定，网格修复/简化/滤波可脚本化【文献】。
+ NumPy / SciPy / Pandas 构成数值与表格处理底座，成熟稳定【文献】。
+2.1.3 资源层
+ ★ 最低门槛：普通笔记本即可起步；GPU 仅加速大点云计算，非必需（降采样 + 分块即可应对百万级点云）
+【文献】。
+ 恰好匹配导师"市级自科基金面上项目 = 联合实施、市级财政 0 万元"的现实——无经费压力、也无设备采购
+能力，路线 E 的低资源需求是适配而非妥协。【官方】【推断】
+2.1.4 风险点（须提前设防）
+1. 配准精度对标：导师博士工作配准误差 RMS = 0.000545881、纹理 8192×8192【文献】。自研管线须达到同量
+级方有说服力，否则只是"玩具复现"。建议以灵岩寺点云为基准做 A/B 对照。
+2. M3C2 自研正确性：须与 CloudCompare M3C2 结果逐点比对（差值 < 容差）后方可替换为自研版。
+3. 大点云内存：千万级点云需分块/降采样/ octree，避免 OOM；这是工程而非算法风险。
+4. 时间成本：管线工程化（日志、配置、错误处理、测试）易低估；MVP 3–4 月为乐观估计，需预留缓冲。
+2.2 资源可行性（结合导师项目背景）
+ 导师 2025 年获批重庆市自然科学基金面上项目「多学科交叉下的彩绘造像文物数字化复原及保护技术研究」
+（CSTB2025NSCQ-GPX0254），但官方清单标注"市级财政 0 万元、联合实施"【官方】。
+ 含义：项目"级别"是省部级纵向（可用于职称/报奖/简历），但无市级财政拨款，设备采购、外出测试、样品
+分析、田野出差费用来源需单独确认【官方】【推断】。
+ 路线 E 的低资源门槛正好规避了这一短板——不需要激光扫描仪、不需要 GPU 集群、不需要外出采集即可
+起步，用导师已有的灵岩寺点云 + 公开数据集练手。【推断】
+2.3 时间与学业可行性
+ MVP 3–4 个月（研 0 暑期 + 研一上），覆盖"读入→配准→M3C2 差分→色差→批处理"最小闭环【文献】。
+ 研一–研三持续建设，作为 A/B/C/D 的方法底座，与学位论文主线不冲突、反支撑——C 的实验室样块可先
+跑通第一版定量流程，A/B 的真实数据再叠加【推断】。
+ 产出形态（软著 + 工具论文 + 作品集）对"进机构/就业"均有直接助益，不依赖高影响因子论文【推断】。
+2.4 风险护栏
+1. M3C2 不赌自研正确性：以 CloudCompare M3C2 为"黄金基准"，自研版须通过逐点比对方可替换。
+2. 定量优先于复原：显式报告配准误差、M3C2 不确定性，而非只给"漂亮模型"。
+3. 开源合规前置：发布前核对 §4.4 许可证矩阵，避免误用非商业/强 copyleft 组件于需闭源/商用的场景。
+4. 先内部价值、再外部发布：先把管线用于导师课题（彩绘造像数字化复原）产生内部价值，再考虑开源与工
+具论文。
+第三部分 对导师既有研究路线的拓展价值
+3.1 导师现有工作流画像（商业 GUI 依赖）【文献】
+环节
+导师所用工具（商业 GUI）
+特征
+摄影测量几何 + 纹理
+Agisoft Metashape
+点击式，参数在 GUI，不可批处理
+异源模型配准
+CloudCompare
+GUI 操作，核心算法非自研
+
+=== PAGE 4 ===
+技术路线E 可行性分析与学习路径
+第 4 页
+环节
+导师所用工具（商业 GUI）
+特征
+网格处理 / 修复
+Geomagic（及 MeshLab）
+商业/半商业，手动
+病害/形貌分析
+多为人工 + 商业软件
+定量指标提取难
+导师博士工作的核心贡献：建立了"科学分析 → 模拟实验 → 异源配准 → 高保真虚拟复原"全链路方法，配准 
+RMS 达 0.000545881、纹理 8192×8192，方法学具首创性【文献】。但其实现依赖商业 GUI，不可复现、不可批
+处理、不可开源。
+3.2 路线 E 的四个拓展维度【推断】
+维度
+导师现状
+路线 E 的拓展
+价值
+可复现性
+点击 GUI，步骤难复原
+脚本化，一步一日志，可重跑
+方法可审计、可传承给师门
+批处理能
+力
+手工逐件处理
+全程序化循环
+从"1 件"到"N 件"，支撑大足多造像
+开源发布
+闭源商业工具
+自有代码开源
+学术透明 + 求职作品集 + 潜在工具论文
+方法可控
+性
+算法封装在商业软件内
+算法可改、可插桩、可量化不确定
+性
+把"看得清"升级为"量得准、说得清变化"
+3.3 与导师课题"彩绘造像数字化复原"的衔接【推断】
+ 用开源链复现其异源配准（几何 + 纹理融合），把"高保真复原"的方法底座换成可复现、可批处理的版本。
+ 在此底座上叠加定量病害指标（起翘面积率、酥粉深度、色差 ΔE、粉化区体积）与 M3C2 多时相差分，
+实现从"复原展示"到"病害定量"的升级——这正是 A/B 方向的核心创新点。
+ 路线 E 使导师"有方法、缺工程化"的短板被补齐，导师有强烈动机把方法交给你并实现开源化。
+3.4 对师门的增量（首次 / 唯一）【推断】
+ 导师师门既往无 Python 自研管线先例；路线 E 是首个将商业工作流转为开源可复现管线的尝试。
+ 这意味着：你不是"重复导师"，而是"接续并扩展"——你把"看得清"做到极致，他帮你把方法落地为可传承、
+可发布的工程资产。
+第四部分 软件工具与开源资源详解
+本节为路线 E 直接涉及 + 相关的全部软件工具、开源项目与公开数据集，逐项给出项目来源、许可证、主要功能、适用场
+景。许可证均经 2026-08-09 核验（附录 A）。
+4.1 核心工具链（直接用于路线 E）
+工具 / 库
+许可证
+项目来源 / 维护方
+主要功能
+适用场景
+Open3D
+MIT（宽松）
+Intel ISL（现 isl-org）【
+官方】
+点云/网格数据结构、配准（ICP /
+FPFH / RANSAC）、可视化、点到面距
+离、可视化
+路线 E 的核心引
+擎；自研管线主
+体
+PyMeshLab
+GPL-3.0（强 copyleft）CNR-ISTI VCLab【官方】MeshLab 的 Python 绑定：网格滤波、简
+化、修复、法向计算
+网格后处理、破
+洞修复、降面
+CloudCompare
+GPL（v2.0 或更高，
+强 copyleft）
+CloudCompare org【官
+方】
+点云/网格对比、M3C2 插件、配准、 
+octree 可视化
+M3C2 黄金基准、
+GUI 对照验证
+NumPy
+BSD-3-Clause（宽松）NumPy 开发社区【官
+方】
+多维数组与数值计算
+数据处理底座
+
+=== PAGE 5 ===
+技术路线E 可行性分析与学习路径
+第 5 页
+工具 / 库
+许可证
+项目来源 / 维护方
+主要功能
+适用场景
+colour-scien
+ce
+BSD-3-Clause（宽松）Colour Developers【官
+方】
+色彩科学计算，含 CIEDE2000 ΔE  D 方向色差追踪、
+色彩一致性
+COLMAP
+New BSD / BSD-3-Cla
+use（宽松）
+ETH Zürich（
+Schnberger 等）【官
+方】
+SfM + MVS 摄影测量重建
+摄影测量重建（
+对照/替代 Metasha
+pe）
+Metashape
+商业专有（Agisoft；
+提供教育版/试用）
+Agisoft【官方】
+摄影测量 GUI（几何+纹理）
+导师工作流对照
+；非开源，仅作
+参照
+Meshroom
+MPL-2.0（弱 copyleft
+，文件级）
+AliceVision【官方】
+节点化摄影测量管线（GUI）
+摄影测量可视化
+对照
+4.2 相关开源项目（GitHub 仓库）
+开源项目
+许可证
+维护方
+主要功能
+适用场景
+intel-isl/Open3D（现 
+isl-org/Open3D）
+MIT
+Intel → 社区
+3D 数据处理库（C++/Pyth
+on）
+自研管线核心依赖
+cnr-isti-vclab/PyMeshLab
+GPL-3.0
+CNR-ISTI
+网格处理 Python 绑定
+网格修复/简化脚本
+cloudcompareorg/CloudCompare
+GPL
+CloudCompare
+org
+点云对比/M3C2
+基准验证
+MPI-IS/mesh（含 surface_healing）Max-Planck 非商
+业研究许可
+Max-Planck
+Institute
+网格修复、watertight、
+surface_healing
+网格善后（仅限非商
+业科研）
+colmap/colmap
+BSD-3-Clause
+ETH Zürich
+SfM/MVS
+摄影测量
+alicevision/Meshroom
+MPL-2.0
+AliceVision
+摄影测量节点管线
+对照
+nerfstudio-project/nerfstudi
+o
+Apache-2.0（宽松）Nerfstudio Team
+NeRF 神经重建框架
+可迁移备选（3DGS /
+神经重建）
+graphdeco-inria/gaussian-spl
+atting
+自定义非商业研
+究许可
+Inria / MPI
+3D Gaussian Splatting
+可迁移备选（商用需
+ Inria 书面同意）
+4.3 公开数据集（练手与基准）
+数据集
+来源 / 维护
+方
+许可说明
+主要内容
+适用场景
+Stanford 3D Scanning Repository
+Stanford
+Graphics
+研究/教育用途（非
+商用）
+Bunny / Dragon / Angel
+等经典模型
+算法练手基准（报
+告中的 Bunny 实验
+即用此）
+Open Heritage 3D
+CyArk
+需注册 + 使用条款
+（多为 CC 类）
+真实文化遗产点云/网
+格
+真实文物数据练手
+（需注册）
+Zenodo（搜 "cultural heritage point cloud"）CERN
+每条目独立（多为
+CC）
+学术数据集仓储
+搜文化遗产点云
+Sketchfab
+Sketchfab
+每模型独立许可（
+含 CC / 保留版权）
+文博 3D 模型库
+展示/参考（注意逐
+模型许可）
+ETH3D
+ETH Zürich
+非商业
+高精度多视立体基准
+配准/SfM 练手
+KITTI
+KITTI
+非商业研究
+自动驾驶点云/SfM 基准
+通用配准练手
+导师灵岩寺罗汉像点云
+导师博士工
+作
+内部数据，入学申
+请获取
+真实彩绘造像点云
+零成本练手最佳起
+点
+
+=== PAGE 6 ===
+技术路线E 可行性分析与学习路径
+第 6 页
+4.4 许可证合规警示（重要，发布前必读）【官方】
+许可类型
+涉及组件
+使用约束与建议
+宽松许可
+（学术/
+商用友好）
+Open3D(MIT)、NumPy/colour-science/C
+OLMAP(BSD-3)、nerfstudio(Apache-2.0)
+可自由使用、修改、再分发，注明出处即可；商用无障碍
+弱 copyl
+eft（文
+件级）
+Meshroom(MPL-2.0)
+修改的文件需开源，但可与其他专有/自有代码聚合；整体工程不必全
+开源
+强 copyl
+eft（整
+体）
+PyMeshLab(GPL-3.0)、
+CloudCompare(GPL)
+若修改并分发库本体，衍生作品须整体 GPL 开源。路线 E 推荐以"独立
+进程调用 CLI / 仅开源自有脚本"方式使用，通常不触发 copyleft；
+勿把 GPL 代码静态链接进闭源成品
+非商业研
+究许可
+MPI-IS/mesh（Max-Planck）、
+graphdeco-inria/gaussian-splatting
+仅限非商业科研；商用须权利方书面同意（Gaussian-Splatting 联系 
+stop-sophia.transform@inria.fr）。学术使用 OK，但路线 E 主线不建议依
+赖二者作为核心，以免未来商业化受限
+实操建议：路线 E 的核心栈（Open3D + NumPy + colour-science + 自有脚本）全为宽松许可，可放心开源与（未
+来）商用；PyMeshLab / CloudCompare 仅作"调用/对照"而非"修改分发"，规避 copyleft；surface_healing 与 
+Gaussian-Splatting 仅作学术探索备选，不纳入需发布的成品依赖。【推断】
+第五部分 分阶段学习路径（零基础 → 可产出）
+在前期报告 §4.3 基础上细化，新增每周/每月节奏、里程碑产出与资源链接。所有阶段均以 "可运行 Notebook/脚本 + 
+GitHub 提交" 为产出单位。【推断】
+阶段 0（研 0 暑期，1–2 月）：公共底座
+ 目标：Python 基础 + Open3D 官方 Tutorial 前 5 节；用 Stanford Bunny 完成"读入→降采样→配准→可视化"
+Notebook。
+ 内容：Python 语法、NumPy/SciPy/Pandas、基础可视化；点云概念、PLY/OBJ、配准(ICP/FPFH/RANSAC) 入
+门；Git/GitHub 版本控制。
+ 里程碑产出：GitHub 仓库 + notebook_00_bunny_pipeline.ipynb。
+ 资源：docs.python.org；廖雪峰 Python 教程（liaoxuefeng.com）；Open3D 官方教程（open3d.org/docs）；
+git-scm.com；github.com。
+阶段 1（研一上，2–4 月）：配准核心
+ 目标：FPFH + RANSAC 全局配准、ICP 精配准；复现导师异源配准流程（几何 + 纹理）；Metashape 摄影测
+量入门。
+ 内容：Open3D 配准 API 深入；把导师"几何+纹理融合"映射为脚本；Metashape GUI 走通一次摄影测量。
+ 里程碑产出：register.py（FPFH+RANSAC+ICP）+ 与导师灵岩寺点云 RMS 对标实验记录。
+ 资源：open3d.org/docs；agisoft.com（教育版/试用）。
+阶段 2（研一下，3–5 月）：量化与对照
+ 目标：CloudCompare M3C2 插件实操（读 Lague 2013）；PyMeshLab 网格处理；colour-science 算 ΔE。
+ 内容：M3C2 方法学（点到面距离 + 法向 + 局部半径）；在 Open3D 自研 M3C2 等价实现并与 CloudCompare 
+逐点比对；网格修复/简化；色差计算。
+ 里程碑产出：m3c2_open3d.py（通过基准验证）+ color_delta.py。
+
+=== PAGE 7 ===
+技术路线E 可行性分析与学习路径
+第 7 页
+ 资源：cloudcompare.org（M3C2 文档）；pymeshlab.readthedocs.io；colour-science.org；Lague D., Brodu N., 
+Leroy A. (2013) ISPRS J. Photogrammetry and Remote Sensing（M3C2 原文）。
+阶段 3（研二，持续）：串成主线管线 + 跑通第一版
+ 目标：把上述串成 E 主线管线脚本；在 C（实验室样块）上跑通第一版定量流程；争取大足数据做 A。
+ 内容：管线工程化（配置 / 日志 / 错误处理 / 测试）；批处理循环；接入 C 方向形貌量化。
+ 里程碑产出：可复现管线 v0.1 + 软著草稿 + 第一篇方法学笔记。
+ 资源：Zenodo（搜 cultural heritage point cloud）；Open Heritage 3D（需注册）；院内 OKIO-5M / 材料表征设
+备。
+阶段 4（研二下–研三）：方法叠加 + 整合
+ 目标：B 的多时相差分 + 环境耦合；整合学位论文；管线 v1.0 开源发布。
+ 内容：M3C2 多时相 + 环境变量（温湿度/水盐）耦合；管线文档化、打包、开源；软著申报；工具论文（
+SoftwareX / Heritage Science 方法短讯）。
+ 里程碑产出：管线 v1.0（GitHub 开源）+ 软著 1 项 + 工具论文投稿 + 就业作品集。
+ 资源：SoftwareX（Elsevier）；Heritage Science（Springer, OA）；github.com（发布）。
+学习节奏总览
+阶段
+时间
+核心交付
+衔接方向
+0
+研0 暑期 1–2 月
+Bunny Notebook + GitHub 仓库
+公共底座
+1
+研一上 2–4 月
+配准脚本 + RMS 对标
+导师异源配准复现
+2
+研一下 3–5 月
+M3C2 自研 + 色差脚本
+B(差分) / D(色差)
+3
+研二
+管线 v0.1 + 软著草稿
+C(实验室样块) → A(大足)
+4
+研二下–研三
+管线 v1.0 开源 + 软著 + 工具论文
+整合学位论文
+第六部分 与学业整合建议（衔接与产出）
+ 主线协同：E 是底座，A/B/C/D 是出口。研一以 C（实验室、低风险）开局同步建 E；研二争取大足数据做 A、
+叠加 B；研三整合为"潮湿环境彩绘石质造像的数字化定量表征与材料响应评价"。【推断】【文献】
+ 小论文拆分建议（来自前期报告 §5）：中文核心 1–2 篇 + Heritage Science 或同级 SCI 1 篇 + 软著 1 项。节奏
+：研一发 C 相关；研二发 A/B 方法学 SCI；研三整合 + D/E 软著。【文献】
+ 就业作品集：路线 E 的 GitHub 开源管线 + 软著 + 工具论文，对"进文保事业单位 / 文博数字化企业"均有直接
+说服力，且是导师师门独有资产。【推断】
+附录 A 信息来源清单（许可证核验于 2026-08-09）
+#
+来源
+URL / 出处
+用途
+1
+Open3D GitHub（
+LICENSE）
+https://github.com/isl-org/Open3D
+许可证 =
+MIT
+2
+PyMeshLab GitHub（
+LICENSE）
+https://github.com/cnr-isti-vclab/PyMeshLab
+许可证 =
+GPL-3.0
+
+=== PAGE 8 ===
+技术路线E 可行性分析与学习路径
+第 8 页
+#
+来源
+URL / 出处
+用途
+3
+CloudCompare 官方许可/
+文档
+https://www.cloudcompare.org/doc/wiki/index.php/License ｜
+https://github.com/CloudCompare/CloudCompare/blob/master/license.txt
+许可证 =
+GPL（v2 或
+更高）
+4
+COLMAP GitHub（
+COPYING.txt）
+https://github.com/colmap/colmap
+许可证 =
+New BSD
+5
+colour-science GitHub（
+LICENSE）
+https://github.com/colour-science/colour
+许可证 =
+BSD-3-Claus
+e
+6
+nerfstudio GitHub（
+LICENSE）
+https://github.com/nerfstudio-project/nerfstudio
+许可证 =
+Apache-2.0
+7
+Gaussian-Splatting GitHub
+（LICENSE.md）
+https://github.com/graphdeco-inria/gaussian-splatting
+自定义非商
+业研究许可
+8
+Meshroom GitHub（
+COPYING.md）
+https://github.com/alicevision/Meshroom
+许可证 =
+MPL-2.0
+9
+MPI-IS/mesh GitHub（
+LICENSE.txt）
+https://github.com/MPI-IS/mesh
+Max-Planck
+非商业研究
+许可
+10
+Open3D 论文（arXiv:1801.
+09847）
+https://arxiv.org/abs/1801.09847
+Open3D 架
+构与能力
+11
+导师童永东综合科研信息
+汇报_2026
+本地 PDF
+导师工作流、
+配准参数
+12
+西南潮湿环境摩崖造像与
+石窟寺保护研究路径分
+析报告_2026
+本地 PDF
+路线 E 定义、
+学习路径、
+工具/数据
+集对照
+13
+用户《方向.docx》五个
+切入点
+本地 docx
+路线 E 原始
+定义
+14
+Lague D., Brodu N., Leroy
+A. (2013) ISPRS
+ISPRS J. Photogramm. Remote Sens.
+M3C2 方法
+学原文
+15
+Stanford 3D Scanning
+Repository
+https://graphics.stanford.edu/data/3Dscanrep
+经典练手数
+据集
+16
+Open Heritage 3D (CyArk)
+https://www.openheritage3d.org
+真实文化遗
+产点云
+17
+Zenodo
+https://zenodo.org
+学术数据集
+仓储
+18
+ETH3D
+https://eth3d.net ｜ KITTI https://www.cvlibs.net/datasets/kitti
+配准/SfM 基
+准
+附录 B 未核实 / 需注意事项
+#
+事项
+状态
+建议核实方式
+1
+CloudCompare 精确版本（v2 或 v3）
+官方 license.txt 写"v2 或更高"，部分
+二次来源称 v3
+以官方仓库 license.txt 为准，均属
+强 copyleft
+2
+导师是否具硕导资格、师门规模
+沿用前期汇报【存疑】
+入学当面确认
+3
+市级课题实际到账经费与报销流程
+官方标注 0 万元（联合实施）
+入学第一问
+4
+院内 GPU / 大场景激光设备底数
+中心简介未列
+入学实地查看
+
+=== PAGE 9 ===
+技术路线E 可行性分析与学习路径
+第 9 页
+#
+事项
+状态
+建议核实方式
+5
+重师—大足战略合作的学生准入条款
+仅知有合作
+问研究生秘书
+6
+灵岩寺点云是否可授权你用于练手/发布
+内部数据
+入学向导师申请并明确授权范围
+7
+路线 E 成品开源时 PyMeshLab/CloudCompare 调用方
+式是否触发 copyleft
+见 §4.4 分析
+发布前法律/导师复核
+*本报告由公开信息检索、本地论文/文档全文分析、各开源项目官方许可证核验综合而成。所有判断性内容已
+标注【推断】，请与事实性内容区分阅读。附录 B 所列事项建议在与导师首次深入交流时澄清。*

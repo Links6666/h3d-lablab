@@ -1,3 +1,13 @@
-"""h3d : 造像文物三维自动化管线顶层包"""
-# TODO: 占位骨架，参考《造像类文物三维建模自动化系统管线骨架构建分析》实现业务逻辑
-raise NotImplementedError("Stub, not implemented.")
+"""h3d : 造像类文物三维建模自动化系统（路线 E）顶层包。
+
+对外暴露版本号与核心底座，供 CLI 与报表层引用：
+
+    import h3d
+    h3d.__version__
+
+    from h3d import core
+"""
+
+__version__ = "0.1.0"
+
+__all__ = ["__version__"]

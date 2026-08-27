@@ -1,0 +1,3 @@
+﻿文物编号,阶段,状态,耗时(s),产物路径,关键指标
+rock001,M1,done,1.2,10_clean/rock001_s01.ply,points_out=500
+rock001,M2,done,2.5,20_registered/rock001_s02.ply,fitness=0.95; inlier_rmse=0.003
