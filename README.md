@@ -23,8 +23,3 @@ pip install -e ".[dev]"
 
 3. 执行pytest收集测试用例
 pytest
-
-## 合规提示
-- 核心依赖全部MIT/BSD许可证；CloudCompare‑CLI仅以外部子进程调用。
-- data/ output/ 已加入gitignore，文物原始数据禁止提交git。
-- 软件著作权登记版本需要人工重写全部业务实现，不可直接提交stub占位代码。
