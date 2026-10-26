@@ -60,10 +60,11 @@ def show_open3d_window(mesh_path: str, title: str = "H3D 3D 交互窗口",
 
 
 def load_x1_changes(root_dir: str, item_id: str) -> np.ndarray | None:
-    """读取 X1 形变结果（80_export/<item>_X1_m3c2.json 或 manifest）。"""
-    for cand in (os.path.join(root_dir, "80_export", item_id,
+    """读取 X1 形变结果（交付成果/<item>/<item>_X1_m3c2.json 或 manifest）。"""
+    from h3d.core import paths as _p
+    for cand in (os.path.join(_p.delivery_item_dir(root_dir, item_id),
                               f"{item_id}_X1_m3c2.json"),
-                 os.path.join(root_dir, "80_export", item_id,
+                 os.path.join(_p.delivery_item_dir(root_dir, item_id),
                               f"{item_id}_X1_deltaE.json")):
         if os.path.exists(cand):
             try:

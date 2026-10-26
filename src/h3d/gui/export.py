@@ -1,6 +1,7 @@
 """h3d.gui.export : 交付包一键导出（zip）。
 
-打包 80_export/<item> + 质检报告 + 论文表格 + manifest 摘要。
+打包 ``交付成果/<item>``（旧布局 ``80_export/<item>``）+ 报表 + 论文表格 +
+manifest 摘要。路径解析统一走 :mod:`h3d.core.paths`，新老布局都能导。
 """
 
 from __future__ import annotations
@@ -28,10 +29,14 @@ def export_delivery_package(root_dir: str, item_id, out_path: str) -> dict:
     items = [i for i in items if i]
     nests = len(items) > 1
 
+    from h3d.core import paths
+
     present = [i for i in items
-               if os.path.isdir(os.path.join(root_dir, "80_export", i))]
-    report_dir = os.path.join(root_dir, "report")
-    meta_dir = os.path.join(root_dir, "90_meta")
+               if os.path.isdir(paths.delivery_item_dir(root_dir, i))]
+    report_dir = paths.report_dir(root_dir)
+    meta_dir = os.path.join(paths.stage_root(root_dir), "90_meta")
+    if not os.path.isdir(meta_dir):                 # 旧布局回退
+        meta_dir = os.path.join(root_dir, "90_meta")
     # 没有一件已交付就返回空：只打包报表会误导用户「模型已导出」。
     if not present:
         return {}
@@ -39,7 +44,7 @@ def export_delivery_package(root_dir: str, item_id, out_path: str) -> dict:
     n_files = 0
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for item in present:
-            export_dir = os.path.join(root_dir, "80_export", item)
+            export_dir = paths.delivery_item_dir(root_dir, item)
             for f in sorted(os.listdir(export_dir)):
                 fp = os.path.join(export_dir, f)
                 if not os.path.isfile(fp):
@@ -74,8 +79,13 @@ def export_delivery_package(root_dir: str, item_id, out_path: str) -> dict:
 
 def _manifest_summary(root_dir: str, item_id: str) -> dict:
     """从 run_manifest.json 提取指标摘要（供交付包内嵌）。"""
-    for cand in (os.path.join(root_dir, "90_meta", "run_manifest.json"),
-                 os.path.join(root_dir, "output", "run_manifest.json")):
+    from h3d.core import paths
+
+    stage = paths.stage_root(root_dir)
+    for cand in (os.path.join(stage, "output", "run_manifest.json"),
+                 os.path.join(stage, "90_meta", "run_manifest.json"),
+                 os.path.join(root_dir, "output", "run_manifest.json"),
+                 os.path.join(root_dir, "90_meta", "run_manifest.json")):
         if not os.path.exists(cand):
             continue
         try:

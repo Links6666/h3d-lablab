@@ -40,12 +40,21 @@ def infer_root_from_photo(photo_dir: str) -> str:
     name = os.path.basename(p)
     parent = os.path.dirname(p)
     if name == "00_photo":
-        return parent
-    if os.path.basename(parent) == "00_photo":
-        return os.path.dirname(parent)
-    if os.path.dirname(parent) == parent:      # parent 为盘符根 / 根目录
+        root = parent
+    elif os.path.basename(parent) == "00_photo":
+        root = os.path.dirname(parent)
+    elif os.path.dirname(parent) == parent:    # parent 为盘符根 / 根目录
         return p
-    return parent
+    else:
+        root = parent
+    # 新布局（v1.1.10）：照片实际在 ``<项目根>/阶段成果/00_photo``，上两级只到
+    # 「阶段成果」——那一层不是项目根，再上提一级才回到综合文件夹。不回提的话
+    # 用户拖一张 ``阶段成果/00_photo/x.jpg`` 就会把 ``阶段成果`` 当项目根，
+    # 于是生成 ``阶段成果/阶段成果/00_raw`` 的双层嵌套。
+    from h3d.core import paths as _paths
+    if os.path.basename(root) == _paths.STAGE_DIR:
+        return os.path.dirname(root)
+    return root
 
 
 class DropArea(QListWidget):

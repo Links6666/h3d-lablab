@@ -20,18 +20,25 @@ import shutil
 import sys
 
 from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog,
                                QFrame, QGridLayout, QHBoxLayout, QLabel,
                                QMainWindow, QMessageBox, QPlainTextEdit,
-                               QProgressBar, QPushButton, QSplitter,
-                               QTabWidget, QVBoxLayout, QWidget)
+                               QProgressBar, QPushButton, QScrollArea,
+                               QSizePolicy, QSplitter, QTabWidget, QVBoxLayout,
+                               QWidget)
 
+from h3d.core import paths as _paths
 from h3d.core.media import is_image_file
 from h3d.gui.config_edit import ProjectConfig
+from h3d.gui.constraints import (ConstraintSummary, ConstraintsDialog,
+                                 apply_to_project_config,
+                                 from_project_config)
 from h3d.gui.export import export_delivery_package
 from h3d.gui.items import discover_items, primary_item
 from h3d.gui.runner import STAGE_ORDER, BatchRunner
+from h3d.gui.timing import StageTimingStrip, fmt_duration
+from h3d.gui.widgets import ElidedLabel
 from h3d.gui.wizard import WizardWindow
 
 
@@ -66,28 +73,134 @@ class MainWindow(QMainWindow):
         #: 正在走「启动流程」（含自检弹窗）时的重入闸门
         self._starting = False
         self.setWindowTitle("H3D 中小型文物三维建模自动化系统")
-        self.resize(1280, 800)
         self._build()
+        self._migrate_layout_if_needed()
+        self._fit_to_screen()
+
+    def _migrate_layout_if_needed(self) -> bool:
+        """打开历史项目时把旧布局就地迁到「综合文件夹 + 两棵子树」。
+
+        为什么要在 GUI 里做而不是 CLI 里强制：命令行用户可能用脚本按旧路径
+        取产物（``80_export/...``），强制改名会直接打断他们的流程。而 GUI 用户
+        是"打开项目继续干活"，迁移对他只有好处（文件还在原位、只是归了类）。
+
+        迁移失败不影响打开：捕获异常写日志，按旧布局继续用。
+        """
+        root = self.cfg.root_dir
+        if not root or not os.path.isdir(root):
+            return False
+        try:
+            legacy = _paths.legacy_dirs_present(root)
+            if not legacy:
+                return False
+            self._log("▶ 检测到旧版目录布局（%s），正在迁移到「阶段成果 / 交付成果」…"
+                      % "、".join(legacy[:6]))
+            res = _paths.migrate_legacy(root)
+            if res.get("refused"):
+                self._log(f"[WARNING] 未迁移：{res['refused']}")
+                return False
+            for src, dst in res.get("moved", []):
+                self._log(f"    迁移：{os.path.basename(src)} → {dst}")
+            for name, why in res.get("skipped", []):
+                self._log(f"    [WARNING] 跳过 {name}：{why}")
+            self._log("▶ 目录迁移完成（下一次运行按新布局写入）")
+            return True
+        except Exception as exc:  # noqa: BLE001 - 迁移失败按旧布局继续
+            self._log(f"[WARNING] 目录迁移失败（沿用旧布局）：{exc}")
+            return False
+
+    # ------------------------------------------------------------ 窗口尺寸
+    def _fit_to_screen(self):
+        """按屏幕可用区定初值并居中，且**给最小尺寸封顶**。
+
+        实机缺陷（2026-10-26）：``resize(1280, 800)`` 是写死的，而笔记本常见
+        1366×768 / 150% 缩放后可用区只有 1280×656 —— 窗口初始就比屏幕高，
+        状态行与日志被挤到屏幕外，"看不到进度"其实是**窗口放不下**。
+        另外最小尺寸不封顶时，布局会反过来把窗口撑大（见 gui/widgets 说明）。
+        """
+        # 取屏幕：**不要**在构造期调 self.screen()。
+        # 实测（2026-10-26）PySide6 6.11 下，窗口尚无 windowHandle 时
+        # ``QWidget.screen()`` 会在进程堆里触发 ``0xc0000374``（堆损坏）硬崩，
+        # 现场特征：单跑绿、多文件混跑必崩、无 Python traceback。改为
+        # "有 windowHandle 才问它，否则直接问 QGuiApplication"。
+        wh = self.windowHandle()
+        screen = wh.screen() if wh is not None else QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        geo = screen.availableGeometry()
+        max_w = max(800, int(geo.width() * 0.94))
+        max_h = max(600, int(geo.height() * 0.92))
+        w = min(1360, max_w)
+        h = min(880, max_h)
+        # 最小尺寸必须 ≤ 屏幕可用区，否则用户拉不动窗口、底部永远出屏
+        self.setMinimumSize(min(1000, max_w), min(620, max_h))
+        self.resize(w, h)
+        self.move(geo.x() + (geo.width() - w) // 2,
+                  geo.y() + (geo.height() - h) // 2)
+
+    def showEvent(self, event):  # noqa: N802 - Qt 命名
+        # 首次显示时屏幕信息才可靠（多显示器/DPI 缩放在构造期未必就绪）
+        if not getattr(self, "_fitted", False):
+            self._fitted = True
+            self._fit_to_screen()
+        super().showEvent(event)
 
     # ------------------------------------------------------------ UI
     def _build(self):
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
+        root.setContentsMargins(6, 6, 6, 6)
+        root.setSpacing(4)
         top = QSplitter(Qt.Horizontal)
-        top.addWidget(self._build_config_panel())
+        top.setChildrenCollapsible(False)
+        # 左侧配置区放进滚动区：控件总高超过窗口时**滚动**，而不是把窗口顶大。
+        # 这是"窗口自己变高"的另一半根因（高级参数面板一展开就超出屏幕高度）。
+        self.config_scroll = QScrollArea()
+        self.config_scroll.setWidgetResizable(True)
+        self.config_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.config_scroll.setFrameShape(QFrame.NoFrame)
+        self.config_scroll.setMinimumWidth(340)
+        panel = self._build_config_panel()
+        self.config_scroll.setWidget(panel)
+        top.addWidget(self.config_scroll)
         top.addWidget(self._build_preview_panel())
-        top.setSizes([420, 860])
+        top.setStretchFactor(0, 0)
+        top.setStretchFactor(1, 1)
+        top.setSizes([430, 900])
         root.addWidget(top, 3)
         root.addWidget(self._build_status_panel(), 2)
+        # 打开已有项目：直接把上次运行的阶段耗时摆出来（"结束后一直存续"）。
+        # 失败不提示——没有 manifest 是正常的首次运行状态。
+        try:
+            self.stage_timing.apply_manifest(self._manifest_path())
+        except Exception:  # noqa: BLE001 - 展示性功能，不得影响启动
+            pass
 
     def _build_config_panel(self) -> QWidget:
+        """左侧配置区：输入参数（运行期隐藏）→ 约束摘要（运行期显示）→ 操作按钮。
+
+        两层结构是「确认后只读」的落地方式：``inputs_host`` 里全是输入控件，
+        运行一开始就整块隐藏、换成 :class:`ConstraintSummary` 的只读展示。
+        不用 ``setEnabled(False)`` 灰掉，是因为灰掉的控件仍然占位、仍然可以
+        被误读成"能改只是暂时不能点"；直接换成只读卡片，语义没有歧义。
+        """
         w = QWidget()
         v = QVBoxLayout(w)
-        v.addWidget(QLabel("<b>功能配置</b>"))
-        # 几何重建
-        v.addWidget(QLabel("几何重建设置"))
+        v.setContentsMargins(4, 4, 4, 4)
+        v.setSpacing(6)
+        v.addWidget(self._section_title("功能配置"))
+
+        self.inputs_host = QWidget()
+        ih = QVBoxLayout(self.inputs_host)
+        ih.setContentsMargins(0, 0, 0, 0)
+        ih.setSpacing(6)
+
+        # ---- 几何重建
+        ih.addWidget(self._section_title("几何重建设置"))
         grid = QGridLayout()
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(4)
         grid.addWidget(QLabel("降采样强度"), 0, 0)
         self.cb_voxel = QComboBox()
         self.cb_voxel.addItems([n for n, _ in VOXEL_PRESETS])
@@ -115,10 +228,14 @@ class MainWindow(QMainWindow):
         self.cb_dense.setCurrentText(
             "开启" if self.cfg.dense or self.cfg.scene == "scene2" else "关闭")
         grid.addWidget(self.cb_dense, 2, 1)
-        v.addLayout(grid)
-        # 纹理
-        v.addWidget(QLabel("纹理烘焙设置"))
+        grid.setColumnStretch(1, 1)
+        ih.addLayout(grid)
+
+        # ---- 纹理
+        ih.addWidget(self._section_title("纹理烘焙设置"))
         grid2 = QGridLayout()
+        grid2.setHorizontalSpacing(6)
+        grid2.setVerticalSpacing(4)
         grid2.addWidget(QLabel("纹理分辨率"), 0, 0)
         self.cb_tex = QComboBox()
         self.cb_tex.addItems(["1024", "2048", "4096"])
@@ -135,10 +252,14 @@ class MainWindow(QMainWindow):
         self.cb_blend.setToolTip("泊松接缝融合 photo_texture.poisson_blend。\n"
                                 "关闭后图集接缝会留下可见拼接线，仅用于排查用。")
         grid2.addWidget(self.cb_blend, 1, 1)
-        v.addLayout(grid2)
-        # 质检评估
-        v.addWidget(QLabel("质检与评估"))
+        grid2.setColumnStretch(1, 1)
+        ih.addLayout(grid2)
+
+        # ---- 质检
+        ih.addWidget(self._section_title("质检与评估"))
         grid3 = QGridLayout()
+        grid3.setHorizontalSpacing(6)
+        grid3.setVerticalSpacing(4)
         grid3.addWidget(QLabel("几何质检"), 0, 0)
         self.cb_qc = QComboBox(); self.cb_qc.addItems(["开启", "关闭"])
         self.cb_qc.setCurrentText("开启" if self.cfg.quality_enabled else "关闭")
@@ -153,22 +274,17 @@ class MainWindow(QMainWindow):
             "COLMAP 启动时自动检测 CUDA（当前版本无强制 CPU 开关）。\n"
             "要强制 CPU 请直接改 config.yaml 的 sfm_solve 段后命令行运行。")
         grid3.addWidget(self.cb_cuda, 1, 1)
-        v.addLayout(grid3)
-        v.addWidget(QLabel("项目：<i>%s</i>　场景：<i>%s</i>" % (
-            self.cfg.name, "①激光+照片" if self.cfg.scene == "scene1"
-            else "②纯照片")))
+        grid3.setColumnStretch(1, 1)
+        ih.addLayout(grid3)
+
+        ih.addWidget(ElidedLabel(
+            "项目：%s　场景：%s" % (
+                self.cfg.name, "①激光+照片" if self.cfg.scene == "scene1"
+                else "②纯照片"), min_chars=24))
         # 高级参数折叠面板（P1）
         from h3d.gui.advanced import AdvancedPanel
         self.advanced = AdvancedPanel(self.cfg)
-        v.addWidget(self.advanced)
-        # 操作按钮
-        self.btn_run = QPushButton("一键生成交付物")
-        self.btn_run.setStyleSheet(
-            "QPushButton{background:#2d7d46;color:white;font-weight:bold;"
-            "padding:10px;font-size:15px;border-radius:6px;}"
-            "QPushButton:disabled{background:#666;}")
-        self.btn_run.clicked.connect(self._start_run)
-        v.addWidget(self.btn_run)
+        ih.addWidget(self.advanced)
         # 强制重算（2026-10-26）：此前想重算只能自己去删 10_dense/30_dense，
         # 路径写错还会留下半残项目。勾选后忽略断点续跑、全部阶段重跑，
         # 并让 S1 重建稠密工作区（位姿变了但深度图残留是典型场景）。
@@ -182,7 +298,26 @@ class MainWindow(QMainWindow):
             "什么时候不必：只是想重出报表/重贴图——那属于缓存命中，不花时间。\n\n"
             "注意：S1 照片指纹复用与 M4 图集缓存按参数判定，参数没变仍会命中\n"
             "（否则每次强制重算都要白等 30 分钟）。")
-        v.addWidget(self.chk_force)
+        ih.addWidget(self.chk_force)
+        v.addWidget(self.inputs_host)
+
+        # ---- 运行期只读约束（默认隐藏，开跑后替换 inputs_host）
+        self.constraint_box = ConstraintSummary()
+        v.addWidget(self.constraint_box)
+
+        # ---- 操作按钮（始终可用，不受 inputs_host 隐藏影响）
+        self.btn_run = QPushButton("一键生成交付物")
+        self.btn_run.setStyleSheet(
+            "QPushButton{background:#2d7d46;color:white;font-weight:bold;"
+            "padding:10px;font-size:15px;border-radius:6px;}"
+            "QPushButton:disabled{background:#666;}")
+        self.btn_run.clicked.connect(self._start_run)
+        v.addWidget(self.btn_run)
+        self.btn_edit_constraints = QPushButton("修改生成约束…")
+        self.btn_edit_constraints.setToolTip(
+            "重新打开「确认本次生成约束」对话框。运行期间不可用。")
+        self.btn_edit_constraints.clicked.connect(self._edit_constraints)
+        v.addWidget(self.btn_edit_constraints)
         self.btn_cancel = QPushButton("暂停 / 取消")
         self.btn_cancel.setEnabled(False)
         self.btn_cancel.clicked.connect(self._cancel_run)
@@ -193,6 +328,13 @@ class MainWindow(QMainWindow):
         v.addWidget(self.btn_export)
         v.addStretch()
         return w
+
+    @staticmethod
+    def _section_title(text: str) -> QLabel:
+        lb = QLabel(text)
+        lb.setStyleSheet("QLabel{color:#8fb3d9;font-weight:bold;font-size:12px;"
+                         "padding-top:2px;}")
+        return lb
 
     def _build_preview_panel(self) -> QWidget:
         # matplotlib 后端延迟导入：仅在进入主界面时加载（桌面环境隔离）
@@ -221,47 +363,89 @@ class MainWindow(QMainWindow):
         return tabs
 
     def _build_status_panel(self) -> QWidget:
+        """底部状态区：总进度 → 状态行（省略标签）→ 阶段耗时条 → 阶段灯 → 结果条 → 日志。
+
+        排版原则（2026-10-26 实机）：**所有会变的文字都不能撑宽窗口**。
+        状态行用 :class:`ElidedLabel`（最小宽度 0 + 全文 tooltip），进度条只显示
+        百分比（``setFormat("%p%")``——``QProgressBar`` 的格式串也会算进
+        sizeHint，原来写 ``"42% · 第 1/2 件 · S1"`` 就是窗口跳宽的元凶之一）。
+        件数与当前阶段改放在进度条右侧的定宽标签里。
+        """
         w = QWidget()
         v = QVBoxLayout(w)
-        # 总进度条
+        v.setContentsMargins(2, 2, 2, 2)
+        v.setSpacing(3)
+
+        # 总进度
         row = QHBoxLayout()
+        row.setSpacing(6)
         row.addWidget(QLabel("总进度"))
         self.progress = QProgressBar()
         self.progress.setValue(0)
+        self.progress.setFormat("%p%")          # 只显示百分比，不塞长文本
+        self.progress.setMinimumWidth(160)
+        self.progress.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         row.addWidget(self.progress, 1)
+        self.lbl_count = ElidedLabel("", min_chars=10)
+        self.lbl_count.setMinimumWidth(0)
+        self.lbl_count.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.lbl_count.setStyleSheet("QLabel{color:#9aa4b2;font-size:11px;}")
+        row.addWidget(self.lbl_count)
         v.addLayout(row)
-        # 实时状态行：正在做什么 / 已运行多久 / 深度图计数
+
+        # 实时状态行：正在做什么 | 已运行多久 + 本阶段
         state_row = QHBoxLayout()
-        self.lbl_state = QLabel("● 空闲")
+        state_row.setSpacing(8)
+        self.lbl_state = ElidedLabel("● 空闲", min_chars=16)
         self.lbl_state.setStyleSheet(
             "QLabel{color:#9aa4b2;font-weight:bold;font-size:13px;}")
-        self.lbl_elapsed = QLabel("")
+        state_row.addWidget(self.lbl_state, 3)
+        self.lbl_elapsed = ElidedLabel("", min_chars=14)
         self.lbl_elapsed.setStyleSheet("QLabel{color:#9aa4b2;}")
         self.lbl_elapsed.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        state_row.addWidget(self.lbl_state, 1)
-        state_row.addWidget(self.lbl_elapsed)
+        state_row.addWidget(self.lbl_elapsed, 2)
         v.addLayout(state_row)
-        # 阶段状态灯
-        lamps = QHBoxLayout()
+
+        # 阶段耗时条（常驻：运行中与结束后都在，见 gui/timing）
+        self.stage_timing = StageTimingStrip(STAGE_ORDER)
+        v.addWidget(self.stage_timing)
+
+        # 阶段状态灯：5 列 × 2 行。原来 10 个灯横排，1366 像素宽的屏上每个
+        # 只剩 40 px，代号看得见、状态看不清；分两行后间距正常且不影响高度稳定
+        # （灯是 Fixed 高度，文字固定为阶段代号）。
+        lamps = QGridLayout()
+        lamps.setHorizontalSpacing(4)
+        lamps.setVerticalSpacing(3)
         self.lamps: dict[str, QLabel] = {}
-        for sid in STAGE_ORDER:
+        per_row = 5
+        for i, sid in enumerate(STAGE_ORDER):
             lb = QLabel(sid)
             lb.setAlignment(Qt.AlignCenter)
+            lb.setFixedHeight(22)
+            lb.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             lb.setStyleSheet(_lamp_style("waiting"))
             self.lamps[sid] = lb
-            lamps.addWidget(lb)
+            lamps.addWidget(lb, i // per_row, i % per_row)
+        for col in range(per_row):
+            lamps.setColumnStretch(col, 1)
+        self.lamps_grid = lamps          # 供测试断言排布（也便于将来调列数）
         v.addLayout(lamps)
+
         # 结果条（2026-10-26）：跑完不再弹模态框。
         # 模态框的问题不是"丑"，而是**必须点掉才能继续操作**：用户看到
         # 「完成」后的下一个动作通常是去看模型/导出，而弹窗挡在前面；
         # 更糟的是失败弹窗，点掉之后想「打开报表」还得自己去文件管理器里找。
         # 结果条把「结论 + 后续动作」放在界面里常驻，直到用户主动关闭。
         v.addWidget(self._build_result_bar())
+
         # 实时日志
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(3000)
+        self.log.setMinimumHeight(110)
+        self.log.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         v.addWidget(self.log, 1)
+
         # 运行时钟：每秒刷新"已运行"，每 3 秒扫一次深度图产物（显示真实进度）
         self._tick = QTimer(self)
         self._tick.setInterval(1000)
@@ -278,9 +462,13 @@ class MainWindow(QMainWindow):
         self._depth_phase = 1
         #: 最后一条子进程日志的时间戳（用于"最后输出 Ns 前"心跳）
         self._last_log_ts = 0.0
+        #: 阶段墙钟计时：sid -> 本次进入运行态的时间戳
+        self._stage_t0: dict[str, float] = {}
+        #: 本批文物总数与「已出现过的文物顺序」（进度条显示 第 k/N 件）
+        self._n_items = 0
+        self._items_seen: list[str] = []
         return w
 
-    # ------------------------------------------------------------ 运行
     def _build_result_bar(self) -> QWidget:
         """结果条：结论文字 + 三个后续动作，默认隐藏。"""
         bar = QFrame()
@@ -291,8 +479,9 @@ class MainWindow(QMainWindow):
             "background:#1f2a37;border:1px solid #33415a;}")
         h = QHBoxLayout(bar)
         h.setContentsMargins(10, 6, 10, 6)
-        self.lbl_result = QLabel("")
-        self.lbl_result.setWordWrap(True)
+        # 用 ElidedLabel 而非 QLabel+wordWrap：长结论（含失败原因首行）会把
+        # 结果条撑高/撑宽，进而牵动整个底部布局。全文挂在 tooltip 上。
+        self.lbl_result = ElidedLabel("", min_chars=30)
         self.lbl_result.setStyleSheet("QLabel{font-size:13px;}")
         h.addWidget(self.lbl_result, 1)
         self.btn_result_open = QPushButton("打开输出目录")
@@ -324,23 +513,42 @@ class MainWindow(QMainWindow):
             color, title = "#3fb950", "生成完成"
         else:
             color, title = "#ff6b6b", "运行未完成"
-        self.lbl_result.setText(f"<b style='color:{color}'>{title}</b>　{summary}")
+        # ElidedLabel 走纯文本绘制（不支持富文本），结论用 "标题｜摘要" 表达
+        self.lbl_result.setText(f"{title}　{summary}")
         self.lbl_result.setStyleSheet(
             f"QLabel{{font-size:13px;color:{color};}}")
         # 只暴露**当前真的存在**的动作：没有产物时「打开输出目录」点了也是空的
-        has_out = os.path.isdir(os.path.join(self.cfg.root_dir, "80_export")) \
-            or os.path.isdir(os.path.join(self.cfg.root_dir, "50_tex"))
+        # 「有产物」= 交付目录里**真有东西**，而不是"目录存在"。
+        # 判据分新老布局取不同的根，但都用 any(scandir) —— 空目录（上一次运行
+        # 中途失败留下的）不该让按钮亮起来。
+        root_dir = self.cfg.root_dir
+        droot = _paths.delivery_root_of(root_dir)
+        if os.path.basename(droot) == _paths.DELIVERY_DIR:
+            cands = [droot]
+        else:                       # 旧布局：交付根就是项目根，只能看 80_export
+            cands = [os.path.join(root_dir, _paths.LEGACY_EXPORT_DIR)]
+        has_out = False
+        for d in cands:
+            try:
+                if os.path.isdir(d) and any(os.scandir(d)):
+                    has_out = True
+                    break
+            except OSError:
+                continue
+        has_out = has_out or os.path.isdir(
+            os.path.join(_paths.stage_root(root_dir), "50_tex"))
         self.btn_result_open.setEnabled(has_out)
         self.btn_result_open.setToolTip(
-            "" if has_out else "本次运行未生成产物目录（80_export / 50_tex）")
-        self.btn_result_report.setEnabled(os.path.isfile(
-            os.path.join(self.cfg.root_dir, "report", "report.html")))
+            "" if has_out else "本次运行未生成产物目录（交付成果 / 阶段成果）")
+        self.btn_result_report.setEnabled(
+            bool(_paths.find_report(self.cfg.root_dir)))
         self.result_bar.setVisible(True)
 
     def _open_output_dir(self) -> None:
-        """打开本次运行的输出根（优先 80_export，没有就退回项目根）。"""
-        for cand in (os.path.join(self.cfg.root_dir, "80_export"),
-                     os.path.join(self.cfg.root_dir, "report"),
+        """打开本次运行的输出根（优先 交付成果，没有就退回项目根）。"""
+        for cand in (_paths.delivery_root_of(self.cfg.root_dir),
+                     _paths.report_dir(self.cfg.root_dir),
+                     _paths.stage_root(self.cfg.root_dir),
                      self.cfg.root_dir):
             if cand and os.path.isdir(cand):
                 QDesktopServices.openUrl(QUrl.fromLocalFile(cand))
@@ -348,10 +556,10 @@ class MainWindow(QMainWindow):
         self._log("[界面] 未找到可打开的输出目录")
 
     def _open_report(self) -> None:
-        """用系统默认程序打开 report.html。"""
-        path = os.path.join(self.cfg.root_dir, "report", "report.html")
-        if not os.path.isfile(path):
-            self._log(f"[界面] 报表不存在：{path}")
+        """用系统默认程序打开 report.html（新老布局都找）。"""
+        path = _paths.find_report(self.cfg.root_dir)
+        if not path:
+            self._log(f"[界面] 报表不存在：{_paths.report_html(self.cfg.root_dir)}")
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
@@ -381,6 +589,107 @@ class MainWindow(QMainWindow):
         finally:
             self._starting = False
 
+    # ------------------------------------------------------------ 约束确认
+    def _n_photos(self) -> int:
+        """照片张数（用于耗时估算；读不到就返回 0）。"""
+        try:
+            from h3d.core.media import count_images
+            if self.cfg.photo_dir and os.path.isdir(self.cfg.photo_dir):
+                return int(count_images(self.cfg.photo_dir))
+        except Exception:  # noqa: BLE001 - 估算用，失败不影响启动
+            pass
+        return 0
+
+    def _confirm_constraints(self, force_dialog: bool = False) -> bool:
+        """确保本次生成有**用户确认过**的约束。返回 False 表示用户放弃。
+
+        两道闸门：
+        1. 配置里已有 ``constraints_confirmed``（上次确认过）→ 直接用，
+           但界面上的控件要按快照同步（否则控件显示 2048、实际跑 4096）；
+        2. 没有 → 弹 :class:`ConstraintsDialog`，用户点「开始生成」或
+           「全部用默认值」才算确认；点「取消」则**不启动管线**。
+        """
+        confirmed = bool(getattr(self.cfg, "constraints_confirmed", False))
+        if confirmed and not force_dialog:
+            c = from_project_config(self.cfg)
+            self._sync_widgets(c, include_force=False)
+            self.constraint_box.set_constraints(c)
+            return True
+
+        dlg = ConstraintsDialog(from_project_config(self.cfg),
+                                n_photos=self._n_photos(),
+                                n_items=max(1, len(self._all_items())),
+                                parent=self)
+        if not dlg.exec():
+            self._log("▶ 已取消：未确认生成约束，未启动管线")
+            self.lbl_state.setText("● 已取消（未确认约束）")
+            return False
+        self._apply_constraints(dlg.constraints())
+        return True
+
+    def _edit_constraints(self) -> None:
+        """「修改生成约束…」按钮：强制重开确认框（运行中不可用）。"""
+        if self._busy():
+            QMessageBox.information(self, "正在运行",
+                                    "运行期间不能修改生成约束。\n"
+                                    "如需更换参数，请先取消本次运行。")
+            return
+        dlg = ConstraintsDialog(from_project_config(self.cfg),
+                                n_photos=self._n_photos(),
+                                n_items=max(1, len(self._all_items())),
+                                parent=self)
+        if dlg.exec():
+            self._apply_constraints(dlg.constraints())
+
+    def _apply_constraints(self, c) -> None:
+        """把确认过的约束同时写到配置与控件上（两处必须一致）。"""
+        apply_to_project_config(self.cfg, c)
+        self._sync_widgets(c)
+        self.constraint_box.set_constraints(c)
+        self._log("▶ 生成约束已确认：" + "；".join(
+            f"{k}={v}" for k, v in c.summary_rows() if k != "注意"))
+
+    def _sync_widgets(self, c, include_force: bool = True) -> None:
+        """控件回显约束（不改控件信号，用 blockSignals 防递归刷新）。
+
+        ``include_force=False`` 用于「上次已确认过约束」的重开项目路径：
+        那个勾选是**一次性意图**，用户刚在界面上打勾就被快照重置回去，
+        等于"点了没反应"（假控件）。对话框确认路径才同步它。
+        """
+        voxel_text = min(VOXEL_PRESETS,
+                         key=lambda kv: abs(kv[1] - float(c.voxel)))[0]
+        depth_text = {7: "标准(7)", 8: "精细(8)", 9: "超精细(9)"}.get(
+            int(c.poisson_depth), "精细(8)")
+        pairs = ((self.cb_voxel, voxel_text), (self.cb_depth, depth_text),
+                 (self.cb_dense, "开启" if c.dense else "关闭"),
+                 (self.cb_tex, str(int(c.texture_size))),
+                 (self.cb_qc, "开启" if c.quality else "关闭"))
+        for widget, text in pairs:
+            widget.blockSignals(True)
+            if widget.findText(text) >= 0:
+                widget.setCurrentText(text)
+            widget.blockSignals(False)
+        if include_force:
+            self.chk_force.blockSignals(True)
+            self.chk_force.setChecked(bool(c.force_rerun))
+            self.chk_force.blockSignals(False)
+
+    def _set_running_ui(self, running: bool) -> None:
+        """运行期把输入区换成只读约束卡（不是"灰掉"，是整块替换）。"""
+        self.inputs_host.setVisible(not running)
+        if running:
+            c = from_project_config(self.cfg)
+            self.constraint_box.set_constraints(c)
+        else:
+            self.constraint_box.setVisible(False)
+        self.btn_edit_constraints.setEnabled(not running)
+        if running:
+            self.btn_run.setEnabled(False)
+            self.btn_cancel.setEnabled(True)
+        else:
+            self.btn_run.setEnabled(True)
+            self.btn_cancel.setEnabled(False)
+
     def _confirm_force_rerun(self) -> bool:
         """强制重算的二次确认。返回 False 表示用户放弃。"""
         msg = ("强制重算会忽略「已完成」的判定，把本项目的全部阶段重新跑一遍。\n\n"
@@ -393,6 +702,10 @@ class MainWindow(QMainWindow):
         return ret == QMessageBox.Yes
 
     def _start_run_inner(self):
+        # 第 0 步：约束确认（不确认不跑）。必须在回写配置之前——约束决定
+        # 稠密/精度/纹理/格式，回写完再改会漏掉某些字段。
+        if not self._confirm_constraints():
+            return
         # 由界面控件回写配置
         voxel_map = dict(VOXEL_PRESETS)
         depth_map = {"标准(7)": 7, "精细(8)": 8, "超精细(9)": 9}
@@ -433,9 +746,11 @@ class MainWindow(QMainWindow):
         for sid in STAGE_ORDER:
             self.lamps[sid].setStyleSheet(_lamp_style("waiting"))
         self.result_bar.setVisible(False)   # 新一轮开始：上一轮结论作废
-        self.btn_run.setEnabled(False)
-        self.btn_cancel.setEnabled(True)
         self.btn_export.setEnabled(False)
+        # 阶段耗时条清零重计；输入区换成只读约束卡（运行期不可改）
+        self.stage_timing.reset()
+        self._stage_t0.clear()
+        self._set_running_ui(True)
         # 运行时钟
         import time as _time
         self._t0 = _time.time()
@@ -556,6 +871,11 @@ class MainWindow(QMainWindow):
         if status == "running":
             self._cur_stage = sid
             self._cur_substep = ""
+            # 计时起点：同一阶段可能因多件文物被多次置 running（每件各跑一遍），
+            # 上一段已经结算过就重新起表，累计值不清零。
+            import time as _time
+            self._stage_t0[sid] = _time.time()
+            self.stage_timing.set_status(sid, "running")
             if sid == "S1":
                 self._in_dense = False   # 新文物的 S1 从稀疏开始
             self.lbl_state.setText(f"● {sid} 运行中…")
@@ -565,6 +885,8 @@ class MainWindow(QMainWindow):
         elif status == "skipped":
             # 条件不满足而真跳过（单站无 M2、无参考期无 X1…）：
             # 灰色而非橙色，且要清掉"运行中"——否则界面永远停在那一阶段。
+            self._settle_stage_time(sid)
+            self.stage_timing.set_status(sid, "skipped")
             if self._cur_stage == sid:
                 self._cur_stage = ""
                 self._cur_substep = ""
@@ -572,6 +894,8 @@ class MainWindow(QMainWindow):
             self.lbl_state.setStyleSheet(
                 "QLabel{color:#9aa4b2;font-weight:bold;font-size:13px;}")
         elif status == "done":
+            self._settle_stage_time(sid)
+            self.stage_timing.set_status(sid, "done")
             if self._cur_stage == sid:
                 self._cur_stage = ""
                 self._cur_substep = ""
@@ -584,9 +908,24 @@ class MainWindow(QMainWindow):
             self.lbl_state.setStyleSheet(
                 "QLabel{color:#3fb950;font-weight:bold;font-size:13px;}")
         elif status == "failed":
+            self._settle_stage_time(sid)
+            self.stage_timing.set_status(sid, "failed")
             self.lbl_state.setText(f"✘ {sid} 失败")
             self.lbl_state.setStyleSheet(
                 "QLabel{color:#ff6b6b;font-weight:bold;font-size:13px;}")
+
+    def _settle_stage_time(self, sid: str) -> None:
+        """结算一个阶段的墙钟耗时并累加进耗时条。
+
+        「结算」而不是「置为」：批处理里同一阶段会为每件文物各跑一次，累计
+        才是用户问的"这个阶段一共花了多久"。没有起点（例如界面是在阶段中途
+        才接到事件）时直接忽略，不写 0 也不猜。
+        """
+        import time as _time
+        t0 = self._stage_t0.pop(sid, None)
+        if t0 is None:
+            return
+        self.stage_timing.add_seconds(sid, max(0.0, _time.time() - t0))
 
     def _on_item(self, item: str):
         """切换文物：深度图计数必须归零重算，否则会显示上一个文物的进度。"""
@@ -604,13 +943,19 @@ class MainWindow(QMainWindow):
         self._refresh_progress_text()
 
     def _refresh_progress_text(self):
-        parts = [f"{self.progress.value()}%"]
+        """件数/当前阶段进右侧**定宽**标签（不塞进 QProgressBar 的格式串）。
+
+        ``QProgressBar.setFormat`` 的文字参与 ``sizeHint``：原来写
+        ``"42% · 第 1/2 件 · S1"``，文字一变长进度条就要求更多宽度，
+        布局再把顶层窗口撑大 —— 实机"窗口自己变宽"的直接来源。
+        """
+        parts = []
         if self._n_items:
             k = len(self._items_seen) or 1
             parts.append(f"第 {k}/{self._n_items} 件")
         if self._cur_stage:
             parts.append(self._cur_stage)
-        self.progress.setFormat(" · ".join(parts))
+        self.lbl_count.setText(" · ".join(parts))
 
     def _on_progress(self, value: int):
         self.progress.setValue(value)
@@ -641,7 +986,13 @@ class MainWindow(QMainWindow):
         if self._t0 is None:
             return
         sec = int(_time.time() - self._t0)
-        parts = [f"已运行 {sec // 3600:02d}:{sec % 3600 // 60:02d}:{sec % 60:02d}"]
+        parts = [f"总 {sec // 3600:02d}:{sec % 3600 // 60:02d}:{sec % 60:02d}"]
+        # 当前阶段耗时：累计值 + 本段（两次结算之间），与耗时条上的数字同源
+        if self._cur_stage:
+            done = self.stage_timing.seconds(self._cur_stage)
+            t0 = self._stage_t0.get(self._cur_stage)
+            live = (_time.time() - t0) if t0 else 0.0
+            parts.append(f"{self._cur_stage} {fmt_duration(done + live)}")
         if self._cur_stage and self._cur_substep:
             parts.append(self._cur_substep)
         # 深度图计数：只在 S1 稠密阶段显示，且只统计**当前文物**
@@ -677,15 +1028,9 @@ class MainWindow(QMainWindow):
         实际上 M3 网格（30_dense）或 S1 稠密点云（10_dense）往往已经生成，
         完全可以先给用户看一眼中间结果。
         """
-        root, name = self.cfg.root_dir, self._item_id()
-        return [
-            os.path.join(root, "80_export", name, f"{name}.obj"),
-            os.path.join(root, "80_export", name, f"{name}.ply"),
-            os.path.join(root, "30_dense", name, f"{name}.ply"),
-            os.path.join(root, "10_dense", name, "fused_dense.ply"),
-            os.path.join(root, "99_runs", "sfm_tmp", name, "dense",
-                         "fused.ply"),
-        ]
+        name = self._item_id()
+        return _paths.model_candidates(self.cfg.root_dir, name,
+                                       exts=("obj", "ply", "glb"))
 
     def _item_id(self) -> str:
         """当前展示的文物编号（**不是**项目名）。
@@ -700,10 +1045,19 @@ class MainWindow(QMainWindow):
         """项目内全部文物编号（多文物批量导出用）。"""
         return discover_items(self.cfg.root_dir)
 
+    def _manifest_path(self) -> str:
+        """本项目的 run_manifest 路径（新布局在 阶段成果/output 下）。"""
+        from h3d.gui.items import _manifest_paths
+        for cand in _manifest_paths(self.cfg.root_dir):
+            if os.path.isfile(cand):
+                return cand
+        return os.path.join(_paths.stage_root(self.cfg.root_dir), "output",
+                            "run_manifest.json")
+
     def _failure_text(self) -> str:
         """从 manifest 提取失败阶段与原因首行（供预览区/日志展示）。"""
         import json
-        path = os.path.join(self.cfg.root_dir, "output", "run_manifest.json")
+        path = self._manifest_path()
         try:
             with open(path, encoding="utf-8") as fh:
                 stages = json.load(fh).get("stages", {})
@@ -719,13 +1073,26 @@ class MainWindow(QMainWindow):
         return ""
 
     def _on_finished(self, ok: bool, summary: str):
-        self.btn_run.setEnabled(True)
-        self.btn_cancel.setEnabled(False)
+        # 输入区恢复（约束卡片收起）。耗时条**不清空**——用户看报表前先看界面，
+        # "刚才哪一步慢"就在这里。
+        self._set_running_ui(False)
         self.btn_export.setEnabled(ok or bool(self._all_items()))
         self._tick.stop()
         self._cur_substep = ""
+        self._cur_stage = ""
         self._in_dense = False
         self._last_log_ts = 0.0
+        # 结算最后一次计时，然后用 manifest 的权威值覆盖（与报表「耗时」同源）
+        for sid in list(self._stage_t0):
+            self._settle_stage_time(sid)
+        wall = None
+        if self._t0 is not None:
+            import time as _time
+            wall = max(0.0, _time.time() - self._t0)
+        if self.stage_timing.apply_manifest(self._manifest_path(), wall):
+            self._log("● 阶段耗时已按 run_manifest 校准（与报表同源）")
+        elif wall:
+            self.stage_timing.set_footer(f"总时长 {fmt_duration(wall)}（界面计时）")
         # 进度条**不归零**：原实现在 ok=False 时 setValue(0)，导致「跑到 100%
         # 却被判失败」时用户看到的是 0%，比不停在 100% 更让人困惑。失败时
         # 保留最后位置，由红字状态说明「未完成」就够了。
@@ -773,7 +1140,8 @@ class MainWindow(QMainWindow):
             self.mesh_preview.show_text(
                 "未生成可预览的三维模型\n" + (reason or ""))
 
-        tex = os.path.join(self.cfg.root_dir, "50_tex", self._item_id())
+        tex = os.path.join(_paths.stage_root(self.cfg.root_dir), "50_tex",
+                           self._item_id())
         if os.path.isdir(tex):
             for f in sorted(os.listdir(tex)):
                 if f.endswith("diffuse.png"):
@@ -782,9 +1150,9 @@ class MainWindow(QMainWindow):
 
         if not ok:
             # 失败时把"去哪看"写清楚，而不是只弹一句"失败"
-            report = os.path.join(self.cfg.root_dir, "report", "report.html")
-            logs = os.path.join(self.cfg.root_dir, "99_runs", "sfm_tmp",
-                                self._item_id(), "logs")
+            report = _paths.report_html(self.cfg.root_dir)
+            logs = os.path.join(_paths.stage_root(self.cfg.root_dir), "99_runs",
+                                "sfm_tmp", self._item_id(), "logs")
             self._log(f"✗ 失败原因：{self._failure_text() or '见日志'}")
             if os.path.exists(report):
                 self._log(f"✗ 详细报表：{report}")
@@ -806,7 +1174,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self, "运行未完成",
                 f"{summary}\n\n失败原因：{self._failure_text() or '见日志'}\n"
-                f"报表：{os.path.join(self.cfg.root_dir, 'report', 'report.html')}")
+                f"报表：{_paths.report_html(self.cfg.root_dir)}")
 
     def _export_package(self):
         default = os.path.join(self.cfg.root_dir,
@@ -820,7 +1188,7 @@ class MainWindow(QMainWindow):
         r = export_delivery_package(self.cfg.root_dir, items, out)
         if not r:
             QMessageBox.warning(self, "无交付物",
-                                "未找到交付产物（80_export），请先运行一键生成。")
+                                "未找到交付产物（交付成果/<文物编号>/），请先运行一键生成。")
             return
         got = r.get("items") or []
         detail = (f"（{len(got)} 件：{', '.join(got[:3])}"
@@ -834,14 +1202,17 @@ class MainWindow(QMainWindow):
         item = self._item_id()
         model = getattr(self, "_preview_path", "")
         if not model or not os.path.exists(model):
-            model = os.path.join(self.cfg.root_dir, "80_export",
-                                 item, f"{item}.obj")
+            for cand in _paths.model_candidates(self.cfg.root_dir, item):
+                if os.path.exists(cand) and cand.endswith((".obj", ".ply",
+                                                           ".glb")):
+                    model = cand
+                    break
         if not os.path.exists(model):
             QMessageBox.warning(self, "暂无可视化模型",
                                 "本次运行未生成可打开的三维模型。\n"
-                                "请先查看 report/report.html 中的失败原因。")
+                                "请先查看 交付成果/report/report.html 的失败原因。")
             return
-        tex = os.path.join(self.cfg.root_dir, "50_tex", item)
+        tex = os.path.join(_paths.stage_root(self.cfg.root_dir), "50_tex", item)
         tex_png = None
         if os.path.isdir(tex):
             for f in sorted(os.listdir(tex)):
@@ -853,11 +1224,10 @@ class MainWindow(QMainWindow):
     def _show_x1(self):
         from h3d.gui.viewer3d import show_x1_heatmap
         item = self._item_id()
-        model = os.path.join(self.cfg.root_dir, "80_export", item,
-                             f"{item}.obj")
+        ddir = _paths.delivery_item_dir(self.cfg.root_dir, item)
+        model = os.path.join(ddir, f"{item}.obj")
         if not os.path.exists(model):
-            model = os.path.join(self.cfg.root_dir, "80_export",
-                                 item, f"{item}.ply")
+            model = os.path.join(ddir, f"{item}.ply")
         show_x1_heatmap(model, self.cfg.root_dir, item)
 
     def _log(self, line: str):

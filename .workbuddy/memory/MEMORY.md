@@ -5,7 +5,7 @@
   架构 P0→L1(io)→L2(preprocess)→M2；阶段 M1-M6 + S1(COLMAP) + P1/X1/X2(可选)。业务层禁 import Open3D。
 - python `E:\h3d_lablab\.venv_lab\Scripts\python.exe`（PySide6 6.11/open3d 0.19/trimesh）；colmap
   `E:\colmap\colmap-x64-windows-cuda\bin\colmap` 4.1.1；打包 `h3d_gui.spec`（PyInstaller onefile，launcher
-  双模式 GUI/`--batch`）；Inno `D:\h3d_relic_test\InnoSetup7\ISCC.exe`。当前版本 1.1.9（r13）。
+  双模式 GUI/`--batch`）；Inno `D:\h3d_relic_test\InnoSetup7\ISCC.exe`。当前版本 1.1.10（r14）。
 - 清理后磁盘基线（2026-10-26）：`E:\h3d_lablab` 4.5 GB、`E:\兵马俑照片` 2.6 GB
   （原先 19 GB / 9.6 GB）。保留发行版 1.1.5 / 1.1.6 / 1.1.7 / 1.1.8 / 1.1.9（目录 + zip 均留，
   每个 ≈465 MB，五个共 ≈4.6 GB；再攒就要按「只留最近三个」清）。
@@ -14,6 +14,22 @@
 - 每任务必出中文结构化 PDF：`gen_*_content.py`→content.json→`render_pdf.py`，存 `output/`，名
   `中小型文物三维建模自动化系统_<主题>_<YYYYMMDD>.pdf`；出稿后 pymupdf 校验（页数/CJK/`\u25a1`、`\ufffd`=0）
   + fontTools 查 msyh cmap 缺字形。验证阶段少改代码控 token，末尾附「阶段分析 + 下一步」。
+- `render_pdf.py` 第 6 个参数是**日期**，漏传页眉会印默认「2026年8月」。
+  msyh **无** `▶`(U+25B6)/`✔`(U+2714)/`✓`(U+2713)/`▸`：可用 `▲`/`■`/`√`/`●`/`○`/`→`/`»`。
+  正文生成脚本里中文引号一律用「」，**ASCII 双引号会把字符串截断**（语法报错）。
+
+## 输出布局（1.1.10）
+- `core/paths.py` 是布局**唯一出口**：综合文件夹 = `阶段成果/`（12 个阶段子目录 + `99_runs` +
+  `output`，含 `run_manifest.json`）+ `交付成果/`（`report/` 单一报表目录 + `<件号>/` 模型贴图 csv）
+  + `输出说明.txt`。GUI/CLI/runner/report 一律不许自己拼路径。
+- 落地关键：**`task.root` 从「项目根」下沉为「阶段成果」**（数据根父目录由 `00_raw` 决定），
+  200+ 处 `task.root/<阶段>` 拼接自动跟随，改一处即可。
+- 新老共存判据**不能用「00_raw 在不在」**（首次运行可能不存在，新项目会被误判成旧布局）；
+  改看「这一层是否叫 `阶段成果`」或项目根下是否已有两棵子树。旧项目只在 **GUI 打开**时迁移
+  （CLI 不强制，免得打断按旧路径取产物的脚本）；同卷 `shutil.move` 即 rename，冲突跳过。
+- **迁移必须有「像不像项目」闸门**：`looks_like_project()` = `config.yaml` 或阶段专属目录
+  （`00_raw`/`00_photo`/`30_dense`/`80_export`…）。`output`/`report` 是**通用名**，
+  单独出现不算数——否则在源码仓库根上会触发迁移，把仓库 `output/` 整棵搬走（167 个 D，踩过）。
 
 ## COLMAP / 稠密
 1. mapper 多子重建，`sparse/0` 未必最大（2+16>16）：取图像最多者归一化；图像数读 `images.bin` 头 8B 小端
@@ -71,6 +87,23 @@
 - 照片目录须同源：S1/P1 优先 `task.root/00_photo` 再回退上级；X2 曾写 `dirname(task.root)` 多一层→色卡不生效。
 
 ## 工程
+- **GUI 布局最小尺寸随文字变化 = 窗口跳变**：`QLabel.minimumSizeHint()` 等于整段文字宽度，
+  `QProgressBar.setFormat()` 的格式串**也参与 sizeHint**。会变的文字一律用 `gui/widgets.ElidedLabel`
+  （最小宽 0 / `sizeHint` 按 `min_chars` / 全文进 tooltip / `paintEvent` 画中间省略），
+  进度条只写 `%p%`；左侧配置区进 `QScrollArea`；窗口按 `availableGeometry()` 94%/92% 定型，
+  **最小尺寸也要封顶**（否则用户拉不动，底部永远出屏）。
+- **PySide6 6.11：窗口无 windowHandle 时调 `QWidget.screen()` 会破坏堆**
+  （`0xc0000374`，实测全量测试第 188 例无声 rc=127、无 traceback）。构造期改「有
+  `windowHandle()` 才问它，否则 `QGuiApplication.primaryScreen()`」。
+  诊断口径：`faulthandler` 抓原生栈 → 每用例 RSS/句柄探针排除 OOM → 按组合二分；
+  特征「单文件绿 / 两两绿 / 三文件一起必崩」= 越界写在别处、检测在下一次堆操作。
+- **约束必须「先确认后运行」**：`_confirm_constraints()` 是 `_start_run_inner()` 第 0 步，
+  取消 = 不建目录不写 yaml 不起子进程；结果落 `runner.constraints` + `constraints_confirmed`
+  （子进程只认 yaml，不落盘=假控件）；运行期输入区隐藏、只读卡内
+  `findChildren(QComboBox/QCheckBox/QLineEdit/QAbstractSpinBox) == []` 可断言。
+- **阶段耗时双源**：运行中按「▲ 开始 / √ 完成」累计墙钟；结束后用 `run_manifest` 的
+  `elapsed_s` 覆盖（与报表同源）。同一阶段多件**求和**，`total` 与墙钟分开标注。
+  `runner.py` 的阶段事件**不能去重**，否则第 2 件起无 running 事件、耗时只记第一件。
 - **批量删文件过沙箱要绕 cmdlet**：`rm -rf` 单轮目标超阈值（50）触发 `SAFE_DELETE_BULK_CONFIRM_REQUIRED`；
   `Remove-Item -Recurse` 在循环里因「genie-trash failed」走 `SAFE_DELETE_FAIL_CLOSED` 整体回滚。
   可行：PowerShell 里 `[System.IO.Directory]::Delete($p,$true)` / `[System.IO.File]::Delete($p)` 逐项删。
@@ -141,6 +174,12 @@
   **正确终态**；`ok = failed==0 and done>0` 会把幂等重跑判成失败（实测弹「运行未完成」
   + 进度归零）。判据须 `failed==0 and rc==0 and done+skipped>0`；日志解析要读 `skipped=`
   （旧日志按 `total-done-failed` 兜底）。
+- **件级终态必须收敛、RUNNING 绝不外泄**：可选阶段 P1/X1/X2 是**先 `begin_stage` 打「开始」
+  日志、后**判 disabled，而 `mark_disabled()` 依设计不动任务级状态 → 任务停在 RUNNING，
+  汇总 `done=0 skipped=0` → 界面误判失败（r14 实测，r11 同类误报的新入口）。
+  两层修：`begin_stage` 记 `_status_before` + `mark_disabled` 回退；`_finalize_task_status()`
+  按阶段结果逆推（有 DONE→DONE / 有 FAIL→FAIL / 有 RUNNING 残留→FAIL / 其余→SKIPPED），
+  主流程与并行 worker 返回前都调。宁可收敛成 FAIL 也不假绿。
 - **完成行不等于进程结束**：CLI 打印「批量处理完成」之后还要生成 3 个报表文件。GUI 见到
   完成行只能 `break`，必须读完余下 stdout 并 `wait()`，否则报表半写、用户此刻再点会撞数据根锁。
 - **QThread 覆盖即崩**：`self.runner = BatchRunner(...)` 前必须查 `isRunning()`，旧对象
@@ -196,7 +235,10 @@
 - 相机模型写死 SIMPLE_RADIAL（只 k1）：本组重投影中位 0.36 px 够用，换镜头即失准 → 加 `camera_model` + 重投影自检。
 - 质检判别力不足：`quality.samples=4000`（117k 面模型偏少）· `coverage_threshold=0.3`（实测 81.75%，形同虚设）。
 - **强制重算无法只重算某一件**：`force_rerun` 是布尔（整批）。扩成集合要动 `item_id` 与配置序列化，暂缓。
-- 真机待验：GUI 弹窗点选、多进程抢锁、v1.1.9 打包版多件批处理（五态终态在 GUI 里的显示、
-  自动补导 OBJ 是否与用户显式选择冲突、图集复制耗时）。
+- 真机待验：GUI 弹窗点选（约束确认框的三键语义、只读约束卡）、多进程抢锁、
+  **v1.1.10 界面四修的真机观感**（1366×768 / 150% 缩放下的窗口、拉缩窗口后再跑、
+  阶段耗时 chip 在高 DPI 下的可读性）、多件批处理下「各阶段合计 vs 墙钟」的口径核对。
+- **窗口尺寸用例未覆盖「用户拉缩后再跑」**：现有用例只在 show() 后比对尺寸，
+  下一步补 resize 之后喂长文本的路径。
 - **git push 到 GitHub 当前不通**（代理 127.0.0.1:58358 回 502 / 直连 443 超时）：
   v1.1.9 提交 `af5a678` 已在本地，网络恢复后补 `git push origin HEAD`。

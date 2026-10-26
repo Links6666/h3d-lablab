@@ -209,12 +209,14 @@ def create_demo_project(target_dir: str):
 
     返回 ProjectConfig（已写入 config.yaml）。
     """
+    from h3d.core import paths
     from h3d.gui.config_edit import ProjectConfig
     os.makedirs(target_dir, exist_ok=True)
+    lay = paths.ensure_layout(target_dir)      # 综合文件夹 + 两棵子树
     item = "demo_relic"
-    raw = os.path.join(target_dir, "00_raw", item)
-    photo = os.path.join(target_dir, "00_photo", item)
-    ctrl = os.path.join(target_dir, "00_ctrl", item)
+    raw = os.path.join(lay["stage"], "00_raw", item)
+    photo = os.path.join(lay["stage"], "00_photo", item)
+    ctrl = os.path.join(lay["stage"], "00_ctrl", item)
     os.makedirs(raw, exist_ok=True)
     os.makedirs(photo, exist_ok=True)
     os.makedirs(ctrl, exist_ok=True)

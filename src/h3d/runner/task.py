@@ -71,6 +71,11 @@ class Task:
     scale_info: dict[str, Any] = field(default_factory=dict)
     scale_changes: list[dict] = field(default_factory=list)
 
+    #: :meth:`begin_stage` 之前的状态（供 :meth:`mark_disabled` 回退）。
+    #: 实机缺陷（2026-10-26 r14）：可选阶段先 begin_stage 置 RUNNING、再被判为
+    #: disabled，而 mark_disabled 不动状态 → 任务永远停在 RUNNING。
+    _status_before: TaskStatus = TaskStatus.PENDING
+
     # -- 阶段状态机 --------------------------------------------------------
     def begin_stage(self, stage: str) -> None:
         """标记某阶段进入运行态。
@@ -80,6 +85,8 @@ class Task:
         """
         if self.status in (TaskStatus.PENDING, TaskStatus.SKIPPED,
                            TaskStatus.RUNNING):
+            if self.status != TaskStatus.RUNNING:
+                self._status_before = self.status
             self.status = TaskStatus.RUNNING
         self.results[stage] = StageResult(stage=stage, status=TaskStatus.RUNNING)
 
@@ -121,8 +128,16 @@ class Task:
         与 :meth:`mark_skipped` 的区别：这是**用户的意图**，不是运行时的意外，
         所以**不动任务级状态**——一件器物的 M1~M6 全跑完、只有 P1 被关掉，
         它的任务状态就是 DONE，不该因为一个从未参与的可选阶段变成 SKIPPED。
+
+        但"不动"不等于"不管"：调度器是**先** ``begin_stage`` 打「S 开始」日志、
+        **后**才判定该阶段未启用的（P1/X1/X2 都走这条路），于是任务状态被置成
+        RUNNING 却再没人收回。实测（2026-10-26 r14）全阶段断点续跑跳过的件因此
+        停在 RUNNING，汇总得到 ``done=0 skipped=0``，界面据此判「运行未完成」。
+        所以这里把 begin_stage 之前的状态还原回去。
         """
         self.results[stage] = StageResult(stage=stage, status=TaskStatus.DISABLED)
+        if self.status == TaskStatus.RUNNING:
+            self.status = self._status_before
 
     # -- 查询 --------------------------------------------------------------
     def restore_stage(

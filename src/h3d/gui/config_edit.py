@@ -98,6 +98,11 @@ class ProjectConfig:
     #: 重建）、``max_image_size``/``top_k``/``poisson_threads`` 等全部回到
     #: 默认值。现在把原文件留作底稿，只覆盖 GUI 真正管理的字段。
     base: dict | None = None
+    #: 生成约束快照（2026-10-26 新增）：用户在「确认本次生成约束」里选定的
+    #: 稠密/精度/纹理/格式等，落进 config.yaml 的 ``runner.constraints``。
+    #: 只有确认过（``constraints_confirmed``）的才允许一键启动——不确认不跑。
+    constraints: dict = field(default_factory=dict)
+    constraints_confirmed: bool = False
 
     # ---------------------------------------------------------- 读入
     @classmethod
@@ -128,9 +133,11 @@ class ProjectConfig:
         self.base = data
         proj = data.get("project") or {}
         self.name = proj.get("name") or self.name
+        from h3d.core import paths as _paths
+        has_raw = any(os.path.isdir(os.path.join(p, "00_raw"))
+                      for p in (_paths.stage_root(root_dir or ""), root_dir or ""))
         self.scene = ("scene2" if (data.get("sfm_solve") or {}).get(
-            "enabled") and not os.path.isdir(
-                os.path.join(root_dir, "00_raw")) else "scene1") \
+            "enabled") and not has_raw else "scene1") \
             if scene in ("", None) else scene
         self.dense = bool((data.get("sfm_solve") or {}).get("dense", False))
         self.dense_gate = bool((data.get("sfm_solve") or {}).get(
@@ -161,6 +168,13 @@ class ProjectConfig:
         self.density_ratio = float((data.get("mesh") or {}).get(
             "density_ratio", self.density_ratio) or self.density_ratio)
         run = data.get("runner") or {}
+        snap = run.get("constraints")
+        if isinstance(snap, dict):
+            self.constraints = dict(snap)
+            # 只有显式标记为已确认的才跳过确认框；手写 yaml 里塞了 constraints
+            # 但没写 confirmed 的，仍要走一次确认（不猜用户意图）。
+            self.constraints_confirmed = bool(run.get("constraints_confirmed",
+                                                      False))
         self.x1_enabled = bool(run.get("x1_enabled", False))
         self.x2_enabled = bool(run.get("x2_enabled", False))
         # force_rerun 故意**不**读回：它是一次性意图，留在 yaml 里会让用户
@@ -212,15 +226,27 @@ class ProjectConfig:
         return errs
 
     def build_layout(self) -> dict:
-        """在项目根目录建立 00_raw/00_photo/00_ctrl 目录并返回路径。"""
+        """在综合文件夹下建立两棵子树并返回输入目录。
+
+        新布局（v1.1.10）：``<项目根>/阶段成果/00_raw|00_photo|00_ctrl``
+        与 ``<项目根>/交付成果/report``。阶段目录下沉一级不是搬家玩——所有阶段
+        代码按 ``task.root/<阶段目录>`` 取路径，而 ``task.root`` 就是 ``00_raw``
+        的父目录，于是"把 00_raw 放进 阶段成果"这一处改动自动带动全部阶段目录，
+        不用逐个改 200+ 处拼接（旧布局 ``<项目根>/00_raw`` 仍然被识别，
+        见 :mod:`h3d.core.paths`）。
+        """
+        from h3d.core import paths
+
         root = self.root_dir
-        raw = os.path.join(root, "00_raw", self.item_id)
-        photo = os.path.join(root, "00_photo", self.item_id)
-        ctrl = os.path.join(root, "00_ctrl", self.item_id)
+        lay = paths.ensure_layout(root)
+        raw = os.path.join(lay["stage"], "00_raw", self.item_id)
+        photo = os.path.join(lay["stage"], "00_photo", self.item_id)
+        ctrl = os.path.join(lay["stage"], "00_ctrl", self.item_id)
         os.makedirs(raw, exist_ok=True)
         os.makedirs(photo, exist_ok=True)
         os.makedirs(ctrl, exist_ok=True)
-        return {"raw": raw, "photo": photo, "ctrl": ctrl}
+        return {"raw": raw, "photo": photo, "ctrl": ctrl,
+                "stage": lay["stage"], "delivery": lay["delivery"]}
 
     def to_yaml(self, config_path: str) -> str:
         """按场景生成 config.yaml 并写入。
@@ -243,7 +269,9 @@ class ProjectConfig:
                     "publish", "runner", "report"):
             cfg.setdefault(sec, {})
         cfg["project"]["name"] = self.name
-        cfg["project"]["raw_dir"] = os.path.join(self.root_dir, "00_raw")
+        from h3d.core import paths as _paths
+        _stage = _paths.stage_root(self.root_dir)
+        cfg["project"]["raw_dir"] = os.path.join(_stage, "00_raw")
         cfg["sfm_solve"]["dense"] = self.dense or self.scene == "scene2"
         cfg["sfm_solve"]["dense_gate"] = self.dense_gate
         cfg["photo_texture"]["texture_size"] = self.texture_size
@@ -268,11 +296,17 @@ class ProjectConfig:
         # 强制重算必须是**显式写 true**：子进程（H3D.exe --batch）只认 yaml，
         # 界面里的勾选不落盘就等于没勾（「假控件」的老毛病）。
         cfg["runner"]["force_rerun"] = bool(self.force_rerun)
+        # 生成约束：界面确认过才写 confirmed=True。子进程只认 yaml，界面里
+        # 选了不落盘等于没选（「假控件」老毛病）。
+        if self.constraints:
+            cfg["runner"]["constraints"] = dict(self.constraints)
+        cfg["runner"]["constraints_confirmed"] = bool(self.constraints_confirmed)
         # manifest 与 CLI 默认一致（output/run_manifest.json）：
-        # 历史项目 resume 命中完整交付状态
+        # 历史项目 resume 命中完整交付状态。新布局下落在 阶段成果/output 里，
+        # 与其余阶段产物同进同出（项目根只留 config.yaml 与 输出说明.txt）。
         cfg["runner"]["manifest"] = os.path.join(
-            self.root_dir, "output", "run_manifest.json")
-        cfg["report"]["output_dir"] = os.path.join(self.root_dir, "report")
+            _stage, "output", "run_manifest.json")
+        cfg["report"]["output_dir"] = _paths.report_dir(self.root_dir)
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
         with open(config_path, "w", encoding="utf-8") as fh:
             yaml.safe_dump(cfg, fh, allow_unicode=True, sort_keys=False)

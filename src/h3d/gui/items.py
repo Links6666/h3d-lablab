@@ -37,7 +37,18 @@ _RAW_EXTS = {".ply", ".pcd", ".xyz", ".pts", ".las", ".laz",
 
 
 def _manifest_paths(root_dir: str) -> list[str]:
-    return [os.path.join(root_dir, "output", "run_manifest.json"),
+    """manifest 候选路径（新布局优先，再回退旧布局）。
+
+    新布局（v1.1.10）：``<项目根>/阶段成果/output/run_manifest.json``；
+    旧布局：``<项目根>/output/...`` 与 ``<项目根>/90_meta/...``。三处都试，
+    是因为 GUI 打开历史项目时不会强制迁移（迁移失败的项目也得能看产物）。
+    """
+    from h3d.core import paths
+
+    stage = paths.stage_root(root_dir)
+    return [os.path.join(stage, "output", "run_manifest.json"),
+            os.path.join(stage, "90_meta", "run_manifest.json"),
+            os.path.join(root_dir, "output", "run_manifest.json"),
             os.path.join(root_dir, "90_meta", "run_manifest.json")]
 
 
@@ -64,9 +75,20 @@ def items_from_manifest(root_dir: str) -> list[str]:
     return []
 
 
+def _raw_dir(root_dir: str) -> str:
+    """``00_raw`` 的实际位置（新布局在 阶段成果/ 下，旧布局在项目根）。"""
+    from h3d.core import paths
+
+    for cand in (os.path.join(paths.stage_root(root_dir), "00_raw"),
+                 os.path.join(root_dir, "00_raw")):
+        if os.path.isdir(cand):
+            return cand
+    return os.path.join(paths.stage_root(root_dir), "00_raw")
+
+
 def items_from_raw(root_dir: str) -> list[str]:
     """从 ``00_raw`` 目录结构推断文物编号（与任务发现同口径）。"""
-    raw = os.path.join(root_dir, "00_raw")
+    raw = _raw_dir(root_dir)
     if not os.path.isdir(raw):
         return []
     try:
@@ -97,8 +119,10 @@ def discover_items(root_dir: str) -> list[str]:
 
 
 def is_delivered(root_dir: str, item_id: str) -> bool:
-    """该文物是否已有交付目录（``80_export/<item>``）。"""
-    return os.path.isdir(os.path.join(root_dir, "80_export", item_id))
+    """该文物是否已有交付目录（``交付成果/<item>`` 或旧 ``80_export/<item>``）。"""
+    from h3d.core import paths
+
+    return os.path.isdir(paths.delivery_item_dir(root_dir, item_id))
 
 
 def primary_item(root_dir: str, fallback: str = "") -> str:

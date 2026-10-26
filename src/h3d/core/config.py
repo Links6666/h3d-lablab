@@ -323,6 +323,13 @@ class RunnerConfig(_ConfigBase):
     workers: int = Field(dtype=int, default=1, low=1)
     x1_enabled: bool = Field(dtype=bool, default=False)
     x2_enabled: bool = Field(dtype=bool, default=False)
+    #: 生成约束快照（2026-10-26）：GUI「确认本次生成约束」的结果，仅供溯源
+    #: 与报表展示，管线本身不读它（真正的取值早已落到各段字段上）。
+    #: 存它是因为验收要回答「这次是按什么约束跑出来的」，而 90_meta 只知道
+    #: 最终生效值、不知道用户当初"确认过哪些取舍"。
+    constraints: dict = Field(default={})
+    #: 用户是否确认过约束。CLI 直跑不需要它（命令行参数本身就是显式选择）。
+    constraints_confirmed: bool = Field(dtype=bool, default=False)
 
 
 class ReportConfig(_ConfigBase):

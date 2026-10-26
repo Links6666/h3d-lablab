@@ -56,6 +56,37 @@ def _degrades_on_failure(stage_id: str, task: Task) -> bool:
     return stage_id in OPTIONAL_STAGES and bool(task.raw_paths)
 
 
+def _finalize_task_status(task: Task) -> None:
+    """把件级终态收敛成四态之一，**保证 RUNNING 不外泄**。
+
+    为什么需要（2026-10-26 r14 实机回归）
+    -------------------------------------
+    断点续跑让全部阶段都走「跳过」分支时，理想状态下任务状态就是 SKIPPED；
+    但可选阶段（P1/X1/X2）是**先** ``begin_stage`` 打「S 开始」日志、**后**才
+    判定未启用的，``mark_disabled`` 原实现不动任务状态，于是任务停在 RUNNING。
+    汇总里 ``done=0 failed=0 skipped=0``，界面判据 ``done+skipped>0`` 为假 →
+    弹「运行未完成」（r11 已修过同类误报，这是它的新入口）。
+
+    收敛规则按"阶段结果"逆推，而不是按调用顺序猜：
+      * 任一阶段 DONE            → DONE（整件确实跑出了东西）
+      * 否则任一阶段 FAIL        → FAIL
+      * 否则任一阶段 SKIPPED     → SKIPPED（全部断点续跑命中）
+      * 其余（全 DISABLED / 无记录）→ SKIPPED（没有任何阶段需要跑）
+    """
+    if task.status in (TaskStatus.DONE, TaskStatus.FAIL):
+        return
+    statuses = [r.status for r in task.results.values()]
+    if TaskStatus.DONE in statuses:
+        task.status = TaskStatus.DONE
+    elif TaskStatus.FAIL in statuses:
+        task.status = TaskStatus.FAIL
+    elif TaskStatus.RUNNING in statuses:
+        # 有阶段停在 RUNNING = 编排异常（既没完成也没收尾），不外报成功
+        task.status = TaskStatus.FAIL
+    else:
+        task.status = TaskStatus.SKIPPED
+
+
 def _degraded_entry(exc: Exception, elapsed: float) -> dict:
     """降级阶段在 worker 结果里的序列化形态（skipped + degraded 标记）。"""
     return {
@@ -622,6 +653,7 @@ def _run_task_worker(cfg_dict: dict, task: Task, stages: dict,
                       task.item_id, stage_id, type(exc).__name__,
                       failures[-1]["traceback"])
             break
+    _finalize_task_status(task)
     return task, results, failures
 
 
@@ -868,6 +900,11 @@ class BatchProcessor:
                               time.time() - t0)
                 self._save_manifest(manifest)
                 break
+
+        # 件级终态收敛（2026-10-26 r14）：把"循环跑完但状态没落定"堵死。
+        # 实测：全阶段断点续跑跳过 + P1/X1/X2 未启用 → 任务停在 RUNNING，
+        # 汇总变成 done=0 skipped=0，界面判「运行未完成」（r11 同类误报的新路径）。
+        _finalize_task_status(task)
 
     def _save_manifest(self, manifest: RunManifest) -> None:
         """增量落盘 manifest（失败不阻断流程——最终 run() 还会再写一次）。"""

@@ -29,6 +29,30 @@ def _isolated_h3d_home(tmp_path, monkeypatch):
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _auto_accept_modal_dialogs():
+    """模态对话框在测试里一律自动"确认"。
+
+    ``ConstraintsDialog.exec()`` 是真模态：在 offscreen 测试里没人点按钮，
+    它会**永久阻塞**整个 pytest 进程（实测把全量测试挂死在 20 分钟超时）。
+    与 ``QMessageBox`` 的屏蔽同理，属于测试环境约定，不改被测行为——
+    需要验证"取消"分支的用例自己 monkeypatch 成返回 0。
+    """
+    from PySide6.QtWidgets import QDialog
+
+    from h3d.gui.constraints import ConstraintsDialog
+
+    original = ConstraintsDialog.exec
+
+    def _auto(self):  # noqa: ANN001
+        self._refresh_note()
+        return QDialog.Accepted
+
+    ConstraintsDialog.exec = _auto
+    yield
+    ConstraintsDialog.exec = original
+
+
+@pytest.fixture(scope="session", autouse=True)
 def _qapp_session():
     """确保全会话仅一个 offscreen QApplication（Qt 测试稳定）。"""
     from PySide6.QtWidgets import QApplication, QMessageBox

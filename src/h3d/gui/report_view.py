@@ -84,7 +84,8 @@ class ReportView(QWidget):
         self._load_html()
 
     def _load_html(self):
-        for cand in (os.path.join(self.root_dir, "report", "report.html"),
+        from h3d.core import paths as _p
+        for cand in (_p.report_html(self.root_dir),
                      os.path.join(self.root_dir, "output", "report",
                                   "report.html")):
             if os.path.exists(cand):
@@ -95,7 +96,8 @@ class ReportView(QWidget):
 
     def _open_external(self):
         import webbrowser
-        for cand in (os.path.join(self.root_dir, "report", "report.html"),
+        from h3d.core import paths as _p
+        for cand in (_p.report_html(self.root_dir),
                      os.path.join(self.root_dir, "output", "report",
                                   "report.html")):
             if os.path.exists(cand):

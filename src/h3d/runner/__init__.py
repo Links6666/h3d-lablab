@@ -33,6 +33,7 @@ from typing import Callable, Optional
 import numpy as np
 
 from h3d.core import get_logger
+from h3d.core import paths as _paths
 
 from .task import Task, TaskStatus, StageResult
 from .batch_processor import BatchProcessor, BatchResult, discover_items
@@ -625,8 +626,8 @@ def _stage_publish(task: Task, cfg) -> StageResult:
     if not os.path.isdir(tex_dir):
         raise InputDataError(f"M6 缺少 M4 带色模型目录: {tex_dir}")
 
-    # 1) 交付模型（80_export/<item>/）
-    export_dir = os.path.join(task.root, "80_export", task.item_id)
+    # 1) 交付模型（交付成果/<item>/；旧布局仍为 80_export/<item>/）
+    export_dir = _paths.delivery_item_dir(task.root, task.item_id)
     models = export_delivery(tex_dir, export_dir, task.item_id, cfg.publish.formats)
     # 「配置要的」与「实际交付的」必须分开记：旧实现只把 cfg.publish.formats
     # 写进元数据，于是 90_meta 里写着 formats=[ply, obj, glb] 而目录里只有
@@ -805,7 +806,7 @@ def _stage_multitemporal(task, cfg):
     t1 = load_point_cloud(os.path.join(ref_dir, sorted(ref_files)[0]))
     t2 = load_point_cloud(t2_path)
     result = change_run(t1, t2, cfg.change)
-    out = os.path.join(task.root, "80_export", task.item_id,
+    out = os.path.join(_paths.delivery_item_dir(task.root, task.item_id),
                        f"{task.item_id}_X1_m3c2.json")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     import json
@@ -885,7 +886,7 @@ def _stage_colour_quality(task, cfg):
         checker_source = "photo"
     from h3d.colour import run as colour_run
     result = colour_run(patches, cfg=cfg.colour)
-    out = os.path.join(task.root, "80_export", task.item_id,
+    out = os.path.join(_paths.delivery_item_dir(task.root, task.item_id),
                        f"{task.item_id}_X2_deltaE.json")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     import json

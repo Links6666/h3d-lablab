@@ -78,12 +78,27 @@ class TestResultBar:
             w.close()
 
     def test_open_buttons_follow_artifacts(self, tmp_path, _qapp_session):
+        """按钮只暴露**真的存在**的动作（新布局：交付成果/<编号> + report）。"""
         w = _win(tmp_path)
         try:
             w._show_result(True, "x")
             assert w.btn_result_open.isEnabled() is False, "没有产物目录就不该能点"
             assert w.btn_result_report.isEnabled() is False
-            (tmp_path / "80_export").mkdir()
+            (tmp_path / "交付成果" / "r1").mkdir(parents=True)
+            rpt = tmp_path / "交付成果" / "report"
+            rpt.mkdir()
+            (rpt / "report.html").write_text("<html>", encoding="utf-8")
+            w._show_result(True, "x")
+            assert w.btn_result_open.isEnabled() is True
+            assert w.btn_result_report.isEnabled() is True
+        finally:
+            w.close()
+
+    def test_open_buttons_legacy_layout(self, tmp_path, _qapp_session):
+        """旧布局（80_export/<编号> + report）仍要能识别，否则老项目全部变灰。"""
+        w = _win(tmp_path)
+        try:
+            (tmp_path / "80_export" / "r1").mkdir(parents=True)
             rpt = tmp_path / "report"
             rpt.mkdir()
             (rpt / "report.html").write_text("<html>", encoding="utf-8")
@@ -132,6 +147,8 @@ class TestForceRerunSwitch:
         """二次确认选「否」→ 不启动管线。"""
         from PySide6.QtWidgets import QMessageBox
         w = _win(tmp_path)
+        # 约束已确认（否则会先弹「确认生成约束」，那是另一条分支）
+        w.cfg.constraints_confirmed = True
         monkeypatch.setattr("h3d.gui.app.QMessageBox.question",
                             staticmethod(lambda *a, **k: QMessageBox.No))
         try:

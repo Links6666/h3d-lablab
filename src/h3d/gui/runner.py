@@ -163,8 +163,11 @@ class BatchRunner(QThread):
                 if n_all:
                     self.items_total.emit(n_all)
 
+                # 不做「每个阶段只发一次」的去重：批处理里 M1 会为每件文物各
+                # 跑一遍，去重后第 2 件起就没有 running 事件 → 阶段耗时只能记
+                # 到第一件，多件项目少算一大截（2026-10-26 需求：单阶段耗时）。
                 sid = stage_start_of(line)
-                if sid and sid not in stages_done:
+                if sid:
                     self.stage_updated.emit(sid, "running")
 
                 sub = substep_of(line)
@@ -177,13 +180,13 @@ class BatchRunner(QThread):
                     _bump(pct)
 
                 sid = stage_done_of(line)
-                if sid and sid not in stages_done:
+                if sid:
                     stages_done.add(sid)
                     self.stage_updated.emit(sid, "done")
 
                 # 真跳过：灯置灰（进度由 model 按件计分，不再按灯数）
                 sk = stage_skip_of(line)
-                if sk and sk not in stages_done:
+                if sk:
                     stages_done.add(sk)
                     self.stage_updated.emit(sk, "skipped")
 

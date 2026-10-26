@@ -22,10 +22,15 @@ def test_init_creates_dirs(tmp_path):
     from h3d.cli import main
     rc = main(["init", "-p", str(tmp_path / "demo")])
     assert rc == 0
-    # 关键目录都应存在
-    assert (tmp_path / "demo" / "00_raw").is_dir()
-    assert (tmp_path / "demo" / "90_meta").is_dir()
-    assert (tmp_path / "demo" / "output").is_dir()
+    # 新布局（v1.1.10）：一个综合文件夹 + 两棵子树
+    stage = tmp_path / "demo" / "阶段成果"
+    assert (stage / "00_raw").is_dir()
+    assert (stage / "90_meta").is_dir()
+    assert (stage / "output").is_dir()
+    assert (tmp_path / "demo" / "交付成果" / "report").is_dir()
+    assert (tmp_path / "demo" / "输出说明.txt").is_file()
+    # 旧布局的平级目录不得再出现（否则用户仍要面对一屏散目录）
+    assert not (tmp_path / "demo" / "00_raw").exists()
 
 
 def test_validate_missing_config(tmp_path):

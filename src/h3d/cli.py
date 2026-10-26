@@ -67,11 +67,20 @@ def _build_parser() -> argparse.ArgumentParser:
 def _cmd_init(path: str) -> int:
     import os
 
-    dirs = ["00_raw", "10_clean", "20_registered", "30_dense", "50_tex",
-            "60_qc", "70_report", "80_export", "90_meta", "99_runs", "output"]
-    for d in dirs:
-        os.makedirs(os.path.join(path, d), exist_ok=True)
+    from h3d.core import paths
+
+    # 新布局（v1.1.10）：一个综合文件夹 + 两棵子树。阶段骨架不变，只是整体
+    # 下沉到 阶段成果/；交付模型与报表进 交付成果/。写说明文件是因为用户
+    # 打开项目第一眼只能看到两个目录名，得有个地方解释"模型在哪"。
+    lay = paths.ensure_layout(path)
+    stage_dirs = ["00_raw", "00_photo", "00_ctrl", "10_clean", "20_registered",
+                  "30_dense", "50_tex", "60_qc", "70_report", "90_meta",
+                  "99_runs", "output"]
+    for d in stage_dirs:
+        os.makedirs(os.path.join(lay["stage"], d), exist_ok=True)
     print(f"已初始化项目目录结构：{os.path.abspath(path)}")
+    print(f"  阶段成果：{lay['stage']}")
+    print(f"  交付成果：{lay['delivery']}（含 report/）")
     return 0
 
 

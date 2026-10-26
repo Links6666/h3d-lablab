@@ -57,7 +57,8 @@ class HistoryStore:
     def find_config(root_dir: str) -> str | None:
         """在项目根找 config.yaml（打开历史项目用）。"""
         for cand in (os.path.join(root_dir, "config.yaml"),
-                     os.path.join(root_dir, "90_meta", "config.yaml")):
+                     os.path.join(root_dir, "阶段成果", "90_meta",
+                                  "config.yaml")):
             if os.path.exists(cand):
                 return cand
         return None
