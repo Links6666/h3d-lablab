@@ -36,11 +36,13 @@ def test_validate_missing_config(tmp_path):
 
 
 def test_validate_runs(tmp_path, capsys):
-    """validate 读取 example.yaml 并扫描数据（空 raw_dir 时 0 尊）。"""
-    from h3d.cli import main
-    import shutil
+    """validate 扫描数据；**0 件 = 校验失败**（rc=1），有件才 rc=0。
 
-    # 准备一份临时配置 + 空 raw_dir
+    2026-10-23 巡检修正：原先 0 件也返回 0，拿 validate 当 CI 门禁时，
+    目录写错 / 扩展名不符 / 只剩系统垃圾目录都会蒙混过关。
+    """
+    from h3d.cli import main
+
     cfg_path = tmp_path / "cfg.yaml"
     raw_dir = tmp_path / "00_raw"
     raw_dir.mkdir()
@@ -49,11 +51,17 @@ def test_validate_runs(tmp_path, capsys):
         f"  formats: [ply]\nrunner:\n  manifest: '{tmp_path/'m.json'}'\n",
         encoding="utf-8")
 
-    rc = main(["validate", "-c", str(cfg_path)])
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert "配置合法" in out
-    assert "0 尊" in out
+    assert main(["validate", "-c", str(cfg_path)]) == 1
+    out = capsys.readouterr()
+    assert "配置合法" in out.out
+    assert "0 件" in out.out
+    assert "未发现任何文物" in out.err
+
+    # 放一件进去 → 通过
+    (raw_dir / "relic").mkdir()
+    (raw_dir / "relic" / "a.ply").write_bytes(b"ply\nformat ascii 1.0\nend_header\n")
+    assert main(["validate", "-c", str(cfg_path)]) == 0
+    assert "1 件" in capsys.readouterr().out
 
 
 def test_batch_dry_run(tmp_path, capsys):

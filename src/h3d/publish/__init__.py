@@ -4,7 +4,7 @@
     《设计书》§37 —— M6 发布与溯源：将带纹理模型导出为标准开放格式，嵌入元数据
         与 manifest 快照，形成可交付包（80_export 导出 + 90_meta 元数据）；
     《软著方案》2.4 —— 交付包 = 导出模型 + 质检报告 + manifest 一并归档；
-    《设计书》§6.3 —— 任一质量门不达标时该尊不进入交付包（M5 失败已隔离）。
+    《设计书》§6.3 —— 任一质量门不达标时该件不进入交付包（M5 失败已隔离）。
 
 实现要点：
     1. 交付模型取自 M4 最高精度带色模型（50_tex/<item>/<item>_L1.<fmt>），
@@ -54,24 +54,128 @@ def export_delivery(tex_dir: str, out_dir: str, item_id: str,
     for fmt in formats:
         fmt = fmt.lstrip(".").lower()
         # 优先 L1（原始精度），回退任意 *_L* 变体
+        # 命名兼容：M4（照片纹理链路）产物为 <item>_L1.0.<fmt>，P1 顶点色链路
+        # 为 <item>_L1.<fmt>——两者都要命中，避免"未找到"的噪声告警。
         src = os.path.join(tex_dir, f"{item_id}_L1.{fmt}")
+        if not os.path.exists(src):
+            for alias in (f"{item_id}_L1.0.{fmt}", f"{item_id}_L1.00.{fmt}"):
+                cand = os.path.join(tex_dir, alias)
+                if os.path.exists(cand):
+                    src = cand
+                    break
         if not os.path.exists(src):
             candidates = [f for f in os.listdir(tex_dir)
                           if f.startswith(f"{item_id}_L") and f.endswith(f".{fmt}")]
             if candidates:
                 src = os.path.join(tex_dir, sorted(candidates)[-1])
-                log.warning("%s 无 L1.%s，回退 %s", item_id, fmt, os.path.basename(src))
+                log.debug("%s 无 L1.%s，使用 %s", item_id, fmt,
+                          os.path.basename(src))
             else:
-                log.warning("%s 无 %s 格式模型，跳过（E601 语义）", item_id, fmt)
+                # 该格式未被导出（由 texture.export_formats 决定）——正常跳过，
+                # 不是错误：用 info 级说明，避免误读为导出失败。
+                log.info("%s 未导出 %s 格式（见 texture.export_formats），跳过",
+                         item_id, fmt)
                 continue
         dst = os.path.join(out_dir, f"{item_id}.{fmt}")
         try:
             shutil.copy2(src, dst)
         except OSError as exc:
             raise ExportError(f"交付模型复制失败: {dst}") from exc
+        # 实机问题（2026-10-18）：OBJ 的贴图在**旁挂文件**里（.mtl + _diffuse.png）。
+        # 旧实现只复制 .obj 本体 → 交付包的 mtllib 指向不存在的文件、贴图缺失，
+        # 模型在任意查看器里都是灰白一片，且无任何报错。这是「从没拿到完整
+        # 模型输出」的直接原因之一。必须连同旁挂文件一起交付并改写引用。
+        if fmt == "obj":
+            _copy_obj_sidecars(src, dst, item_id)
         outputs.append(os.path.abspath(dst))
     log.info("交付模型导出：%s（%d 格式 -> %s）", item_id, len(outputs), out_dir)
     return outputs
+
+
+def _copy_obj_sidecars(src_obj: str, dst_obj: str, item_id: str) -> None:
+    """复制 OBJ 的材质与贴图，并改写交付包内的相对引用。
+
+    处理链：``obj --mtllib--> mtl --map_Kd--> png``，每层跟随复制并统一改名为
+    ``<item>.mtl`` / ``<item>_diffuse.png``；任何一层缺失都记 warning（不静默），
+    但不阻断交付（几何模型仍有价值）。
+    """
+    src_dir = os.path.dirname(os.path.abspath(src_obj))
+    dst_dir = os.path.dirname(os.path.abspath(dst_obj))
+    try:
+        with open(src_obj, encoding="utf-8", errors="replace") as fh:
+            lines = fh.readlines()
+    except OSError as exc:
+        log.warning("读取交付 OBJ 失败，跳过材质复制：%s", exc)
+        return
+
+    mtl_name = None
+    for line in lines:
+        s = line.strip()
+        if s.lower().startswith("mtllib "):
+            mtl_name = s.split(None, 1)[1].strip()
+            break
+    if not mtl_name:
+        return  # 纯几何 obj（顶点色模式），无旁挂文件
+
+    src_mtl = os.path.join(src_dir, mtl_name)
+    if not os.path.exists(src_mtl):
+        log.warning("OBJ 引用的材质文件不存在，交付模型将无贴图：%s", src_mtl)
+        return
+    dst_mtl_name = f"{item_id}.mtl"
+    dst_mtl = os.path.join(dst_dir, dst_mtl_name)
+
+    with open(src_mtl, encoding="utf-8", errors="replace") as fh:
+        mtl_lines = fh.readlines()
+    copied_tex: dict[str, str] = {}
+    new_mtl: list[str] = []
+    for line in mtl_lines:
+        s = line.strip()
+        low = s.lower()
+        if low.startswith(("map_kd", "map_ka", "map_ks", "map_bump", "bump")):
+            parts = s.split(None, 1)
+            if len(parts) == 2:
+                tex_old = parts[1].strip()
+                ext = os.path.splitext(tex_old)[1] or ".png"
+                tex_new = (f"{item_id}_diffuse{ext}"
+                           if low.startswith(("map_kd", "map_ka"))
+                           else f"{item_id}_{low.split()[0]}{ext}")
+                src_tex = os.path.join(src_dir, tex_old)
+                if os.path.exists(src_tex):
+                    if tex_new not in copied_tex:
+                        try:
+                            shutil.copy2(src_tex, os.path.join(dst_dir, tex_new))
+                            copied_tex[tex_new] = tex_old
+                        except OSError as exc:
+                            log.warning("贴图复制失败：%s（%s）", src_tex, exc)
+                    indent = line[:len(line) - len(line.lstrip())]
+                    new_mtl.append(f"{indent}{parts[0]} {tex_new}\n")
+                    continue
+                log.warning("MTL 引用的贴图不存在：%s", src_tex)
+        new_mtl.append(line)
+
+    try:
+        with open(dst_mtl, "w", encoding="utf-8") as fh:
+            fh.writelines(new_mtl)
+    except OSError as exc:
+        log.warning("材质文件写入失败：%s（%s）", dst_mtl, exc)
+        return
+
+    # 改写 OBJ 的 mtllib 指向交付包内的新材质名
+    patched = []
+    for line in lines:
+        if line.strip().lower().startswith("mtllib "):
+            indent = line[:len(line) - len(line.lstrip())]
+            patched.append(f"{indent}mtllib {dst_mtl_name}\n")
+        else:
+            patched.append(line)
+    try:
+        with open(dst_obj, "w", encoding="utf-8") as fh:
+            fh.writelines(patched)
+    except OSError as exc:
+        log.warning("OBJ 材质引用改写失败：%s（%s）", dst_obj, exc)
+        return
+    log.info("交付包贴图随附：%s（材质 %s，贴图 %s）",
+             item_id, dst_mtl_name, list(copied_tex) or "无")
 
 
 def build_meta(item_id: str, stage_metrics: dict[str, Any],
@@ -82,7 +186,7 @@ def build_meta(item_id: str, stage_metrics: dict[str, Any],
     参数
     ----
     item_id:      文物编号。
-    stage_metrics: 该尊各阶段指标（manifest 中 <item>/<stage> 的合并）。
+    stage_metrics: 该件各阶段指标（manifest 中 <item>/<stage> 的合并）。
     project:      项目信息（name / operator 等）。
     software:     软件版本快照（core.metadata.software_versions）。
     run_id:       本次运行标识。
@@ -134,7 +238,7 @@ def build_delivery_manifest(entries: list[dict[str, Any]],
 
     参数
     ----
-    entries:       每尊交付记录（item_id / status / models / qc_status / meta）。
+    entries:       每件交付记录（item_id / status / models / qc_status / meta）。
     manifest_path: 输出路径（90_meta/delivery_manifest.json）。
 
     返回
@@ -146,7 +250,7 @@ def build_delivery_manifest(entries: list[dict[str, Any]],
                "n_published": sum(1 for e in entries if e.get("status") == "published")}
     with open(manifest_path, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, ensure_ascii=False, indent=2)
-    log.info("交付清单：%s（%d 尊，%d 已发布）", manifest_path,
+    log.info("交付清单：%s（%d 件，%d 已发布）", manifest_path,
              payload["n_items"], payload["n_published"])
     return os.path.abspath(manifest_path)
 

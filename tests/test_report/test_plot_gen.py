@@ -64,3 +64,18 @@ class TestPlotMetricSeries:
         m.record("rock001/M1", "done", elapsed_s=1.0)
         with pytest.raises(ExportError):
             plot_metric_series(m, "fitness", str(tmp_path / "x.png"))
+
+
+class TestPlotStageTimingsResilience:
+    """回归（实机 E601）：无 elapsed_s 时不抛异常，返回空串交由上层跳过。"""
+
+    def test_empty_manifest_returns_empty_string(self, tmp_path):
+        m = RunManifest()
+        out = plot_stage_timings(m, str(tmp_path / "empty.png"))
+        assert out == ""
+        assert not (tmp_path / "empty.png").exists()
+
+    def test_only_failed_stages_returns_empty(self, tmp_path):
+        m = RunManifest()
+        m.record_fail("rock001/S1", "失败")
+        assert plot_stage_timings(m, str(tmp_path / "f.png")) == ""

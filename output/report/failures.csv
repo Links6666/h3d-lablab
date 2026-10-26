@@ -1,2 +1,2 @@
 ﻿文物编号,阶段,异常类型,异常信息,时间
-rock002,M1,InputDataError,空点云,2026-08-25T14:00:00
+relic_001,M4,RecoverableError,[E000] 照片目录不存在: D:\00_photo\relic_001,2026-08-30T15:25:29

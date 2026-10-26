@@ -1,0 +1,235 @@
+[
+  {
+    "type": "h1",
+    "text": "一、开发总览"
+  },
+  {
+    "type": "body",
+    "text": "本批完成 <b>软件收尾两顶</b>：<b>① PyInstaller 打包</b>（h3d_gui.spec：launcher.py 双模式入口、排除 tests/未用 Qt 模块、收集 h3d 全管线、assets/h3d_icon.ico 青绿图标、console=False；frozen 子进程 = exe --batch <config> 并 tee 日志到 batch_gui.log）；<b>② requirements 锁定</b>（PySide6≥6.11/cupy-cuda12x/open3d≥0.19 等）+ <b>真实数据 GUI 全流程验证</b>（D:\\h3d_relic_test：装配→一键生成→3s resume→进度 100%→3D 预览加载→交付包导出 5 文件 4540KB）。全量 <b>355 项测试通过</b>。打包产物：D:\\h3d_relic_test\\pyi_dist\\H3D.exe（237.6MB）。"
+  },
+  {
+    "type": "callout",
+    "text": "<b>结论</b>：打包（含 exe --batch 子进程链路实机验证）、依赖锁定、真实数据 GUI 全流程全部闭环。修复 3 个 GUI 真实数据 bug（复制同路径/纹理常量/manifest 路径）。"
+  },
+  {
+    "type": "h1",
+    "text": "二、① PyInstaller 打包"
+  },
+  {
+    "type": "h2",
+    "text": "2.1 实现（h3d_gui.spec）"
+  },
+  {
+    "type": "table",
+    "headers": [
+      "项",
+      "配置"
+    ],
+    "rows": [
+      [
+        "入口",
+        "launcher.py（GUI + --batch <config> + --report）"
+      ],
+      [
+        "排除",
+        "tests/pytest/cupy/未用 Qt（WebEngine/Qml/Sql…）"
+      ],
+      [
+        "hiddenimports",
+        "h3d 全管线 + matplotlib 后端 + 报告链"
+      ],
+      [
+        "图标",
+        "assets/h3d_icon.ico（青绿圆标 256/64/32/16）"
+      ],
+      [
+        "console",
+        "False（GUI 无控制台）；--batch 输出 tee batch_gui.log"
+      ]
+    ]
+  },
+  {
+    "type": "h2",
+    "text": "2.2 验证"
+  },
+  {
+    "type": "table",
+    "headers": [
+      "测试项",
+      "结果"
+    ],
+    "rows": [
+      [
+        "打包产物",
+        "D:/h3d_relic_test/pyi_dist/H3D.exe（237.6MB）✅"
+      ],
+      [
+        "exe --batch 子进程链路",
+        "✅ batch_gui.log 完整报表产出（metrics/png/html）"
+      ],
+      [
+        "launcher --batch 开发模式",
+        "✅ 触发 CLI"
+      ],
+      [
+        "图标嵌入",
+        "✅ EXE icon 参数"
+      ]
+    ]
+  },
+  {
+    "type": "body",
+    "text": "<b>如实</b>：沙箱拦截 build 目录删除（safe-delete 回收站不可用）→ 用 --workpath/--distpath 输出到 D: 盘解决；单文件 237MB（PySide6+open3d+sklearn）；cupy 排除（管线子进程在完整环境可用 GPU）。"
+  },
+  {
+    "type": "h1",
+    "text": "三、② requirements 锁定 + GUI 全流程验证"
+  },
+  {
+    "type": "h2",
+    "text": "3.1 requirements 锁定"
+  },
+  {
+    "type": "code",
+    "language": "text",
+    "text": "requirements.txt：numpy/scipy/open3d≥0.19/matplotlib/Pillow/\n  pyyaml/jinja2/pypdf/scikit-learn/opencv-python/\n  cupy-cuda12x≥13.0（colmap CUDA12 对齐）/ PySide6≥6.11 / pyinstaller≥6.0"
+  },
+  {
+    "type": "h2",
+    "text": "3.2 真实数据 GUI 全流程验证（D:\\h3d_relic_test）"
+  },
+  {
+    "type": "table",
+    "headers": [
+      "环节",
+      "结果"
+    ],
+    "rows": [
+      [
+        "① 主窗口装配",
+        "✅"
+      ],
+      [
+        "② 一键生成（复制+config+子进程）",
+        "✅"
+      ],
+      [
+        "③ resume 秒级完成（3s）+ 进度 100%",
+        "✅"
+      ],
+      [
+        "④ open3d 按钮启用",
+        "✅"
+      ],
+      [
+        "⑤ 3D 预览加载（80_export obj）",
+        "✅"
+      ],
+      [
+        "⑥ 交付包导出（5 文件 4540KB）",
+        "✅"
+      ]
+    ]
+  },
+  {
+    "type": "h2",
+    "text": "3.3 修复的 GUI 真实数据 bug（如实）"
+  },
+  {
+    "type": "table",
+    "headers": [
+      "Bug",
+      "修复"
+    ],
+    "rows": [
+      [
+        "_stage_inputs 复制到自身路径抛异常 → runner 未启动",
+        "同路径源自动跳过"
+      ],
+      [
+        "TextureView KeepAspectRatio 常量（Qt 枚举）",
+        "Qt.KeepAspectRatio"
+      ],
+      [
+        "GUI config manifest 指向 90_meta（resume 状态不一致）",
+        "output/run_manifest.json（与 CLI 一致）"
+      ],
+      [
+        "matplotlib 中文标题缺字体（DejaVu 无 CJK）",
+        "警告级（可选 SimHei 配置）"
+      ]
+    ]
+  },
+  {
+    "type": "h1",
+    "text": "四、验证与风险"
+  },
+  {
+    "type": "table",
+    "headers": [
+      "项",
+      "状态"
+    ],
+    "rows": [
+      [
+        "全量回归",
+        "355 项通过"
+      ],
+      [
+        "打包产物",
+        "H3D.exe 237.6MB + exe --batch 链路验证"
+      ],
+      [
+        "GUI 全流程",
+        "真实数据 3s 完成 + 预览 + 导出 5 文件"
+      ],
+      [
+        "风险（如实）",
+        "PyInstaller 动态依赖需桌面人工验收；cupy 不在打包内（GPU 加速需完整环境）；单文件体积大"
+      ]
+    ]
+  },
+  {
+    "type": "h1",
+    "text": "五、下一步（发布 v1.0）"
+  },
+  {
+    "type": "table",
+    "headers": [
+      "优先级",
+      "方向",
+      "内容"
+    ],
+    "rows": [
+      [
+        "P1",
+        "桌面人工验收",
+        "打包 exe 启动/向导/一键/预览/导出 全手测（PyInstaller 动态依赖实机暴露）"
+      ],
+      [
+        "P1",
+        "版本发布",
+        "版本号 v1.0 + CHANGELOG + 安装说明 README"
+      ],
+      [
+        "P2",
+        "正式图标",
+        "专业品牌替换 assets 图标 + exe 资源"
+      ],
+      [
+        "P2",
+        "GPU 环境说明",
+        "--batch 完整环境跑管线（cupy 可用）文档"
+      ],
+      [
+        "P3",
+        "安装器",
+        "Inno Setup 封装（可选）"
+      ]
+    ]
+  },
+  {
+    "type": "callout",
+    "text": "<b>收尾完成</b>：开发→测试→打包→验证链路全部闭环。剩余为桌面人工验收与发布动作。本会话累计 PDF 交付物已覆盖全部开发阶段，可归档。"
+  }
+]

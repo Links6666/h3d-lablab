@@ -41,9 +41,16 @@ class TestGenerateHtml:
         assert "处理报表" in txt
         assert "测试项目" in txt
         assert "覆盖率" in txt and "82.0%" in txt  # M5 指标渲染
-        assert "published" in txt and "3" in txt    # M6 交付
+        assert "已发布" in txt and "3" in txt      # M6 交付行
         assert "QualityGateError" in txt            # 失败清单
         assert "rock002" in txt
+        # 未执行阶段必须成行：旧报表只渲染已执行阶段，却统计"未执行 N"，
+        # 表中找不到对应行 → 用户无法判断缺的是哪一步（2026-10-18 实机）。
+        assert "未执行" in txt
+        assert ">S1<" in txt
+        # 缺失指标的缺值必须是 N/A，绝不把 nan/inf 印进表格
+        assert ">nan<" not in txt
+        assert ">N/A<" in txt
 
     def test_html_embeds_chart(self, tmp_path):
         """PNG 图表以 base64 内嵌（自包含可离线分享）。"""

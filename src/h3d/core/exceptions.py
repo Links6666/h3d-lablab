@@ -15,7 +15,7 @@
     E900  外部子进程 / 磁盘异常       (ExternalProcessError)
 
 可恢复错误（RecoverableError）对应编排层「失败隔离」语义：
-    M0 编排器捕获 RecoverableError 时仅跳过该尊（记入 manifest 后继续队列），
+    M0 编排器捕获 RecoverableError 时仅跳过该件（记入 manifest 后继续队列），
     不向上抛异常；非可恢复错误（如 ConfigError / ExternalProcessError）则按
     设计书要求中断或走更重的回滚路径。
 """
@@ -28,7 +28,7 @@ from typing import Optional
 class H3DError(Exception):
     """管线所有自定义异常的基类。
 
-    统一携带 ``code``（错误码）、``stage``（阶段，如 M1）、``item_id``（尊像标识）
+    统一携带 ``code``（错误码）、``stage``（阶段，如 M1）、``item_id``（文物标识）
     三个上下文字段，便于编排层与日志层结构化记录。
     """
 
@@ -60,9 +60,9 @@ class H3DError(Exception):
 
 
 class RecoverableError(H3DError):
-    """可恢复错误基类：单尊失败可跳过，不中断整个批处理队列。
+    """可恢复错误基类：单件失败可跳过，不中断整个批处理队列。
 
-    编排器（M0）仅对继承本类的异常执行「记录 → 跳过该尊 → 继续下一个」的
+    编排器（M0）仅对继承本类的异常执行「记录 → 跳过该件 → 继续下一个」的
     失败隔离逻辑。
     """
 

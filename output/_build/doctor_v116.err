@@ -1,0 +1,3 @@
+[自检] 上次崩溃记录：上次启动/运行有异常（0 小时前）：UnicodeDecodeError: 'utf-8' codec can't decode byte 0xb1 in position 40: invalid start byte
+[自检] 遗留进程占用：H3D.exe PID 5264 仍在运行
+[自检] 运行目录（打包解包）：当前进程复用了父进程的解包目录（_PYI_PARENT_PROCESS_LEVEL=1）

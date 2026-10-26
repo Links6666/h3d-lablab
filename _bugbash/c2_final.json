@@ -1,0 +1,51 @@
+[
+ {
+  "id": "C2-empty",
+  "charter": "discovery",
+  "severity": "pass",
+  "expected": "空目录 -> 0 件",
+  "actual": "[]"
+ },
+ {
+  "id": "C2-bad_ext",
+  "charter": "discovery",
+  "severity": "pass",
+  "expected": "无可用格式 -> 0 件（并提示允许的扩展名）",
+  "actual": "[]（若静默 0 件，用户看不出为什么）"
+ },
+ {
+  "id": "C2-cn_path",
+  "charter": "discovery",
+  "severity": "pass",
+  "expected": "中文/空格/括号目录名 -> 1 件",
+  "actual": "[('青瓷 碗 (1)', 1, 0)]"
+ },
+ {
+  "id": "C2-junk_dirs",
+  "charter": "discovery",
+  "severity": "pass",
+  "expected": "系统垃圾目录不该变成文物（期望只剩 1 件）",
+  "actual": "[('relic', 1, 0)]"
+ },
+ {
+  "id": "C2-dup_photo",
+  "charter": "discovery",
+  "severity": "pass",
+  "expected": "大小写重复照片仍是 1 件（或明确提示重复）",
+  "actual": "[('relic', 1, 2)]"
+ },
+ {
+  "id": "C2-photo_only",
+  "charter": "discovery",
+  "severity": "pass",
+  "expected": "纯照片件 -> 1 件、raw_paths=0",
+  "actual": "[('p1', 0)]"
+ },
+ {
+  "id": "C2-photo_empty_dir",
+  "charter": "discovery",
+  "severity": "pass",
+  "expected": "空照片目录不该产出任务（否则 S1 必然失败）",
+  "actual": "[]"
+ }
+]

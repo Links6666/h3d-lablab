@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import random
+import shutil
 import string
 from datetime import datetime
 from importlib import metadata as _importlib_metadata
@@ -27,6 +29,16 @@ CHUNK_SIZE = 1024 * 1024  # 1 MiB 分块读，避免大文件整体载入内存
 _STATUS_DONE = "done"
 _STATUS_FAIL = "fail"
 _STATUS_RUNNING = "running"
+
+
+def _logger():
+    """延迟取 logger（``h3d.core`` 会先导入本模块，顶层 import 易成环）。"""
+    try:
+        from h3d.core.logging import get_logger
+
+        return get_logger("core.manifest")
+    except Exception:  # noqa: BLE001 - 日志不可用不应影响 manifest 恢复
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -127,9 +139,17 @@ class RunManifest:
         entry.update(metrics)
         self.stages[stage] = entry
 
-    def record_fail(self, stage: str, reason: str) -> None:
-        """登记阶段失败原因（失败隔离：仅跳过该尊，不中断队列）。"""
-        self.stages[stage] = {"status": _STATUS_FAIL, "reason": reason}
+    def record_fail(self, stage: str, reason: str,
+                    elapsed_s: Optional[float] = None) -> None:
+        """登记阶段失败原因（失败隔离：仅跳过该件，不中断队列）。
+
+        ``elapsed_s`` 记录失败前已消耗的时间——报表"耗时"列若对失败任务
+        恒为 0，会掩盖"在该阶段卡了很久才失败"这一关键诊断信息。
+        """
+        entry: dict[str, Any] = {"status": _STATUS_FAIL, "reason": reason}
+        if elapsed_s is not None:
+            entry["elapsed_s"] = round(float(elapsed_s), 3)
+        self.stages[stage] = entry
 
     def record_running(self, stage: str) -> None:
         """标记阶段进入运行态（防止并发 / 重入时状态丢失）。"""
@@ -158,23 +178,86 @@ class RunManifest:
         }
 
     def save(self, path: str) -> None:
-        """落盘为 run_manifest.json（UTF-8、缩进 2、不转义中文）。"""
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(self.to_dict(), fh, ensure_ascii=False, indent=2)
+        """落盘为 run_manifest.json（UTF-8、缩进 2、不转义中文）。
+
+        **必须原子写**（临时文件 + ``os.replace``）。manifest 是断点续跑的
+        唯一真相来源，而这条管线随时可能被硬杀：超时 ``taskkill /F /T``、
+        取消运行、断电、磁盘满。就地 ``open(path, "w")`` 会先把目标清空再写，
+        中途死掉就留下一个**截断的 JSON** —— 之后每次启动都按损坏文件解析，
+        项目再也跑不起来（实测巡检 2026-10-23：截断后 ``json.load`` 抛
+        ``JSONDecodeError``，GUI 只弹崩溃框，用户无从恢复）。
+        """
+        parent = os.path.dirname(os.path.abspath(path))
+        os.makedirs(parent, exist_ok=True)
+        tmp = f"{path}.tmp{os.getpid()}"
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(self.to_dict(), fh, ensure_ascii=False, indent=2)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp, path)  # 同盘替换是原子的，读者要么见旧版要么见新版
+        finally:
+            if os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
 
     @classmethod
     def load(cls, path: str) -> "RunManifest":
-        """从已有 run_manifest.json 恢复（断点续跑入口）。"""
-        with open(path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
+        """从已有 run_manifest.json 恢复（断点续跑入口）。
+
+        文件损坏（截断 / 非 UTF-8 / 结构不是对象）时**不抛异常**：留存一份
+        ``<name>.corrupt-<时间戳>`` 备查，记 WARNING，返回空 manifest 让本次
+        从头跑。理由：manifest 是可重建的派生状态，而"项目从此打不开"是
+        不可接受的失败模式 —— 宁可多跑一遍，也不能让人去手工删文件。
+        """
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            return cls._recover(path, f"内容无法解析（{exc}）")
+        except OSError as exc:
+            return cls._recover(path, f"无法读取（{exc}）")
+
+        if not isinstance(data, dict):
+            return cls._recover(path, f"顶层不是对象（{type(data).__name__}）")
+
         manifest = cls(
             run_id=data.get("run_id"),
             config_sha256=data.get("config_sha256", ""),
             software=data.get("software"),
             created_at=data.get("created_at"),
         )
-        manifest.stages = data.get("stages", {})
+        stages = data.get("stages") or {}
+        if not isinstance(stages, dict):
+            # 早年/手改过的 manifest 可能把 stages 写成 list。若原样保留，
+            # 后续 .get 会在很远的地方抛 AttributeError —— 就地纠正并留痕。
+            log = _logger()
+            if log:
+                log.warning("manifest 的 stages 不是字典（%s），已按空表处理：%s",
+                            type(stages).__name__, path)
+            stages = {}
+        manifest.stages = {
+            str(k): v for k, v in stages.items() if isinstance(v, dict)
+        }
         return manifest
+
+    @classmethod
+    def _recover(cls, path: str, why: str) -> "RunManifest":
+        """损坏 manifest 的恢复路径：备份留证 + WARNING + 空实例。"""
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup = f"{path}.corrupt-{stamp}"
+        try:
+            shutil.copy2(path, backup)
+            kept = backup
+        except OSError:
+            kept = "(备份失败)"
+        log = _logger()
+        if log:
+            log.warning("run_manifest 损坏：%s；%s。已备份为 %s，本次按空 manifest 重跑"
+                        "（已完成的阶段需要重做）", why, path, kept)
+        return cls()
 
     @classmethod
     def load_or_create(cls, path: str, **kwargs: Any) -> "RunManifest":

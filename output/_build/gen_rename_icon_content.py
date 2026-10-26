@@ -1,0 +1,255 @@
+# -*- coding: utf-8 -*-
+"""生成「定位变更与图标更换」content.json（2026-10-18 r6.5）。"""
+import json
+
+content = [
+    # ------------------------------------------------------------------
+    {"type": "h1", "text": "一、变更背景与范围"},
+    {"type": "body",
+     "text": "研究与应用对象由<b>造像类文物（米级、佛像为主）</b>转向"
+             "<b>中小型器物类文物（铜镜、印章、小件陶瓷与玉器，典型 5~30 cm）</b>。"
+             "几何与贴图管线本身是尺度自适应的（距离类参数按包围盒对角线线性缩放），"
+             "无需改动；但<b>产品身份层</b>仍停留在旧表述——界面标题、报表页头、"
+             "安装包名称、代码注释里都是「造像」，量词用「尊」，应用图标也还是旧的圆标。"
+             "这会让用户在界面上看到与自己对象无关的字眼，也让论文与交付物的命名口径不一致。"},
+    {"type": "callout",
+     "text": "<b>本次只做两件事</b>：① 全项目术语统一（造像 → 中小型文物，尊 → 件）；"
+             "② 应用图标换成两件器物的插画。管线算法、配置默认值、数据目录约定"
+             "<b>一律不动</b>——更换表述不应带来任何行为变化。"},
+    {"type": "table",
+     "headers": ["维度", "变更前", "变更后", "影响面"],
+     "rows": [
+         ["产品全名", "H3D 造像数字化自动化系统",
+          "H3D 中小型文物三维建模自动化系统", "窗口标题、欢迎页、安装包、报表"],
+         ["对象称呼", "造像类文物 / 造像", "中小型文物 / 文物", "注释、日志、CLI 输出"],
+         ["量词", "尊（佛像量词）", "件（器物量词）", "日志、报表表头、异常消息"],
+         ["应用图标", "单尊造像圆标（h3d_icon_v2）", "双器物插画（h3d_icon_v3）",
+          "exe 图标、窗口图标、安装器、欢迎页"],
+     ]},
+
+    # ------------------------------------------------------------------
+    {"type": "h1", "text": "二、术语统一"},
+    {"type": "body",
+     "text": "替换不是「全局把两个字换掉」那么简单：项目里存在"
+             "<b>产品全名、领域词、量词</b>三类表述，且互相嵌套。"
+             "脚本 <code>scripts/rename_statue_terms.py</code> 按"
+             "<b>长串在前、单字在后</b>的顺序执行，并提供 <code>--dry-run</code> 先出清单。"},
+    {"type": "h2", "text": "2.1 替换规则"},
+    {"type": "table",
+     "headers": ["序", "旧表述", "新表述", "说明"],
+     "rows": [
+         ["1", "造像类文物三维建模自动化系统", "中小型文物三维建模自动化系统",
+          "产品全名（README / pyproject / iss）"],
+         ["2", "H3D 造像数字化自动化系统", "H3D 中小型文物三维建模自动化系统",
+          "界面窗口标题（三处）"],
+         ["3", "造像类文物", "中小型文物", "领域词兜底"],
+         ["4", "彩塑造像", "彩塑文物", "<code>colour</code> 模块用途说明"],
+         ["5", "造像（米级）", "大中型文物（米级）",
+          "尺度自适应的对照表述，保留「米级」语义"],
+         ["6", "造像贴图 / 轮廓 / 体态 / 编号 / 标本",
+          "文物贴图 / 轮廓 / 形态 / 编号 / 标本", "复合词逐个人工确认"],
+         ["7", "尊像标识", "文物标识", "量词替换前必须先处理该复合词"],
+         ["8", "尊造像", "件文物", "「N 尊造像」→「N 件文物」"],
+         ["9", "尊", "件", "量词单字兜底（全项目仅作量词出现）"],
+     ]},
+    {"type": "h2", "text": "2.2 顺序陷阱：为什么必须先长后短"},
+    {"type": "body",
+     "text": "若图省事先做 <code>造像 → 文物</code>，则「造像类文物」会先变成"
+             "「文物类文物」，后面的「造像类文物 → 中小型文物」规则就再也匹配不上了。"
+             "同理「尊造像」若等「造像 → 文物」先执行，会先变成「尊文物」，"
+             "再被单字规则改成「件文物」——结果碰巧正确，但依赖顺序的巧合不可维护。"
+             "因此脚本把规则排成三级：<b>产品全名 → 领域词 → 量词</b>，"
+             "量词单字替换单独放在最后一轮。"},
+    {"type": "code",
+     "text": "# 先看清单，不落盘\n"
+             "python scripts/rename_statue_terms.py --dry-run\n"
+             "# 确认后执行\n"
+             "python scripts/rename_statue_terms.py"},
+    {"type": "h2", "text": "2.3 改动分布"},
+    {"type": "table",
+     "headers": ["范围", "文件数", "替换处数", "典型位置"],
+     "rows": [
+         ["src/（业务与界面）", "28", "88",
+          "gui/app.py 标题、gui/welcome.py 页头、report/html_export.py 报表标题、"
+          "runner/batch_processor.py 日志"],
+         ["tests/（用例与注释）", "9", "27", "test_gui_progress / test_scene1_degrade 等"],
+         ["packaging/（安装脚本）", "2", "6", "MyAppName、DefaultGroupName"],
+         ["根目录（README / spec / pyproject / configs）", "4", "8", "项目简介与打包注释"],
+         ["<b>合计</b>", "<b>43</b>", "<b>129</b>", "—"],
+     ]},
+    {"type": "h2", "text": "2.4 刻意不改的部分"},
+    {"type": "body",
+     "text": "① <code>release/</code> 下的历史发行快照（v1.1.0）保持原样，"
+             "它是已交付的既成事实，改了就与实际发出的包对不上；"
+             "② <code>.workbuddy/memory/</code> 下的工作日志与 <code>CHANGELOG.md</code> "
+             "的历史条目不改写，只在顶部追加本次变更；"
+             "③ <code>output/</code> 下既往 PDF 的内容与生成脚本不动。"},
+    {"type": "callout",
+     "text": "<b>验证方式</b>：替换后对 <code>src/ tests/ packaging/ configs/</code> "
+             "与根目录配置做一次全文检索，<code>造像</code> 与 <code>尊</code> "
+             "的残留计数必须为 <b>0</b>。"},
+
+    # ------------------------------------------------------------------
+    {"type": "h1", "text": "三、应用图标制作"},
+    {"type": "body",
+     "text": "源图是一张 1442×1462 的 JPG 插画（褐釉双耳盖壶 + 白釉开光玉壶春，"
+             "置于石座之上）。它<b>不是</b>图标规格：方形不成立、底色为白、底部带投影。"
+             "直接缩放成 ICO 会有两个可见问题。"},
+    {"type": "table",
+     "headers": ["问题", "现象", "处理"],
+     "rows": [
+         ["卡片外白底", "深色任务栏上是一块白色方块，边缘没有圆角",
+          "圆角矩形 alpha 掩膜，把卡片外的白整片切掉"],
+         ["底部投影", "缩到 16/32 px 后糊成一道灰边，主体被挤压",
+          "裁成正方形时从顶部起裁，把投影挤出画面"],
+         ["圆角锯齿", "小尺寸下边缘出现台阶",
+          "掩膜以 4× 超采样绘制后降采样，得到抗锯齿过渡"],
+     ]},
+    {"type": "h2", "text": "3.1 处理流程"},
+    {"type": "flowchart",
+     "nodes": [
+         {"id": "n1", "label": "源图 JPG 1442×1462（卡片+白底+投影）"},
+         {"id": "n2", "label": "裁正方形：以宽为边长，纵向自顶部起裁"},
+         {"id": "n3", "label": "圆角 alpha 掩膜：半径 0.20×边长，4× 超采样"},
+         {"id": "n4", "label": "保留 1 px 安全边，避开边缘压缩噪点"},
+         {"id": "n5", "label": "PNG 512（GUI logo / windowIcon）"},
+         {"id": "n6", "label": "ICO 16/24/32/48/64/128/256（exe / 安装器）"},
+     ],
+     "edges": [{"from": "n1", "to": "n2"}, {"from": "n2", "to": "n3"},
+               {"from": "n3", "to": "n4"}, {"from": "n4", "to": "n5"},
+               {"from": "n5", "to": "n6"}],
+     "caption": "图 3-1  图标生成流程"},
+    {"type": "body",
+     "text": "掩膜半径刻意取得比卡片自身圆角略大（0.20 对实测约 0.18）：宁可多切进"
+             "一点米色卡面，也不留白牙。切掉的那一窄条是接近纯白的渐变色，"
+             "视觉上不可见；留白牙则在大图标视图下非常显眼。"},
+    {"type": "h2", "text": "3.2 产出规格"},
+    {"type": "table",
+     "headers": ["文件", "规格", "体积", "用途"],
+     "rows": [
+         ["assets/h3d_icon_v3.png", "512×512 RGBA", "157,685 B",
+          "窗口图标（QIcon）、欢迎页 logo"],
+         ["assets/h3d_icon_v3.ico", "16/24/32/48/64/128/256（7 档）", "101,870 B",
+          "exe 图标、安装器 SetupIconFile"],
+     ]},
+    {"type": "code",
+     "text": "# 重新生成（源图默认取桌面上的插画）\n"
+             "python scripts/make_icon.py [源图] --out-dir assets\n"
+             "# 校验 ICO 内嵌尺寸\n"
+             "python -c \"from PIL import Image;"
+             "print(sorted(Image.open('assets/h3d_icon_v3.ico').info['sizes']))\""},
+
+    # ------------------------------------------------------------------
+    {"type": "h1", "text": "四、运行期图标与资源定位"},
+    {"type": "body",
+     "text": "exe 图标由 PyInstaller 的 <code>icon=</code> 在打包时烧进 PE 资源；"
+             "但<b>窗口图标</b>是另一回事——不调用 <code>setWindowIcon</code>，"
+             "Qt 窗口在任务栏与 Alt-Tab 里显示的是默认图标。而打包版的资源路径"
+             "与源码树完全不同，这正是最容易踩错的地方。"},
+    {"type": "table",
+     "headers": ["运行方式", "assets 实际位置", "能否用 __file__ 硬拼"],
+     "rows": [
+         ["源码树", "<code><repo>/assets/</code>",
+          "可以（层级固定）"],
+         ["打包版（onefile）", "<code><sys._MEIPASS>/assets/</code>",
+          "<b>不可以</b>——<code>__file__</code> 在临时解包目录，层级关系与源码树不同"],
+     ]},
+    {"type": "h2", "text": "4.1 查找次序"},
+    {"type": "body",
+     "text": "新增 <code>src/h3d/gui/resources.py</code>，把「找资源」收敛到一个函数，"
+             "按以下次序返回第一个存在的路径："},
+    {"type": "table",
+     "headers": ["序", "候选路径", "场景"],
+     "rows": [
+         ["1", "<code>sys._MEIPASS/assets/<name></code>", "打包版（spec 的 datas 落点）"],
+         ["2", "<code>sys._MEIPASS/<name></code>", "datas 落到包根时的兜底"],
+         ["3", "<code><repo>/assets/<name></code>", "源码树运行（开发/测试）"],
+         ["4", "<code><cwd>/assets/<name></code>", "从别处双击启动时的兜底"],
+     ]},
+    {"type": "callout",
+     "text": "<b>为什么用 QApplication 级图标</b>：逐个窗口 <code>setWindowIcon</code> "
+             "必然漏一个（欢迎页/向导/主窗口/各种 QMessageBox），"
+             "表现就是「有的窗口是新图标、有的是默认图标」。"
+             "<code>QApplication.setWindowIcon()</code> 之后所有顶层窗口自动继承，"
+             "新增界面无需再管。"},
+    {"type": "body",
+     "text": "资源缺失时 <code>asset_path()</code> 返回 <code>None</code>、"
+             "<code>apply_app_icon()</code> 返回 <code>False</code>，"
+             "程序照常启动并显示系统默认图标——图标是装饰，"
+             "不应让主界面起不来。这与「禁止静默降级」不冲突："
+             "该约定针对的是<b>业务功能</b>悄悄失效，而不是装饰资源缺失。"},
+    {"type": "h2", "text": "4.2 欢迎页页头"},
+    {"type": "body",
+     "text": "欢迎页由「标题 + 副标题」两行文字改为「左侧 84 px 应用图标 + 右侧标题与副标题」。"
+             "图标用 <code>QPixmap.scaled(..., SmoothTransformation)</code> 缩放，"
+             "取不到资源时只显示文字，布局不留空洞。"},
+
+    # ------------------------------------------------------------------
+    {"type": "h1", "text": "五、打包与安装同步"},
+    {"type": "table",
+     "headers": ["文件", "改动", "坑"],
+     "rows": [
+         ["h3d_gui.spec", "<code>icon=</code> 与 <code>datas</code> 换 v3；"
+          "hiddenimports 增 <code>h3d.gui.resources</code>",
+          "<code>resources</code> 在 <code>run_gui()</code> 内是函数级 import，"
+          "显式登记更稳妥（与 r6.2 的 <code>core.lockfile</code> 同类）"],
+         ["packaging/H3D_installer.iss", "<code>SetupIconFile</code> 换 v3；补 UTF-8 BOM",
+          "该文件原为<b>无 BOM 的 UTF-8</b>，而 Inno 会把无 BOM 文件按 ANSI（GBK）解析，"
+          "中文 AppName 会乱码"],
+         ["packaging/H3D_installer_v1.1.0.iss", "<code>SetupIconFile</code> 换 v3",
+          "已有 BOM，用<b>二进制读改写</b>以免文本模式把 BOM 吃掉"],
+         ["README.md / pyproject.toml", "简介改为中小型器物表述",
+          "标题改了但简介没改，会出现「标题说小件、正文说造像」"],
+         ["CHANGELOG.md", "追加 r6.5 条目",
+          "历史条目不改写"],
+     ]},
+    {"type": "callout",
+     "text": "<b>当前状态</b>：源码已改完并验证，但 <code>H3D.exe</code> / 安装包 / 发行 zip "
+             "仍是 r6.2 的旧图标与旧标题。<b>必须重打包才会生效</b>——"
+             "exe 图标是编译期嵌进 PE 资源的，改 assets 不会影响已有 exe。"},
+
+    # ------------------------------------------------------------------
+    {"type": "h1", "text": "六、验证与回归"},
+    {"type": "table",
+     "headers": ["验证项", "方法", "结果"],
+     "rows": [
+         ["术语残留", "对 src/tests/packaging/configs 与根配置全文检索「造像」「尊」", "0 处"],
+         ["窗口标题（三处）", "实例化 WelcomeWindow / MainWindow / WizardWindow",
+          "均为「H3D 中小型文物三维建模自动化系统」"],
+         ["应用图标", "<code>app.windowIcon().isNull()</code>", "非空，512×512"],
+         ["ICO 内嵌尺寸", "Pillow 读取 <code>info['sizes']</code>",
+          "16/24/32/48/64/128/256 共 7 档"],
+         ["小尺寸可辨识度", "16 / 32 px 放大 6 倍目视",
+          "16 px 仍可辨认两件器物轮廓，无白底方块"],
+         ["欢迎页渲染", "windows 平台 <code>grab()</code> 截图",
+          "图标与标题正常，中文无豆腐块"],
+         ["全量测试", "<code>python -m pytest tests -q</code>", "602 项全通过"],
+     ]},
+    {"type": "body",
+     "text": "回归的重点不在「新功能能否用」，而在<b>「改名有没有改坏东西」</b>："
+             "日志解析、报表模板与测试断言都含中文串，若只改了一侧就会失配。"
+             "本次 602 项全通过，说明 <code>logparse</code> 的关键行正则、"
+             "报表标题断言与 CLI 输出断言都已同步。"},
+
+    # ------------------------------------------------------------------
+    {"type": "h1", "text": "七、遗留事项与下一步"},
+    {"type": "table",
+     "headers": ["事项", "说明", "优先级"],
+     "rows": [
+         ["重打包 exe / 安装包 / zip", "图标与标题才会在打包版生效", "高（待确认）"],
+         ["旧图标文件", "<code>h3d_icon*.ico/.png</code>（v1/v2）保留未删，作回滚备胎", "低"],
+         ["PDF 命名前缀", "后续交付 PDF 统一用「中小型文物三维建模自动化系统_…」，"
+          "不再用旧前缀", "中"],
+         ["发行目录 README/VERSION", "重编时须在 ISCC <b>之前</b>改，否则装出来还是旧说明", "中"],
+         ["尺度默认值", "中小型器物（5~30 cm）用 scale 自适应即可，"
+          "<code>reference_diag=3.7</code> 保持不变", "已确认"],
+     ]},
+    {"type": "body",
+     "text": "下一步建议：先重打包，再用一套真实小件文物照片跑一遍 S1→M6，"
+             "确认图标、标题、报表口径三处一致，然后按发行流程出 v1.2.0。"},
+]
+
+
+with open("output/_build/content_rename_icon.json", "w", encoding="utf-8") as f:
+    json.dump(content, f, ensure_ascii=False, indent=1)
+print("blocks:", len(content))

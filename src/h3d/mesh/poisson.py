@@ -20,7 +20,8 @@ from h3d.core import get_logger
 log = get_logger("mesh.poisson")
 
 
-def poisson_reconstruct(pcd, depth: int = 8, density_ratio: float = 0.05):
+def poisson_reconstruct(pcd, depth: int = 8, density_ratio: float = 0.05,
+                        n_threads: int = 1):
     """泊松表面重建。
 
     参数
@@ -28,15 +29,31 @@ def poisson_reconstruct(pcd, depth: int = 8, density_ratio: float = 0.05):
     pcd:           带一致法线的点云（Open3D PointCloud）。
     depth:         八叉树深度（细节与性能的平衡，设计书默认 8）。
     density_ratio: 密度裁剪分位数（0~1；0 表示不裁剪）。
+    n_threads:     求解线程数，**默认 1 = 可复现**。
 
     返回
     ----
     清理后的水密表面网格（TriangleMesh，已重算法线）。
+
+    可复现性（2026-10-24 实测，与 COLMAP 多线程那条同源问题）
+    --------------------------------------------------------
+    Open3D 的 ``create_from_point_cloud_poisson`` 在多线程下**不是逐位可复现**：
+    同一份点云连跑三次，顶点/面数相同（10244 / 20484）但坐标与面表哈希全不同
+    （80492b8f / 812b5fa5 / c9602497）。这不是精度噪声，而是并行归约顺序不同
+    导致线性方程组解在末位分叉，再被三角化放大成不同的面表。
+
+    后果有两层：① 论文的「同输入同输出」无法成立；② M4 的跨件图集复用靠
+    几何指纹判等，网格逐位不同就永远不命中——打包版端到端实测正是卡在这里
+    （M1/M2 逐字节一致，M3 之后两件的 30_dense 面数 19830 vs 19828）。
+
+    实测 ``n_threads=1`` 两次运行哈希完全一致（00989fb5 / 515caafe）。因此默认
+    单线程，把「可复现」放在「快一点」之前；确需速度可用 ``mesh.poisson_threads``
+    显式调大，并在报表里接受不可复现的后果。
     """
     import numpy as np
 
     mesh, densities = _o3d().geometry.TriangleMesh.create_from_point_cloud_poisson(
-        pcd, depth=int(depth))
+        pcd, depth=int(depth), n_threads=int(n_threads))
 
     # 密度裁剪：剔除低采样密度区域的漂浮面（设计书 TC-303）
     if density_ratio and density_ratio > 0 and len(densities):

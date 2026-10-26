@@ -1,0 +1,106 @@
+{
+  "run_id": "20261017-run-gwyu",
+  "created_at": "2026-10-17T21:30:30",
+  "config_sha256": "9b50491b75e3a088add5954f799c2ff7afaace2065c94d3cec91d7e86c2ec653",
+  "stages": {
+    "probe/M1": {
+      "status": "done",
+      "outputs": [
+        "E:\\h3d_lablab\\output\\_build\\o3d_probe\\10_clean\\probe\\probe_s01.ply"
+      ],
+      "elapsed_s": 0.012,
+      "dense_novel_ratio": null,
+      "n_scans": 1,
+      "points_in": 200,
+      "points_out": 188,
+      "scale_factor": 0.462637,
+      "scale_diag_m": 1.711759
+    },
+    "probe/M2": {
+      "status": "done",
+      "outputs": [],
+      "elapsed_s": 0.004,
+      "n_scans": 1,
+      "registered": false
+    },
+    "probe/M3": {
+      "status": "done",
+      "outputs": [
+        "E:\\h3d_lablab\\output\\_build\\o3d_probe\\30_dense\\probe\\probe.ply"
+      ],
+      "elapsed_s": 0.224,
+      "n_vertices": 3246,
+      "n_triangles": 5870,
+      "watertight": false,
+      "n_input_points": 188
+    },
+    "probe/M4": {
+      "status": "done",
+      "outputs": [
+        "E:\\h3d_lablab\\output\\_build\\o3d_probe\\50_tex\\probe\\probe_L1.ply",
+        "E:\\h3d_lablab\\output\\_build\\o3d_probe\\50_tex\\probe\\probe_L1.obj",
+        "E:\\h3d_lablab\\output\\_build\\o3d_probe\\50_tex\\probe\\probe_L1.glb",
+        "E:\\h3d_lablab\\output\\_build\\o3d_probe\\50_tex\\probe\\probe_L0.3.ply",
+        "E:\\h3d_lablab\\output\\_build\\o3d_probe\\50_tex\\probe\\probe_L0.3.obj",
+        "E:\\h3d_lablab\\output\\_build\\o3d_probe\\50_tex\\probe\\probe_L0.3.glb",
+        "E:\\h3d_lablab\\output\\_build\\o3d_probe\\50_tex\\probe\\probe_L0.1.ply",
+        "E:\\h3d_lablab\\output\\_build\\o3d_probe\\50_tex\\probe\\probe_L0.1.obj",
+        "E:\\h3d_lablab\\output\\_build\\o3d_probe\\50_tex\\probe\\probe_L0.1.glb"
+      ],
+      "elapsed_s": 0.357,
+      "n_vertices": 3246,
+      "n_triangles": 5870,
+      "colored": true,
+      "uv_baked": false,
+      "paint_mode": "vertex",
+      "formats": [
+        "ply",
+        "obj",
+        "glb"
+      ],
+      "lod_levels": [
+        1.0,
+        0.3,
+        0.1
+      ],
+      "n_lods": 3,
+      "n_outputs": 9
+    },
+    "probe/M5": {
+      "status": "done",
+      "outputs": [
+        "E:\\h3d_lablab\\output\\_build\\o3d_probe\\60_qc\\probe\\qc_metrics.json",
+        "E:\\h3d_lablab\\output\\_build\\o3d_probe\\70_report\\probe\\accuracy.csv"
+      ],
+      "elapsed_s": 0.068,
+      "coverage": 1.0,
+      "rmse_mm": 79.8577,
+      "boundary_ratio": 0.0225,
+      "mps_m": 0.103919,
+      "texture_available": false,
+      "texture_sharpness": null,
+      "texture_seam": null,
+      "texture_coverage": null,
+      "texture_ok": false
+    },
+    "probe/M6": {
+      "status": "done",
+      "outputs": [
+        "E:\\h3d_lablab\\output\\_build\\o3d_probe\\80_export\\probe\\probe.ply",
+        "E:\\h3d_lablab\\output\\_build\\o3d_probe\\90_meta\\probe_meta.json",
+        "E:\\h3d_lablab\\output\\_build\\o3d_probe\\90_meta\\delivery_manifest.json",
+        "E:\\h3d_lablab\\output\\_build\\o3d_probe\\80_export\\probe\\accuracy.csv"
+      ],
+      "elapsed_s": 0.022,
+      "formats": [
+        "ply"
+      ],
+      "n_models": 1,
+      "meta": "probe_meta.json",
+      "delivery_manifest": "delivery_manifest.json"
+    }
+  },
+  "software": {
+    "numpy": "2.5.2"
+  }
+}

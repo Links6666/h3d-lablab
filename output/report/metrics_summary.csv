@@ -1,3 +1,6 @@
 ﻿文物编号,阶段,状态,耗时(s),产物路径,关键指标
-rock001,M1,done,1.2,10_clean/rock001_s01.ply,points_out=500
-rock001,M2,done,2.5,20_registered/rock001_s02.ply,fitness=0.95; inlier_rmse=0.003
+relic_001,S1,done,40.894,D:\h3d_relic_test\90_meta\relic_001_capture_meta.json,"n_cameras=1; n_registered=30; n_photos=30; capture_meta=D:\h3d_relic_test\90_meta\relic_001_capture_meta.json; calibrated={'peak_threshold': 0.002, 'matcher': 'exhaustive', 'n_photos': 30, 'mean_grad_var': 4.362, 'size_median': 3840799, 'calibrated': True}; incremental={'incremental': False}"
+relic_001,M1,done,2.994,D:\h3d_relic_test\10_clean\relic_001\relic_001_s01.ply,dense_novel_ratio=None; n_scans=1; points_in=67162; points_out=116
+relic_001,M2,done,0.004,,n_scans=1; registered=False
+relic_001,M3,done,0.219,D:\h3d_relic_test\30_dense\relic_001\relic_001.ply,n_vertices=1931; n_triangles=3687; watertight=False; n_input_points=116
+relic_001,M4,fail,,,

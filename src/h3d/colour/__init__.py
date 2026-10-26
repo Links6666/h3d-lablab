@@ -2,7 +2,7 @@
 
 设计依据：
     《设计书》§20 / §39 —— 基于 CIEDE2000 评估建模纹理与实采色卡色彩保真度，
-        为彩塑造像的色彩管理提供量化依据；
+        为彩塑文物的色彩管理提供量化依据；
     《软著方案》2.4 —— colour 后端 colour-science（colourchecker=ColorChecker24，
         illuminant=D65，delta_e_method=CIE2000）。
 

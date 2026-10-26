@@ -79,6 +79,15 @@ def run(mesh, ref_pcd, cfg: TextureConfig, out_dir: str, item_id: str):
             colored = paint_vertex_colors(mesh, ref_pcd)
         elif cfg.paint_mode == "vertex":
             log.info("参考点云无颜色：降级输出几何模型并标注（软著方案 2.4）")
+        if not colored:
+            # 实机问题（2026-10-18）：无颜色数据时网格顶点色是**全 0**，导出后
+            # OBJ 里写成 `v x y z 0 0 0`——在查看器里整件器物发黑，看着像"建模
+            # 失败"。无色彩来源时统一刷中性石灰灰，保证"几何模型"可正常查看。
+            try:
+                mesh.paint_uniform_color([0.72, 0.70, 0.66])
+                log.info("无色彩来源：模型以中性灰交付（几何模型，非纹理缺失）")
+            except Exception as exc:  # noqa: BLE001
+                log.warning("中性灰着色失败（忽略）：%s", exc)
 
         # 2) LOD 多分辨率 + 多格式导出
         for lod_tag, lod_mesh in generate_lods(mesh, cfg.lod_levels, cfg.max_vertices):
@@ -91,6 +100,8 @@ def run(mesh, ref_pcd, cfg: TextureConfig, out_dir: str, item_id: str):
         "colored": bool(colored),
         "uv_baked": bool(uv_baked),
         "paint_mode": cfg.paint_mode,
+        # 无色彩来源时以中性灰交付（几何模型），供报表/界面区分
+        "default_gray": bool(not colored),
         "formats": list(cfg.export_formats),
         "lod_levels": list(cfg.lod_levels),
         "n_lods": len(cfg.lod_levels),
@@ -121,8 +132,9 @@ def _run_uv_path(mesh, ref_pcd, cfg, out_dir: str, item_id: str,
                              samples_per_tri=8)
         attach_texture(new_mesh, uv, faces, image)
         # 导出带纹理模型（obj/glb），PLY 由顶点色回退路径补齐
+        # uv/image 必须传入：GLB 的纹理只能由 trimesh 写出（Open3D 会静默丢图）
         uv_outputs = export_textured(new_mesh, out_dir, item_id, "L1.0",
-                                     ["obj", "glb"])
+                                     ["obj", "glb"], uv=uv, image=image)
         outputs.extend(uv_outputs)
         # 顶点色 PLY（回退格式，保证交付包完整性）
         if "ply" in cfg.export_formats:

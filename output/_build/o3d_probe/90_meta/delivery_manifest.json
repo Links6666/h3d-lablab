@@ -1,0 +1,78 @@
+{
+  "deliveries": [
+    {
+      "item_id": "probe",
+      "status": "published",
+      "models": [
+        "E:\\h3d_lablab\\output\\_build\\o3d_probe\\80_export\\probe\\probe.ply"
+      ],
+      "qc_report": "E:\\h3d_lablab\\output\\_build\\o3d_probe\\80_export\\probe\\accuracy.csv",
+      "thesis_table": "E:\\h3d_lablab\\output\\_build\\o3d_probe\\80_export\\probe\\probe_thesis_table.csv",
+      "qc_status": "done",
+      "meta": "E:\\h3d_lablab\\output\\_build\\o3d_probe\\90_meta\\probe_meta.json",
+      "config_hash": "fc7948b7b71ef3b2977552fc75865093ca33d29739742d9a79ba24f2c2600288"
+    },
+    {
+      "item_id": "probe",
+      "status": "published",
+      "models": [
+        "E:\\h3d_lablab\\output\\_build\\o3d_probe\\80_export\\probe\\probe.ply"
+      ],
+      "qc_report": "E:\\h3d_lablab\\output\\_build\\o3d_probe\\80_export\\probe\\accuracy.csv",
+      "thesis_table": "E:\\h3d_lablab\\output\\_build\\o3d_probe\\80_export\\probe\\probe_thesis_table.csv",
+      "qc_status": "done",
+      "meta": "E:\\h3d_lablab\\output\\_build\\o3d_probe\\90_meta\\probe_meta.json",
+      "config_hash": "fc7948b7b71ef3b2977552fc75865093ca33d29739742d9a79ba24f2c2600288"
+    },
+    {
+      "item_id": "probe",
+      "status": "published",
+      "models": [
+        "E:\\h3d_lablab\\output\\_build\\o3d_probe\\80_export\\probe\\probe.ply"
+      ],
+      "qc_report": "E:\\h3d_lablab\\output\\_build\\o3d_probe\\80_export\\probe\\accuracy.csv",
+      "thesis_table": "E:\\h3d_lablab\\output\\_build\\o3d_probe\\80_export\\probe\\probe_thesis_table.csv",
+      "qc_status": "done",
+      "meta": "E:\\h3d_lablab\\output\\_build\\o3d_probe\\90_meta\\probe_meta.json",
+      "config_hash": "fc7948b7b71ef3b2977552fc75865093ca33d29739742d9a79ba24f2c2600288"
+    },
+    {
+      "item_id": "probe",
+      "status": "published",
+      "models": [
+        "E:\\h3d_lablab\\output\\_build\\o3d_probe\\80_export\\probe\\probe.ply"
+      ],
+      "qc_report": "E:\\h3d_lablab\\output\\_build\\o3d_probe\\80_export\\probe\\accuracy.csv",
+      "thesis_table": "E:\\h3d_lablab\\output\\_build\\o3d_probe\\80_export\\probe\\probe_thesis_table.csv",
+      "qc_status": "done",
+      "meta": "E:\\h3d_lablab\\output\\_build\\o3d_probe\\90_meta\\probe_meta.json",
+      "config_hash": "fc7948b7b71ef3b2977552fc75865093ca33d29739742d9a79ba24f2c2600288"
+    },
+    {
+      "item_id": "probe",
+      "status": "published",
+      "models": [
+        "E:\\h3d_lablab\\output\\_build\\o3d_probe\\80_export\\probe\\probe.ply"
+      ],
+      "qc_report": "E:\\h3d_lablab\\output\\_build\\o3d_probe\\80_export\\probe\\accuracy.csv",
+      "thesis_table": "E:\\h3d_lablab\\output\\_build\\o3d_probe\\80_export\\probe\\probe_thesis_table.csv",
+      "qc_status": "done",
+      "meta": "E:\\h3d_lablab\\output\\_build\\o3d_probe\\90_meta\\probe_meta.json",
+      "config_hash": "fc7948b7b71ef3b2977552fc75865093ca33d29739742d9a79ba24f2c2600288"
+    },
+    {
+      "item_id": "probe",
+      "status": "published",
+      "models": [
+        "E:\\h3d_lablab\\output\\_build\\o3d_probe\\80_export\\probe\\probe.ply"
+      ],
+      "qc_report": "E:\\h3d_lablab\\output\\_build\\o3d_probe\\80_export\\probe\\accuracy.csv",
+      "thesis_table": "E:\\h3d_lablab\\output\\_build\\o3d_probe\\80_export\\probe\\probe_thesis_table.csv",
+      "qc_status": "done",
+      "meta": "E:\\h3d_lablab\\output\\_build\\o3d_probe\\90_meta\\probe_meta.json",
+      "config_hash": "fc7948b7b71ef3b2977552fc75865093ca33d29739742d9a79ba24f2c2600288"
+    }
+  ],
+  "n_items": 6,
+  "n_published": 6
+}

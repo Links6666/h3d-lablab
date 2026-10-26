@@ -1,0 +1,37 @@
+[
+ {
+  "id": "C5-empty",
+  "charter": "report",
+  "severity": "pass",
+  "expected": "缺值一律 N/A，绝不出现 nan/inf",
+  "actual": "files=['metrics_summary.csv', 'report.html'] nan_in_html=False"
+ },
+ {
+  "id": "C5-all_fail",
+  "charter": "report",
+  "severity": "pass",
+  "expected": "缺值一律 N/A，绝不出现 nan/inf",
+  "actual": "files=['metrics_summary.csv', 'stage_timings.png', 'report.html'] nan_in_html=False"
+ },
+ {
+  "id": "C5-weird",
+  "charter": "report",
+  "severity": "pass",
+  "expected": "缺值一律 N/A，绝不出现 nan/inf",
+  "actual": "files=['metrics_summary.csv', 'stage_timings.png', 'report.html'] nan_in_html=False"
+ },
+ {
+  "id": "C5-unknown_status",
+  "charter": "report",
+  "severity": "pass",
+  "expected": "缺值一律 N/A，绝不出现 nan/inf",
+  "actual": "files=['metrics_summary.csv', 'report.html'] nan_in_html=False"
+ },
+ {
+  "id": "C5-missing_keys",
+  "charter": "report",
+  "severity": "pass",
+  "expected": "缺值一律 N/A，绝不出现 nan/inf",
+  "actual": "files=['metrics_summary.csv', 'report.html'] nan_in_html=False"
+ }
+]

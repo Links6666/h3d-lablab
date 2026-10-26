@@ -22,7 +22,7 @@ from __future__ import annotations
 import os
 from typing import Any, Optional
 
-from h3d.core import ReportConfig, RunManifest, get_logger
+from h3d.core import ExportError, ReportConfig, RunManifest, get_logger
 
 from .csv_export import export_failures_csv, export_manifest_csv, write_csv
 from .plot_gen import plot_bar, plot_metric_series, plot_stage_timings
@@ -42,7 +42,7 @@ def generate(
     ----
     manifest:   RunManifest 溯源元数据（M0 编排后落盘的 run_manifest.json）。
     failures:   失败清单（failures.csv 的数据源），可为 None 表示无失败。
-    report_cfg: ReportConfig；默认启用并输出到 ``output/report``。
+    report_cfg: ReportConfig；默认启用并输出到 ``report``（相对项目根）。
 
     返回
     ----
@@ -57,7 +57,6 @@ def generate(
     try:
         os.makedirs(out_dir, exist_ok=True)
     except OSError as exc:
-        from h3d.core import ExportError
         raise ExportError(f"报表目录创建失败: {out_dir}") from exc
 
     outputs: list[str] = []
@@ -69,14 +68,24 @@ def generate(
             outputs.append(
                 export_failures_csv(failures, os.path.join(out_dir, "failures.csv")))
     if "png" in report_cfg.formats:
-        chart_png = plot_stage_timings(manifest, os.path.join(out_dir, "stage_timings.png"))
-        outputs.append(chart_png)
+        # 图表失败不应中断报表（实机 E601）：CSV/HTML 仍要交付。
+        try:
+            chart_png = plot_stage_timings(
+                manifest, os.path.join(out_dir, "stage_timings.png"))
+        except ExportError as exc:
+            log.warning("阶段耗时图生成失败，已跳过：%s", exc)
+            chart_png = None
+        if chart_png:
+            outputs.append(chart_png)
     if "html" in report_cfg.formats:
-        outputs.append(
-            generate_html(manifest, failures,
-                          os.path.join(out_dir, "report.html"),
-                          chart_png=chart_png,
-                          project=report_cfg.project_name))
+        try:
+            outputs.append(
+                generate_html(manifest, failures,
+                              os.path.join(out_dir, "report.html"),
+                              chart_png=chart_png,
+                              project=report_cfg.project_name))
+        except Exception as exc:  # noqa: BLE001 - HTML 失败不阻断其余产物
+            log.warning("HTML 报表生成失败，已跳过：%s", exc)
 
     log.info("报表生成完成：%d 个文件 -> %s", len(outputs), out_dir)
     return outputs

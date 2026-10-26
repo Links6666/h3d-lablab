@@ -1,0 +1,12 @@
+project:
+  name: probe
+  raw_dir: E:/h3d_lablab/output/_build/o3d_probe/00_raw
+  formats:
+  - ply
+sfm_solve:
+  enabled: false
+report:
+  enabled: false
+publish:
+  formats:
+  - ply

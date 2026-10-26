@@ -53,7 +53,7 @@ def _make_bumpy_sphere(n=2000, seed=0, noise=0.0, colored=True):
 
 
 def _make_two_scan_project(tmp_path, item_id, trans=(0.10, 0.0, 0.0)):
-    """为某个造像生成两个有重叠的 PLY 站点（输入到 00_raw/<item_id>/）。
+    """为某个文物生成两个有重叠的 PLY 站点（输入到 00_raw/<item_id>/）。
 
     两站用不同随机采样（seed 1 / 5）的同一形状——模拟真实多视角扫描同一物体：
     几何相似但每站点位独立采样，配准后两站点交织而不完全重合（MPS 不退化，
@@ -119,9 +119,12 @@ class TestEndToEndPipeline:
         # M1 产出物
         clean_dir = tmp_path / "10_clean" / "rock001"
         assert (clean_dir / "rock001_s01.ply").exists()
-        # M2 跳过（< 2 站）
+        # M2 单站：无需配准，但**必须落盘一个恒等变换产物**。
+        # 旧实现让 20_registered 保持空目录 → 下游 M5 拿不到参考点云，
+        # 抛 [E100] 参考点云为空，整件"几何合格却判失败"（2026-10-18 实机）。
         reg_dir = tmp_path / "20_registered" / "rock001"
-        assert reg_dir.exists() and not any(reg_dir.iterdir())
+        planted = sorted(p.name for p in reg_dir.iterdir()) if reg_dir.exists() else []
+        assert planted == ["rock001_s01.ply"], f"单站 M2 产物异常: {planted}"
 
         # manifest 记录
         m = RunManifest.load(cfg.runner.manifest)
@@ -151,11 +154,11 @@ class TestEndToEndPipeline:
         assert m2["fitness"] >= 0.3
         # 末站 fitness 写到顶层
         assert m2["inlier_rmse"] >= 0.0
-        # 1 尊造像 × 6 阶段（M1~M6）= 6 个阶段条目（M6 发布收官）
+        # 1 件文物 × 6 阶段（M1~M6）= 6 个阶段条目（M6 发布收官）
         assert len(m.stages) == 6
 
     def test_multiple_items_with_one_failing(self, tmp_path):
-        """两尊造像：rock001 正常；rock002 故意构造为单点云（只 1 站）+M2 应跳过。"""
+        """两件文物：rock001 正常；rock002 故意构造为单点云（只 1 站）+M2 应跳过。"""
         _make_two_scan_project(tmp_path, "rock001")
         # rock002：只有一个站
         raw2 = tmp_path / "00_raw" / "rock002"
@@ -206,7 +209,7 @@ class TestEndToEndPipeline:
             "rock001/M4", "rock001/M5", "rock001/M6"]
 
     def test_m3_single_scan_closure(self, tmp_path):
-        """单站造像：M2 跳过配准，M3 仍能用 M1 产物重建网格。"""
+        """单站文物：M2 跳过配准，M3 仍能用 M1 产物重建网格。"""
         _make_two_scan_project(tmp_path, "rock001")
         (tmp_path / "00_raw" / "rock001" / "scan_s02.ply").unlink()
         cfg = _make_cfg(tmp_path)
@@ -356,7 +359,7 @@ class TestEndToEndPipeline:
     def test_m5_quality_gate_isolates_bad_item(self, tmp_path):
         """质检不达标 -> QualityGateError(E500) -> 失败隔离（确定性 mock 验证）。
 
-        通过注入自定义阶段确定性构造：r2 的 M5 抛 E500，验证该尊被隔离
+        通过注入自定义阶段确定性构造：r2 的 M5 抛 E500，验证该件被隔离
         （failed），r1 正常完成（done），失败清单字段齐全。
         """
         from h3d.core import QualityGateError
@@ -392,3 +395,48 @@ class TestEndToEndPipeline:
         assert f["item_id"] == "r2" and f["stage"] == "M5"
         assert f["error_type"] == "QualityGateError"
         assert "质检不达标" in f["message"]
+
+
+class TestThesisTable:
+    def test_export(self, tmp_path):
+        """论文表格导出（含 M5/X1/X2 指标列）。"""
+        import json, os
+        meta_dir = os.path.join(str(tmp_path), "90_meta")
+        os.makedirs(meta_dir, exist_ok=True)
+        manifest = {"run_id": "t1", "stages": {
+            "r1/S1": {"status": "done", "n_registered": 18, "n_photos": 60},
+            "r1/M5": {"status": "done", "coverage": 0.9, "rmse_mm": 4.2,
+                      "texture_sharpness": 100.0, "texture_seam": 3.0},
+            "r1/X1": {"status": "done", "max_change_mm": 12.5,
+                      "changed_ratio": 0.05},
+            "r1/X2": {"status": "done", "mean_de": 3.2},
+        }}
+        json.dump(manifest, open(os.path.join(meta_dir,
+                                              "run_manifest.json"), "w",
+                                 encoding="utf-8"))
+        from h3d.thesis_tables import export_thesis_table
+        out = export_thesis_table(str(tmp_path))
+        assert os.path.exists(out)
+        txt = open(out, encoding="utf-8-sig").read()
+        assert "r1" in txt and "30%" in txt and "90.0%" in txt
+        assert "12.50" in txt and "3.20" in txt and "通过" in txt
+
+
+class TestThesisManifestLocate:
+    """回归：论文表格须兼容 GUI（output/）与 CLI（90_meta/）两种 manifest 位置。"""
+
+    def test_finds_gui_layout(self, tmp_path):
+        import json, os
+        from h3d.thesis_tables import export_thesis_table
+        out_dir = os.path.join(str(tmp_path), "output")
+        os.makedirs(out_dir)
+        json.dump({"stages": {"r1/M5": {"status": "done", "coverage": 1.0,
+                                        "rmse_mm": 3.0}}},
+                  open(os.path.join(out_dir, "run_manifest.json"), "w",
+                       encoding="utf-8"))
+        out = export_thesis_table(str(tmp_path))
+        assert out and os.path.exists(out)
+
+    def test_missing_manifest_returns_empty(self, tmp_path):
+        from h3d.thesis_tables import export_thesis_table
+        assert export_thesis_table(str(tmp_path)) == ""

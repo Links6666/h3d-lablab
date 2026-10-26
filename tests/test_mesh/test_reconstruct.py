@@ -48,6 +48,26 @@ class TestPoisson:
         cropped = poisson_reconstruct(pcd, depth=8, density_ratio=0.5)
         assert len(cropped.vertices) < len(full.vertices)
 
+    def test_reproducible_with_default_threads(self):
+        """默认单线程必须**逐位可复现**（2026-10-24 实测多线程下不可复现）。
+
+        这条不是「不报错」类断言，而是比较两次运行的顶点与面表哈希：
+        Open3D 多线程泊松对同一份点云会给出面数相同但面表不同的结果，
+        下游（M4 图集复用按几何指纹判等、论文复现）都会因此失效。
+        """
+        import hashlib
+
+        def digest(m):
+            v = np.asarray(m.vertices).astype(np.float32)
+            f = np.asarray(m.triangles).astype(np.int32)
+            return (len(v), len(f),
+                    hashlib.sha1(v.tobytes()).hexdigest(),
+                    hashlib.sha1(f.tobytes()).hexdigest())
+
+        pcd = _sphere_pcd(n=1500)
+        assert digest(poisson_reconstruct(pcd, depth=7)) == \
+            digest(poisson_reconstruct(pcd, depth=7))
+
     def test_depth_changes_detail(self):
         """depth 越大细节越多（面数更多）。"""
         pcd = _sphere_pcd(n=3000)

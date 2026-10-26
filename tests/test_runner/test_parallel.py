@@ -76,7 +76,7 @@ class TestParallelScheduling:
         assert "boom" in m.stages["r1/M2"].get("reason", "")  # record_fail 存 reason
 
     def test_single_task_falls_back_to_serial(self, tmp_path):
-        """单尊任务：即使 workers>1 也走串行（len(tasks)<=1 不建池）。"""
+        """单件任务：即使 workers>1 也走串行（len(tasks)<=1 不建池）。"""
         cfg = _make_cfg(tmp_path, workers=2)
         tasks = [Task(item_id="only")]
         stages = {"M1": _ok_m1}

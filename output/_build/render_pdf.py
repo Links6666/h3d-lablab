@@ -95,17 +95,65 @@ STYLES = {
 }
 
 
+def _iter_strings(obj):
+    """递归取出 content 里的所有字符串（用于缺字预检）。"""
+    if isinstance(obj, str):
+        yield obj
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            yield from _iter_strings(v)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            yield from _iter_strings(v)
+
+
+_CMAP_CACHE: set[int] | None = None
+
+
+def missing_glyphs(content) -> list[str]:
+    """返回正文字体（微软雅黑）里没有的字符——它们会被渲染成方框。
+
+    2026-10-18：审计报告里用了「↔」（U+2194）和「▶」（U+25B6），msyh.ttc
+    两者都没有，PDF 里直接出现方框豆腐块，而按「\\u25a1 计数」的常规校验
+    查不出来（那是另一个码位）。故在渲染前做一次真实 cmap 覆盖检查。
+    """
+    global _CMAP_CACHE
+    if _CMAP_CACHE is None:
+        try:
+            from fontTools.ttLib import TTCollection
+            _CMAP_CACHE = set(TTCollection(FONT_REG).fonts[0].getBestCmap())
+        except Exception:  # noqa: BLE001 - 预检失败不影响出 PDF
+            _CMAP_CACHE = set()
+    if not _CMAP_CACHE:
+        return []
+    chars = {c for s in _iter_strings(content) for c in s}
+    miss = sorted({c for c in chars
+                   if ord(c) > 127 and ord(c) not in _CMAP_CACHE})
+    return miss
+
+
 def _esc(t: str) -> str:
     return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _inline(t: str) -> str:
-    """保留 <b> 标签，其余 HTML 实体转义。"""
-    parts = re.split(r"(<b>|</b>)", t)
+    """行内标记：保留 <b> / <code>，其余 HTML 实体转义。
+
+    2026-10-18：新增 <code> 支持。此前 <code> 会被当作普通文本转义，
+    PDF 里直接印出「<code>xxx</code>」字面量——技术文档里非常刺眼。
+    这里不做等宽字体替换：全文用微软雅黑（CJK），换成 Courier 会让
+    含中文的代码片段（如「造像 → 文物」）出现豆腐块。
+    改以「深蓝字 + 浅灰底」区分行内代码，中英文都安全。
+    """
+    parts = re.split(r"(<b>|</b>|<code>|</code>)", t)
     out = []
     for p in parts:
         if p in ("<b>", "</b>"):
             out.append(p)
+        elif p == "<code>":
+            out.append('<font color="#1f3a5f" backColor="#eef1f5">')
+        elif p == "</code>":
+            out.append("</font>")
         else:
             out.append(_esc(p))
     return "".join(out)
@@ -196,8 +244,13 @@ class Flowchart(Flowable):
         canvas.setLineWidth(1.1)
         for i in range(len(centers) - 1):
             (x1, y1), (x2, y2) = centers[i], centers[i + 1]
-            canvas.line(x1, y1, x2, y2)
-            self._arrow(canvas, x2, y2, x1, y1)
+            # 2026-10-18：原实现从**框心**连到**框心**，竖线穿过节点文字，
+            # 看上去像划掉了每一行标签。改为「上框下沿 → 下框上沿」，
+            # 箭头 tip 落在下框上沿（_arrow 的 ang 由 tail→tip 计算）。
+            top_edge = y1 - self.box_h / 2.0
+            bot_edge = y2 + self.box_h / 2.0
+            canvas.line(x1, top_edge, x1, bot_edge)
+            self._arrow(canvas, x1, bot_edge, x1, top_edge)
 
     def _draw_box(self, canvas, x, y, w, h, label, shape):
         canvas.saveState()
@@ -256,20 +309,25 @@ class _Doc(BaseDocTemplate):
             self._cur_heading = text
 
 
-def build_doc(filename, header, footer):
+def build_doc(filename, header, footer, side=None):
     doc = _Doc(filename, header, footer, pagesize=A4,
                leftMargin=2.0 * cm, rightMargin=2.0 * cm,
                topMargin=2.4 * cm, bottomMargin=2.0 * cm,
                title=header, author="文保数字化研发组")
     frame = Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height,
                   id="main")
+    side_text = side or ""
 
     def on_page(canvas, d):
         canvas.saveState()
         canvas.setFont("CJK", 8)
         canvas.setFillColor(GREY)
         canvas.drawString(2.0 * cm, A4[1] - 1.4 * cm, d.header)
-        canvas.drawRightString(A4[0] - 2.0 * cm, A4[1] - 1.4 * cm, d._cur_heading)
+        # 右侧固定显示日期：原先用 d._cur_heading（当前小节标题），但 multiBuild
+        # 会渲染两遍，第二遍开始时该变量还停留在**上一遍最后一个小节**，
+        # 导致每页页眉都显示「8.3 后续方向」这类错位文本。
+        canvas.drawRightString(A4[0] - 2.0 * cm, A4[1] - 1.4 * cm,
+                               side_text)
         canvas.setStrokeColor(BORDER)
         canvas.setLineWidth(0.4)
         canvas.line(2.0 * cm, A4[1] - 1.6 * cm, A4[0] - 2.0 * cm, A4[1] - 1.6 * cm)
@@ -383,7 +441,15 @@ def render(content: list[dict]) -> list:
         elif typ == "callout":
             flow.append(_callout(block))
         elif typ == "flowchart":
-            fc = Flowchart(block.get("nodes", []), block.get("edges", []),
+            nodes = block.get("nodes") or []
+            if not nodes:
+                # 2026-10-18：曾出现内容脚本误用 {"type":"flowchart","text":...}
+                # 的情况——Flowchart 收到空 nodes，wrap() 算出负高度，
+                # 渲染出来是一行与前后正文重叠的乱码。缺 nodes 直接跳过，
+                # 并在 stderr 留痕，避免"看起来像渲染 bug"。
+                sys.stderr.write("[render] 跳过无 nodes 的 flowchart 块\n")
+                continue
+            fc = Flowchart(nodes, block.get("edges", []),
                            block.get("caption", ""))
             flow.append(Spacer(1, 2))
             flow.append(fc)
@@ -405,6 +471,13 @@ def main():
     with open(src, "r", encoding="utf-8") as f:
         content = json.load(f)
 
+    miss = missing_glyphs(content)
+    if miss:
+        sys.stderr.write(
+            "[render] 警告：字体缺字 " + " ".join(f"{c}(U+{ord(c):04X})"
+                                                 for c in miss)
+            + " —— 这些字符会渲染成方框，请换用同义字或 cmap 内符号\n")
+
     flow = render(content)
     toc = TableOfContents()
     toc.levelStyles = [STYLES["toc1"], STYLES["toc2"]]
@@ -416,7 +489,7 @@ def main():
         toc,
         PageBreak(),
     ]
-    doc = build_doc(out, header, footer)
+    doc = build_doc(out, header, footer, date)
     doc.multiBuild(cover(header, subtitle, footer, date) + toc_flow + flow)
     import os
     print("OK: %s (%d bytes)" % (out, os.path.getsize(out)))

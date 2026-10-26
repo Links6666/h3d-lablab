@@ -24,6 +24,7 @@ from .config import (
     Field,
     Nested,
     ProjectConfig,
+    ScaleConfig,
     PreprocessConfig,
     RegisterConfig,
     ChangeConfig,
@@ -40,6 +41,9 @@ from .config import (
     dump,
 )
 from .logging import setup_logging, get_logger
+from .proc import no_window_kwargs, resolve_cwd, run_external
+from .scale import bbox_diagonal, resolve_factor, scaled_config, describe
+from .media import IMAGE_EXTS, is_image_file, list_images, count_images
 from .metadata import (
     sha256_file,
     sha256_bytes,
@@ -64,6 +68,7 @@ __all__ = [
     "Nested",
     "ProjectConfig",
     "PreprocessConfig",
+    "ScaleConfig",
     "RegisterConfig",
     "ChangeConfig",
     "ColourConfig",
@@ -80,9 +85,17 @@ __all__ = [
     # 日志
     "setup_logging",
     "get_logger",
+    # 外部进程（隐藏控制台窗口）
+    "no_window_kwargs",
+    "resolve_cwd",
+    "run_external",
+    # 图像识别（全管线统一口径）
+    "IMAGE_EXTS",
+    "is_image_file",
+    "list_images",
+    "count_images",
     # 溯源
-    "sha256_file",
-    "sha256_bytes",
+    "sha256_file",    "sha256_bytes",
     "sha256_text",
     "generate_run_id",
     "software_versions",

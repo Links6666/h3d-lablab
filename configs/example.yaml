@@ -1,14 +1,31 @@
-# configs/example.yaml 单尊造像建模任务配置样例
+# configs/example.yaml 单件文物建模任务配置样例
 project:
   name: dazu_rock_carving_001
   operator: ""
   raw_dir: data/raw
   formats: [ply, pcd, obj]
 
+# 尺度自适应（跨尺度文物通用化）：以点云包围盒对角线为基准，线性缩放
+# 体素 / FPFH 半径 / RANSAC 与 ICP 距离等"有长度量纲"的参数，使同一套配置
+# 同时适用于大中型文物（米级）与中小型文物（厘米级）。
+#   reference_diag —— 下面这套参数被调出来时所对应的物体对角线（米）；
+#                    默认 3.7 ≈ 示例文物外接盒对角线，改它即可迁移标定体系。
+#   enabled=false   —— 完全沿用下面的绝对值（历史行为）。
+scale:
+  enabled: true
+  reference_diag: 3.7
+
 preprocess:
   voxel_down_sample: 0.005
   remove_outlier_std: 2.0
   normal_estimate_k: 30
+  # 纯照片场景（无激光扫描件）才生效：剔掉 SfM 一并建出来的背景/衬板，只留主簇
+  remove_background: true
+  bg_max_planes: 0          # >0 才做 RANSAC 平面剔除（确有整块衬板时才开）
+  bg_plane_dist_frac: 0.005 # 平面内点距离阈值 = 该值 × 包围盒对角线
+  bg_cluster_eps_k: 10      # 聚类半径 = min(0.02×对角线, 该值 × 平均点间距)
+  bg_max_cluster_points: 150000  # 聚类工作副本上限，超过就降采样后聚类、标签回投
+  bg_keep_cluster_frac: 0.25     # 只留「点数 ≥ 最大簇×该比例」的簇
 
 register:
   fpfh_radius: 0.02
@@ -20,6 +37,7 @@ mesh:
   enabled: true
   method: poisson
   poisson_depth: 8
+  poisson_threads: 1        # >1 快但**不可复现**（同输入两次结果不同），且会让 M4 图集复用失效
   density_ratio: 0.05
   ball_radii: [2.0, 4.0, 6.0]
   alpha: 0.05
@@ -67,9 +85,26 @@ runner:
   fail_isolation: true
   resume: true
   manifest: output/run_manifest.json
-  workers: 1              # >1 时按造像并行（进程池）
+  workers: 1              # >1 时按文物并行（进程池）
 
 report:
   enabled: true
   formats: [csv, png, html]
-  output_dir: output/report
+  output_dir: report
+# 可选扩展 stage（场景①照片自动化闭环，默认关闭，不影响 M1~M6 主链路）
+sfm_solve:
+  enabled: false            # 开启后：00_photo/<item>/*.jpg -> capture_meta.json（需本机安装 COLMAP）
+  colmap_path: colmap       # COLMAP 可执行文件路径（用户本机安装）
+  matcher: auto             # auto = 按张数/命名自动选；写死 exhaustive / sequential 则以此为准
+  max_features: 8192
+  peak_threshold: 0.004
+  workspace: ""             # 空 = 99_runs/sfm_tmp（运行后自动清理）
+
+photo_texture:
+  enabled: false            # 开启后：M3 网格 + S1 位姿 + 照片 -> 照片投影纹理（obj/glb）
+  texture_size: 1024
+  top_k: 3
+  samples_per_tri: 4
+  icp_align: true           # 控制点 ICP 坐标系对齐（创新点 2；无靶标时残差可能较大）
+  export_formats: [obj, glb]
+  reuse_atlas: true         # 同几何+同位姿+同照片时复用 UV/纹理图集（多件同批省 80%）

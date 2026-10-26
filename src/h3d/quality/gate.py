@@ -34,6 +34,10 @@ ACCURACY_HEADERS = [
     ("coverage", "覆盖率"),
     ("boundary_ratio", "边界边比例"),
     ("mps_m", "平均点间距(m)"),
+    ("texture_sharpness", "纹理清晰度"),
+    ("texture_seam", "纹理接缝"),
+    ("texture_coverage", "纹理覆盖率"),
+    ("texture_ok", "纹理达标"),
     ("status", "判定"),
 ]
 
@@ -92,6 +96,10 @@ def build_report(
         "rmse_mm": round(metrics["rmse_mm"], 4) if not math.isnan(metrics["rmse_mm"]) else "N/A",
         "boundary_ratio": round(metrics["boundary_ratio"], 4),
         "mps_m": round(metrics["mps_m"], 6),
+        "texture_sharpness": metrics.get("texture_sharpness"),
+        "texture_seam": metrics.get("texture_seam"),
+        "texture_coverage": metrics.get("texture_coverage"),
+        "texture_ok": metrics.get("texture_ok"),
         "thresholds": {
             "coverage_threshold": cfg.coverage_threshold,
             "rmse_threshold_mm": cfg.rmse_threshold_mm,
@@ -128,12 +136,23 @@ def _write_accuracy_csv(path: str, record: dict[str, Any]) -> None:
         f"{record['coverage']:.1%}",
         f"{record['boundary_ratio']:.1%}",
         record["mps_m"],
+        _fmt_tex(record.get("texture_sharpness")),
+        _fmt_tex(record.get("texture_seam")),
+        _fmt_tex(record.get("texture_coverage")),
+        "Y" if record.get("texture_ok") else ("N/A" if record.get("texture_sharpness") is None else "N"),
         record["status"],
     ]
     with open(path, "w", newline="", encoding="utf-8-sig") as fh:
         writer = csv.writer(fh)
         writer.writerow(headers)
         writer.writerow(values)
+
+
+def _fmt_tex(v):
+    """纹理指标格式化（None=未评估显示 N/A）。"""
+    if v is None:
+        return "N/A"
+    return round(float(v), 4)
 
 
 __all__ = ["ACCURACY_HEADERS", "check_quality", "build_report"]

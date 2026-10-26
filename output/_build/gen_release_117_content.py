@@ -1,0 +1,274 @@
+# -*- coding: utf-8 -*-
+"""生成《v1.1.7-r11 发行说明》PDF 的 content.json。
+
+用法: python gen_release_117_content.py
+输出: release_117_content.json
+
+写作口径与 gen_release_116_content.py 一致（同版式、同 callout/table 用法）。
+本版全部改动来自真实项目（E:\\兵马俑照片\\最终测试）一次完整运行暴露的界面问题，
+详见《交付评估与 GUI 诊断_20261025.pdf》第五、六章。
+"""
+import json
+
+B = []
+
+
+def h1(t):
+    B.append({"type": "h1", "text": t})
+
+
+def h2(t):
+    B.append({"type": "h2", "text": t})
+
+
+def body(t):
+    B.append({"type": "body", "text": t})
+
+
+def callout(t):
+    B.append({"type": "callout", "text": t})
+
+
+def code(t, lang="text"):
+    B.append({"type": "code", "text": t, "language": lang})
+
+
+def table(headers, rows):
+    B.append({"type": "table", "headers": headers, "rows": rows})
+
+
+h1("一、发行概览")
+
+body(
+    "本次发行版本 <b>v1.1.7（修订 r11）</b>，打包日期 2026-10-26。"
+    "上一版 v1.1.6 把 M4 图集算完了两级缓存，管线本身已经不再慢、不再串件、"
+    "不再不可复现。这一版修的全是<b>「壳」</b>——一次完全正确的运行，被界面报成了"
+    "失败；一份调好的配置，被点一次按钮就覆盖成模板默认值。")
+
+body(
+    "起因是一次真实建模（relic 项目，30 张 4496×3000 照片）：总耗时 1866.7 s，"
+    "S1 占 95.6%（稀疏 411.2 s + 稠密 1372.6 s），扣掉 S1 后其余全部阶段合计 "
+    "<b>82.7 s</b>；几何 677,263 → 622,192 点（91.87%）→ 41,502 → 58,990 顶点 / "
+    "117,449 面；纹理岛内填充率 <b>94.57%</b>、30/30 相机参与、"
+    "<code>pixel_scale=1.8741</code>。产物与报表全部正确。"
+    "唯独跑完之后又点了一次「一键生成交付物」，界面弹出<b>「运行未完成」</b>。")
+
+callout(
+    "<b>一句话结论</b>：本版不改变任何几何或纹理结果，只把「跳过」"
+    "从「失败」里拆出来，并让界面真正读写自己声称在读写的那些配置项。"
+    "同一个日志行 <code>total=1 done=0 failed=0 skipped=1</code>，"
+    "旧判据判失败、新判据判成功——这是全版最核心的一处。")
+
+h1("二、本版改动")
+
+table(["编号", "改动", "关键数字 / 影响面"],
+      [["r11-1", "终态语义四态化（完成 / 跳过 / 失败 / 未执行）",
+        "同一行日志：旧判据 False → 新判据 True"],
+       ["r11-2", "新增 <code>batch_summary()</code> 读四项摘要",
+        "旧日志无 <code>skipped=</code> 时按 total-done-failed 兜底"],
+       ["r11-3", "完成行之后继续读 stdout 并 <code>wait()</code>",
+        "挡住报表半写窗口（实测 1~2 s）"],
+       ["r11-4", "<code>_busy()</code> + <code>_starting</code> 双闸门",
+        "消除 QThread 被覆盖导致的 abort"],
+       ["r11-5", "新增 <code>ProjectConfig.from_root()</code> 读回 yaml",
+        "本项目 44 字段读回-写回 43 项逐值一致"],
+       ["r11-6", "<code>to_yaml</code> 改为「读改写」",
+        "<code>sfm_solve.dense</code> 不再 true→false"],
+       ["r11-7", "<code>coverage_threshold</code> 改 <code>setdefault</code>",
+        "用户调过的 0.80 不再被改回 0.30"],
+       ["r11-8", "<code>AdvancedPanel.apply()</code> 5 → 10 字段",
+        "接缝平滑 / 几何质检 / top-k / 每面采样 / 密度过滤 五项由假变真"],
+       ["r11-9", "失败时进度条不再归零",
+        "跑到 100% 却显示 0% 比不动更让人困惑"],
+       ["r11-10", "预览区删重复「3D 模型预览」死页",
+        "两个同名 tab，第一个永远空白"],
+       ["r11-11", "日志改分隔线切分、取消按钮点击即禁用",
+        "失败后仍能回看上一轮；不再反复打空 PID"],
+       ["r11-12", "体素 / 泊松深度控件按项目配置选档",
+        "改别的参数不再顺手把体素改回中档"],
+       ["r11-13", "欢迎页删去副标题「——全程零命令行」",
+        "按用户要求；exe 首个窗口即生效"]])
+
+h1("三、六条根因逐条拆解")
+
+h2("3.1 「跳过」被当成了「失败」")
+
+body(
+    "断点续跑让 7 个阶段全部跳过，CLI 末行是 "
+    "<code>total=1 done=0 failed=0 skipped=1</code>，进程退出码 0。"
+    "这是<b>正确终态</b>——产物齐备，重算没有意义。而 GUI 的判据是 "
+    "<code>ok = failed == 0 and done > 0</code>，<code>done=0</code> 即判失败。")
+
+body(
+    "根因不在判据表达式本身，而在更下面一层：日志解析函数根本没读 "
+    "<code>skipped=</code>，只从完成行里取了 total / done / failed 三个数。"
+    "「跳过」和「失败」在这一层就被并成了一种终态，上层无论怎么写都分不开。"
+    "本版把解析与判据同时改掉：")
+
+code("""# 旧：三元组 + done>0
+def done_summary(line) -> tuple[int, int, int] | None:
+    ...
+ok = (failed == 0 and done > 0)
+
+# 新：四元组 + done+skipped>0（保留三元组接口兼容旧调用）
+mt = batch_summary(line)          # {"total","done","failed","skipped"}
+ok = (failed == 0 and rc == 0 and done + skipped > 0)""", "python")
+
+body(
+    "兼容性处理：旧日志（v1.1.6 及以前写的运行记录）没有 "
+    "<code>skipped=</code> 字段，此时按 <code>total - done - failed</code> "
+    "反推 skipped，避免回看历史日志时又被误判成失败。")
+
+h2("3.2 报表明明还没写完，界面已经宣布完成")
+
+body(
+    "CLI 打印「批量处理完成」之后，还要再生成 csv / png / html 三个文件，"
+    "实测 1~2 s。GUI 见到这一行就 <code>return</code>，管道再无人读取，"
+    "子进程写满缓冲区后<b>阻塞</b>；而界面此时已经放开按钮，用户再点一次，"
+    "就可能与仍在写盘的报表抢同一个数据根。本版改为只 <code>break</code> 不 "
+    "<code>return</code>：")
+
+code("""mt = batch_summary(line)
+if mt:
+    summary = mt
+    break                       # 只 break：余下输出还要读
+...
+if summary is not None:
+    for line in self._proc.stdout:      # 读完余下（报表产物行）
+        self.log_line.emit(line.rstrip())
+    rc = self._proc.wait()              # 等进程真正退出""", "python")
+
+h2("3.3 重复点击会把正在运行的 QThread 直接覆盖掉")
+
+body(
+    "旧代码在 <code>self.runner = BatchRunner(...)</code> 之前不检查 "
+    "<code>isRunning()</code>。重复点击时旧对象引用归零被 GC 回收，"
+    "而 Qt 不允许在「线程仍 running」时销毁 QThread 对象，会直接 abort。"
+    "按钮禁用只是 UI 约定，函数入口必须自己判——本版加了 "
+    "<code>_busy()</code> 与 <code>_starting</code> 双闸门，"
+    "旧 runner 先 <code>wait</code> 再 <code>deleteLater()</code> 延迟释放。")
+
+h2("3.4 打开历史项目，点一次生成就把配置覆盖成模板")
+
+body(
+    "现象：第二天打开昨天调好的项目，<code>sfm_solve.dense</code> 从 true 变成 "
+    "false（等于直接跳过稠密重建），<code>max_features</code> / "
+    "<code>max_image_size</code> / <code>top_k</code> 全部回默认值。")
+
+body(
+    "根因：主窗口只接收 root / name / scene 三个参数，配置对象是<b>全新默认值</b>；"
+    "<code>to_yaml</code> 又无条件用模板重写整份 config.yaml。"
+    "本版新增 <code>ProjectConfig.from_root()</code> 把原文件读回来当底稿，"
+    "<code>to_yaml</code> 只覆盖界面真正管理的字段，无控件的专业参数用 "
+    "<code>setdefault</code> 兜底。")
+
+callout(
+    "<b>这一条最隐蔽</b>：示例项目与默认配置同名同值，自测全绿；"
+    "真实项目一旦被覆盖，下次运行就静默跳过稠密重建，"
+    "而界面上所有控件看起来都正常。")
+
+h2("3.5 界面上有五个改了不生效的假控件")
+
+body(
+    "清单：接缝平滑、几何质检、视角加权 top-k、每面采样点、密度过滤。"
+    "<code>AdvancedPanel.apply()</code> 只回写 5 个字段，这 5 项从未进入 "
+    "config.yaml——界面上看起来完全正常，改了不报错、不告警、结果不变。"
+    "本版把 <code>apply()</code> 扩到 10 个字段并全部接通 "
+    "<code>to_yaml</code>；「CUDA 加速」下拉框后端确实没有对应开关，"
+    "改为禁用并在悬停说明里写清原因，而不是留一个永远是安慰剂的控件。")
+
+h2("3.6 界面细节四处")
+
+body(
+    "其一，预览区有两个同名「3D 模型预览」标签页，第一个永远是空白死页，已删重复项。"
+    "其二，每次点击都清空日志，失败后想回看上一轮已经没了，改为分隔线切分。"
+    "其三，取消按钮可反复点击，Windows 下 <code>taskkill</code> 打空 PID 像卡住，"
+    "改为点击即禁用。其四，主界面体素 / 泊松深度控件硬编码为「中档 / 精细(8)」，"
+    "与项目实际配置不一致，打开历史项目后改别的参数会顺手把体素改回中档，"
+    "改为按配置值选最近一档。")
+
+h1("四、升级与兼容")
+
+table(["项", "说明"],
+      [["产物格式", "<b>未变</b>。manifest / capture_meta / ply / obj / mtl / glb / "
+                    "报表结构全部与 v1.1.6 一致"],
+       ["几何与纹理", "<b>未变</b>。本版不触碰 M1~M6 与 M4 的任何算法路径，"
+                      "同一输入产出逐字节一致"],
+       ["config.yaml", "兼容。v1.1.6 及以前写的配置可原样读入；"
+                       "本版只是不再把它覆盖成模板"],
+       ["旧日志", "兼容。无 <code>skipped=</code> 的运行记录按 "
+                  "total-done-failed 反推"],
+       ["回退", "直接换回 v1.1.6 的 exe 即可；无数据迁移、无缓存格式变化"]])
+
+h1("五、验证记录")
+
+body(
+    "全量单元测试 <b>717 项通过</b>（v1.1.6 为 705 项，本批 +12），"
+    "其中新增两组针对本版行为本质的断言：")
+
+table(["测试组", "项数", "锁定的行为"],
+      [["<code>TestSkippedIsNotFailure</code>", "6",
+        "同一行 <code>done=0 skipped=1</code> 必须判成功；"
+        "<code>failed>0</code> 必须判失败；旧日志无 skipped 时反推正确"],
+       ["<code>test_gui_config.py</code> 新增", "5",
+        "<code>from_root→to_yaml</code> 往返保真；"
+        "<code>dense</code> 不被模板覆盖；<code>coverage_threshold</code> 不被改写"],
+       ["既有全量回归", "706", "无退化"]])
+
+body(
+    "真实项目对照（E:\\兵马俑照片\\最终测试，7 阶段已在 1.1.6 下全部跑完）：")
+
+code("""用源码跑一次本项目：
+  7 个阶段全部跳过 → rc=0
+  旧判据：ok=False（弹「运行未完成」）
+  新判据：ok=True （文案「无需重跑：全部 1 件已是最新」）
+  config.yaml：未被改写（SHA-1 前后一致）
+  from_root -> to_yaml：44 字段中 43 项逐值一致
+    （余 1 项为 quality.enabled 由缺键变为显式 true，属等价默认值）""", "text")
+
+body(
+    "本次建模任务本身的评估结论（与界面无关的部分）：总 1866.7 s，"
+    "其中 S1 占 95.6%；几何有效点保留 91.87%；纹理岛内填充率 94.57%、"
+    "30/30 相机参与；单件首次解算 <code>atlas_reuse.state=miss</code>"
+    "（符合预期，缓存尚未建立）。这些指标见同目录下的"
+    "《交付评估与 GUI 诊断_20261025.pdf》。")
+
+h1("六、已知限制与下一步")
+
+body(
+    "1) <b>M5 中误差口径</b>：<code>qc_rmse()</code> 末尾有 <code>*1000</code>"
+    "（米→毫米），但纯照片模式下坐标是<b>任意单位</b>，这个换算等于"
+    "「把 1 单位当 1 米」。实测报 41.16「mm」，而包围盒对角线只有 6.06 单位——"
+    "真值是 0.041 单位（对角线的 0.68%）。应当改为 "
+    "<code>rmse_rel = rmse / diag</code>，毫米只在有激光锚点时显示。"
+    "这是论文可信度问题，列为下一版首要项。")
+
+body(
+    "2) <b>结果仍用模态弹窗</b>：跑完弹一个 QMessageBox，用户必须点掉。"
+    "下一步改为界面内的结果条（带「打开输出目录」「重跑」按钮），"
+    "弹窗只保留给真正的失败。")
+
+body(
+    "3) <b>没有「强制重算」入口</b>：想重算只能手工删 "
+    "<code>10_dense</code> / <code>30_dense</code>。计划加一个带二次确认的开关。")
+
+body(
+    "4) <b>S1 复用索引按项目根隔离</b>，跨根不共享。"
+    "若把 <code>s1_reuse_index.json</code> 提升到用户级，"
+    "同照片集在不同项目间也能免解 SfM。")
+
+body(
+    "5) 真机待验：GUI 弹窗点选、多进程抢锁、以及本版在真实 5 件批处理上的表现"
+    "（期望 7 min → 1.6 min，取决于 1.1.6 的图集复用是否能全命中）。")
+
+callout(
+    "<b>本版可复用的一条工程经验</b>：<b>「跑完了」不等于「进程结束了」，"
+    "「没做事」不等于「做失败了」</b>。两条都是把「人的直觉」当成「状态机语义」"
+    "写进判据。终态必须显式分四态——完成 / 跳过 / 失败 / 未执行；"
+    "子进程的结束必须以 <code>wait()</code> 返回为准，而不是以某一行日志为准。")
+
+if __name__ == "__main__":
+    out = "release_117_content.json"
+    with open(out, "w", encoding="utf-8") as fh:
+        json.dump(B, fh, ensure_ascii=False, indent=1)
+    print("OK:", out, len(B), "blocks")

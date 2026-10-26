@@ -91,14 +91,45 @@ def hausdorff_distance(mesh_a, mesh_b, samples: int = 100000) -> float:
 
 
 def mesh_metrics(mesh, **extra: Any) -> dict[str, Any]:
-    """汇总网格基本指标（顶点数 / 三角面数 / 水密性），供 manifest 与报表记录。"""
+    """汇总网格基本指标（顶点数 / 三角面数 / 水密性 / 连通性），供 manifest 与报表记录。
+
+    连通性（2026-10-18 新增）：实测「跑完全绿但模型是一堆碎面」时，报表里
+    ``watertight=False`` 之外没有任何线索。Poisson 会把稠密点云的空洞/背景
+    重建成分离碎块，交付物因此"看着像坏的"。这里落盘连通块数与最大块面积占比，
+    并在碎片化时 WARNING——把"目视才能发现的问题"变成可读数字。
+    """
     metrics = {
         "n_vertices": int(len(mesh.vertices)),
         "n_triangles": int(len(mesh.triangles)),
         "watertight": bool(mesh.is_watertight()),
     }
+    metrics.update(component_metrics(mesh))
     metrics.update(extra)
     return metrics
+
+
+def component_metrics(mesh) -> dict[str, Any]:
+    """网格连通性指标：连通块数与最大块面积占比（trimesh 不可用时留 None）。"""
+    import numpy as np
+
+    try:
+        trimesh = _trimesh()
+        t = trimesh.Trimesh(np.asarray(mesh.vertices),
+                            np.asarray(mesh.triangles), process=False)
+        parts = t.split(only_watertight=False)
+        areas = np.asarray([p.area for p in parts], dtype=float)
+        total = float(areas.sum())
+        ratio = float(areas.max() / total) if total > 0 and len(areas) else None
+        res = {"n_components": int(len(areas)),
+               "largest_component_ratio": (round(ratio, 4) if ratio is not None else None)}
+        if len(areas) > 3 and ratio is not None and ratio < 0.6:
+            log.warning("网格碎片化：%d 个连通块，最大块仅占面积 %.0f%%"
+                        "——多为点云空洞/未剔除背景所致，交付模型会呈现碎面",
+                        len(areas), ratio * 100)
+        return res
+    except Exception as exc:  # noqa: BLE001 - 统计失败不影响主流程
+        log.warning("网格连通性统计失败（跳过）：%s", exc)
+        return {"n_components": None, "largest_component_ratio": None}
 
 
 def _o3d():
@@ -118,4 +149,5 @@ __all__ = [
     "fill_holes",
     "hausdorff_distance",
     "mesh_metrics",
+    "component_metrics",
 ]

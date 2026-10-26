@@ -1,0 +1,77 @@
+{
+  "item_id": "probe",
+  "run_id": "20261017-run-5wx3",
+  "config_hash": "fc7948b7b71ef3b2977552fc75865093ca33d29739742d9a79ba24f2c2600288",
+  "project": {
+    "name": "probe",
+    "operator": ""
+  },
+  "software": {
+    "numpy": "2.5.2"
+  },
+  "stages": {
+    "M1": {
+      "dense_novel_ratio": null,
+      "n_scans": 1,
+      "points_in": 200,
+      "points_out": 188,
+      "scale_factor": 0.462637,
+      "scale_diag_m": 1.711759,
+      "status": "done"
+    },
+    "M2": {
+      "n_scans": 1,
+      "registered": false,
+      "status": "done"
+    },
+    "M3": {
+      "n_vertices": 3246,
+      "n_triangles": 5870,
+      "watertight": false,
+      "n_input_points": 188,
+      "status": "done"
+    },
+    "M4": {
+      "n_vertices": 3246,
+      "n_triangles": 5870,
+      "colored": true,
+      "uv_baked": false,
+      "paint_mode": "vertex",
+      "formats": [
+        "ply",
+        "obj",
+        "glb"
+      ],
+      "lod_levels": [
+        1.0,
+        0.3,
+        0.1
+      ],
+      "n_lods": 3,
+      "n_outputs": 9,
+      "status": "done"
+    },
+    "M5": {
+      "coverage": 1.0,
+      "rmse_mm": 79.8577,
+      "boundary_ratio": 0.0225,
+      "mps_m": 0.103919,
+      "texture_available": false,
+      "texture_sharpness": null,
+      "texture_seam": null,
+      "texture_coverage": null,
+      "texture_ok": false,
+      "status": "done"
+    },
+    "M6": {
+      "status": "done"
+    }
+  },
+  "delivery": {
+    "models": [],
+    "qc": "done"
+  },
+  "M6_outputs": [
+    "E:\\h3d_lablab\\output\\_build\\o3d_probe\\80_export\\probe\\probe.ply"
+  ]
+}

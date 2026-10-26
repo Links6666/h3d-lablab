@@ -1,0 +1,66 @@
+[
+ {
+  "id": "C1-ok",
+  "charter": "cli",
+  "severity": "pass",
+  "expected": "-",
+  "actual": "11 个用例行为正常",
+  "detail": [
+   {
+    "case": "missing_file",
+    "rc": 1,
+    "msg": "配置错误：[E001] 配置文件不存在: E:\\h3d_lablab\\_bugbash\\tmp\\c1\\nope.yaml"
+   },
+   {
+    "case": "empty",
+    "rc": 1,
+    "msg": "校验失败：未发现任何文物。请检查 project.raw_dir 是否存在、子目录名是否为文物编号、文件扩展名是否在 project.formats 内；纯照片项目还需开启 sfm_solve.enabled。"
+   },
+   {
+    "case": "bom",
+    "rc": 0,
+    "msg": "UTF-8 BOM 被正确接受"
+   },
+   {
+    "case": "gbk",
+    "rc": 1,
+    "msg": "　Windows 记事本另存为「ANSI」会写成 GBK。请用记事本/VS Code 另存为「UTF-8」（有 BOM 也可以）。"
+   },
+   {
+    "case": "scalar_section",
+    "rc": 1,
+    "msg": "配置错误：[E001] 字段 project 类型错误：期望 ProjectConfig 或 dict，实际 int"
+   },
+   {
+    "case": "unknown_section",
+    "rc": 1,
+    "msg": "配置错误：[E001] 未知参数: ['zzz_not_a_section']"
+   },
+   {
+    "case": "range",
+    "rc": 1,
+    "msg": "配置错误：[E001] 字段 poisson_depth 取值 99 高于上限 12"
+   },
+   {
+    "case": "negative",
+    "rc": 1,
+    "msg": "配置错误：[E001] 字段 voxel_down_sample 取值 -1.0 低于下限 0.0"
+   },
+   {
+    "case": "typo_field",
+    "rc": 1,
+    "msg": "配置错误：[E001] 未知参数: ['rawdir']"
+   },
+   {
+    "case": "raw_dir_missing",
+    "rc": 0,
+    "msg": "[dry-run] 预览队列：0 件文物"
+   },
+   {
+    "case": "report_no_manifest",
+    "rc": 0,
+    "msg": "报表产物 -> E:\\h3d_lablab\\_bugbash\\tmp\\c1\\noman\\report\\report.html"
+   }
+  ]
+ }
+]

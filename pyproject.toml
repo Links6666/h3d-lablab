@@ -10,8 +10,8 @@ norecursedirs = ["py4dgeo-1.2.0", "output", "docs", "examples", "notebooks", "*.
 
 [project]
 name = "h3d"
-version = "0.1.0"
-description = "造像类文物三维建模自动化系统(路线E)"
+version = "1.1.7"
+description = "中小型文物三维建模自动化系统(路线E)"
 requires-python = ">=3.10"
 dependencies = [
   "open3d>=0.18",
@@ -22,8 +22,12 @@ dependencies = [
   "matplotlib>=3.7",
   "trimesh>=4.0",
   "tqdm>=4.66",
+  "opencv-python-headless>=4.9",
+  "cupy-cuda12x>=13.0",
+  "PySide6>=6.11",
   "jinja2>=3.1",
-  "xatlas>=0.0.11"
+  "xatlas>=0.0.11",
+  "psutil>=5.9"
 ]
 
 [project.optional-dependencies]

@@ -52,8 +52,9 @@ class TestWriteCsv:
         with open(path, "r", encoding="utf-8-sig", newline="") as fh:
             content = csv.reader(fh)
             first = next(content)
-        # 中文表头
-        assert first == ["文物编号", "阶段", "异常类型", "异常信息", "时间"]
+        # 中文表头（2026-10-17：新增「耗时(s)」列，失败任务也要能看出卡了多久）
+        assert first == ["文物编号", "阶段", "异常类型", "耗时(s)",
+                         "异常信息", "时间"]
 
     def test_empty_rows_still_writes_header(self, tmp_path):
         path = tmp_path / "empty.csv"
@@ -99,9 +100,10 @@ class TestExportFailuresCsv:
         export_failures_csv(failures, str(path))
         with open(path, "r", encoding="utf-8-sig", newline="") as fh:
             content = list(csv.reader(fh))
-        assert content[0] == ["文物编号", "阶段", "异常类型", "异常信息", "时间"]
-        assert content[1] == ["rock001", "M1", "InputDataError", "空点云",
-                              "2026-08-25T14:00:00"]
+        assert content[0] == ["文物编号", "阶段", "异常类型", "耗时(s)",
+                              "异常信息", "时间"]
+        assert content[1] == ["rock001", "M1", "InputDataError", "",
+                              "空点云", "2026-08-25T14:00:00"]
 
     def test_empty_failures(self, tmp_path):
         path = tmp_path / "failures.csv"
@@ -137,8 +139,15 @@ class TestExportManifestCsv:
         # 状态列
         assert rows_by_key[("rock001", "M1")][2] == "done"
         assert rows_by_key[("rock002", "M1")][2] == "fail"
-        # 关键指标列包含 fitness
-        assert "fitness=0.95" in rows_by_key[("rock001", "M2")][5]
+        # 关键指标列包含 fitness（列序：编号/阶段/状态/耗时/产物数/产物路径/指标/备注）
+        header = content[0]
+        col = {name: i for i, name in enumerate(header)}
+        assert "fitness=0.95" in rows_by_key[("rock001", "M2")][col["关键指标"]]
+        # 产物数必须独立成列：「状态 done 但 0 个产物」要一眼可见（旧 M2 即此）
+        assert rows_by_key[("rock001", "M2")][col["产物数"]] == "1"
+        assert rows_by_key[("rock002", "M1")][col["产物数"]] == "0"
+        # 失败原因必须落在「异常/备注」列，否则两表拼不出因果
+        assert "空点云" in rows_by_key[("rock002", "M1")][col["异常/备注"]]
 
     def test_empty_manifest(self, tmp_path):
         m = RunManifest()

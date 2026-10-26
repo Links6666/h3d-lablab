@@ -36,7 +36,7 @@ def _make_cfg(tmp_path, *, fail_isolation=True, resume=True, manifest_name="mani
 # ---------------------------------------------------------------------------
 class TestDiscoverItems:
     def test_nested_dirs_each_become_a_task(self, tmp_path):
-        """00_raw/<item>/*.ply：每个子目录 = 一尊造像（《软著方案》2.7.1）。"""
+        """00_raw/<item>/*.ply：每个子目录 = 一件文物（《软著方案》2.7.1）。"""
         raw = tmp_path / "00_raw"
         (raw / "rock001").mkdir(parents=True)
         (raw / "rock001" / "a.ply").write_bytes(b"ply")
@@ -53,7 +53,7 @@ class TestDiscoverItems:
         assert tasks[0].root == str(tmp_path)
 
     def test_flat_layout_each_file_becomes_a_task(self, tmp_path):
-        """00_raw/*.ply 平铺：每个文件 = 一尊造像。"""
+        """00_raw/*.ply 平铺：每个文件 = 一件文物。"""
         raw = tmp_path / "00_raw"
         raw.mkdir(parents=True)
         (raw / "a.ply").write_bytes(b"ply")

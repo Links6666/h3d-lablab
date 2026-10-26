@@ -1,0 +1,18 @@
+{
+  "item_id": "probe",
+  "coverage": 1.0,
+  "rmse_mm": 79.8577,
+  "boundary_ratio": 0.0225,
+  "mps_m": 0.103919,
+  "texture_sharpness": null,
+  "texture_seam": null,
+  "texture_coverage": null,
+  "texture_ok": false,
+  "thresholds": {
+    "coverage_threshold": 0.8,
+    "rmse_threshold_mm": 5.0,
+    "coverage_k_mps": 3.0
+  },
+  "ok": true,
+  "status": "pass"
+}

@@ -51,7 +51,7 @@ class TestTaskStateMachine:
         t = Task(item_id="x")
         t.mark_skipped("M1")
         assert t.results["M1"].status == TaskStatus.SKIPPED
-        # 整尊全跳过 -> 任务级状态 SKIPPED（统计可见）；后续 DONE 会覆盖
+        # 整件全跳过 -> 任务级状态 SKIPPED（统计可见）；后续 DONE 会覆盖
         assert t.status == TaskStatus.SKIPPED
 
     def test_mark_skipped_does_not_override_done(self):

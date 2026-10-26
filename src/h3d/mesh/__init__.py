@@ -87,7 +87,8 @@ def run(pcd, cfg: MeshConfig):
 
     method = cfg.method
     if method == "poisson":
-        mesh = poisson_reconstruct(pcd, cfg.poisson_depth, cfg.density_ratio)
+        mesh = poisson_reconstruct(pcd, cfg.poisson_depth, cfg.density_ratio,
+                                  getattr(cfg, "poisson_threads", 1))
     elif method == "ball_pivoting":
         mesh = ball_pivoting_reconstruct(pcd, cfg.ball_radii)
     elif method == "alpha_shape":

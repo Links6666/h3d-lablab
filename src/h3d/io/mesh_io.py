@@ -19,6 +19,8 @@ from __future__ import annotations
 import os
 from typing import Optional
 
+import numpy as np
+
 from h3d.core import ExportError, InputDataError, get_logger
 
 log = get_logger("io.mesh_io")
@@ -73,14 +75,35 @@ def save_mesh(mesh, path: str) -> None:
         )
     directory = os.path.dirname(os.path.abspath(path))
     os.makedirs(directory, exist_ok=True)
+    # NaN/Inf 顶点清理：open3d 写出含非有限顶点的网格会失败（E601 常见根因）
+    o3d = _o3d()
+    verts = np.asarray(mesh.vertices)
+    if verts.size and not np.isfinite(verts).all():
+        n_bad = int((~np.isfinite(verts)).any(axis=1).sum())
+        log.warning("网格含非有限顶点 %d 个（写出前清理）", n_bad)
+        finite = np.isfinite(verts).all(axis=1)
+        valid_idx = np.where(finite)[0]
+        remap = -np.ones(len(verts), dtype=np.int64)
+        remap[valid_idx] = np.arange(len(valid_idx))
+        keep_tri = []
+        for tri in np.asarray(mesh.triangles):
+            a, b, c = remap[tri]
+            if a >= 0 and b >= 0 and c >= 0:
+                keep_tri.append([int(a), int(b), int(c)])
+        mesh = o3d.geometry.TriangleMesh(
+            o3d.utility.Vector3dVector(verts[finite]))
+        if keep_tri:
+            mesh.triangles = o3d.utility.Vector3iVector(
+                np.asarray(keep_tri, dtype=np.int32))
     # STL 格式要求顶点法线；缺失时在副本上补算，避免污染调用方网格
     if ext == ".stl" and not mesh.has_vertex_normals():
-        o3d = _o3d()
         mesh = o3d.geometry.TriangleMesh(mesh)
         mesh.compute_vertex_normals()
-    ok = _o3d().io.write_triangle_mesh(path, mesh)
+    ok = o3d.io.write_triangle_mesh(path, mesh)
     if not ok:
-        raise ExportError(f"网格写盘失败: {path}")
+        raise ExportError(
+            f"网格写盘失败（E601）：{path}\n可能原因：路径含特殊字符/磁盘"
+            "只读或空间不足/文件被占用。请尝试更换项目根目录后重试。")
     log.info("写出网格 %s：%d 顶点 / %d 三角面",
              path, len(mesh.vertices), len(mesh.triangles))
 

@@ -1,0 +1,23 @@
+[
+ {
+  "id": "C6-version",
+  "charter": "exe",
+  "severity": "pass",
+  "expected": "exe --version 正常输出",
+  "actual": "rc=0 out='h3d 1.1.3' err="
+ },
+ {
+  "id": "C6-doctor_json",
+  "charter": "exe",
+  "severity": "pass",
+  "expected": "-",
+  "actual": "JSON 可解析"
+ },
+ {
+  "id": "C6-batch_empty",
+  "charter": "exe",
+  "severity": "pass",
+  "expected": "空项目批量应给明确结论（0 件 / 无任务）",
+  "actual": "rc=1 自检完成：project · 阻断 1 · 警告 0 · 提示 0 · 63 ms"
+ }
+]

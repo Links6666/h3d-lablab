@@ -1,0 +1,30 @@
+[
+ {
+  "id": "C4-truncated",
+  "charter": "resume",
+  "severity": "pass",
+  "expected": "-",
+  "actual": "可加载"
+ },
+ {
+  "id": "C4-old_shape",
+  "charter": "resume",
+  "severity": "pass",
+  "expected": "-",
+  "actual": "stages=0"
+ },
+ {
+  "id": "C4-flat_key",
+  "charter": "resume",
+  "severity": "pass",
+  "expected": "-",
+  "actual": "is_done(r1/M1)=False"
+ },
+ {
+  "id": "C4-badtype",
+  "charter": "resume",
+  "severity": "pass",
+  "expected": "-",
+  "actual": "可加载"
+ }
+]

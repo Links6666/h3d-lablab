@@ -1,0 +1,23 @@
+[
+ {
+  "id": "C3-json_purity",
+  "charter": "health",
+  "severity": "pass",
+  "expected": "-",
+  "actual": "keys=['boot', 'project']"
+ },
+ {
+  "id": "C3-exitcode",
+  "charter": "health",
+  "severity": "pass",
+  "expected": "rc=0 当且仅当无 blocker",
+  "actual": "rc=0 blockers=0 warnings=1"
+ },
+ {
+  "id": "C3-fresh_not_blocked",
+  "charter": "health",
+  "severity": "pass",
+  "expected": "带输入的全新项目不产生 blocker",
+  "actual": "blockers=[]"
+ }
+]

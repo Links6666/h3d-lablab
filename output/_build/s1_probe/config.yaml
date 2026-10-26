@@ -1,0 +1,16 @@
+project:
+  name: p3
+  raw_dir: E:/h3d_lablab/output/_build/s1_probe/00_raw
+  formats:
+  - ply
+sfm_solve:
+  enabled: true
+  dense: false
+  colmap_path: E:/colmap/colmap-x64-windows-cuda/bin/colmap.exe
+  matcher: exhaustive
+  max_features: 4096
+report:
+  enabled: false
+publish:
+  formats:
+  - ply

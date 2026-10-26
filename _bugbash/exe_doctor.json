@@ -1,0 +1,121 @@
+{
+  "boot": {
+    "scope": "boot",
+    "checked_at": "2026-10-23T19:26:40",
+    "elapsed_ms": 250,
+    "ok": true,
+    "n_blocker": 0,
+    "n_warning": 3,
+    "n_info": 1,
+    "results": [
+      {
+        "name": "crash_log",
+        "title": "上次崩溃记录",
+        "severity": "warning",
+        "detail": "上次启动/运行有异常（0 小时前）：AssertionError: 不该进入 GUI",
+        "hint": "完整日志：C:\\Users\\15308\\.workbuddy\\h3d_gui_crash.log\n若问题已修复可忽略；反复出现请附该文件排查",
+        "fix": "",
+        "elapsed_ms": 0
+      },
+      {
+        "name": "leftover_process",
+        "title": "遗留进程占用",
+        "severity": "warning",
+        "detail": "H3D.exe PID 17560, 29164 仍在运行",
+        "hint": "若是上一个项目没退干净：确认没有正在跑的任务后执行\n  taskkill /F /PID <PID>   （或任务管理器结束进程）\n两个批处理同时跑会互删中间产物、争抢 GPU（实机已损失 3 小时）",
+        "fix": "",
+        "elapsed_ms": 47
+      },
+      {
+        "name": "runtime_dir",
+        "title": "运行目录（打包解包）",
+        "severity": "warning",
+        "detail": "当前进程复用了父进程的解包目录（_PYI_PARENT_PROCESS_LEVEL=1）",
+        "hint": "GUI 退出后该目录会被删除，后台批处理会在中途 import 失败。\n应通过 h3d.gui.runner.child_env() 启动子进程（清掉 _PYI_* 与 _MEIPASS2 变量）",
+        "fix": "",
+        "elapsed_ms": 0
+      },
+      {
+        "name": "temp",
+        "title": "临时目录可写",
+        "severity": "info",
+        "detail": "可写：C:\\Users\\15308\\AppData\\Local\\Temp；9 个陈旧 _MEI 残留",
+        "hint": "陈旧 _MEI 目录会占用数百 MB：确认没有 H3D 在运行后，\n可删除 %TEMP% 下超过 1 天的 _MEI* 目录",
+        "fix": "",
+        "elapsed_ms": 16
+      },
+      {
+        "name": "assets",
+        "title": "资源文件",
+        "severity": "ok",
+        "detail": "图标：h3d_icon_v3.png",
+        "hint": "",
+        "fix": "",
+        "elapsed_ms": 0
+      },
+      {
+        "name": "colmap",
+        "title": "COLMAP 可执行",
+        "severity": "ok",
+        "detail": "colmap.EXE（32 MB）",
+        "hint": "",
+        "fix": "",
+        "elapsed_ms": 16
+      },
+      {
+        "name": "deps",
+        "title": "关键依赖",
+        "severity": "ok",
+        "detail": "必需依赖齐全（6 项）",
+        "hint": "",
+        "fix": "",
+        "elapsed_ms": 0
+      },
+      {
+        "name": "disk",
+        "title": "磁盘空间",
+        "severity": "ok",
+        "detail": "可用：临时目录 24.2 GB · 当前目录 120.8 GB",
+        "hint": "",
+        "fix": "",
+        "elapsed_ms": 0
+      },
+      {
+        "name": "gpu",
+        "title": "GPU 与显存",
+        "severity": "ok",
+        "detail": "NVIDIA GeForce RTX 3050 Laptop GPU · 显存 609/4096 MB · 占用 37.0%",
+        "hint": "",
+        "fix": "",
+        "elapsed_ms": 250
+      },
+      {
+        "name": "interpreter",
+        "title": "Python 解释器",
+        "severity": "ok",
+        "detail": "Python 3.12.10（打包版）",
+        "hint": "",
+        "fix": "",
+        "elapsed_ms": 0
+      },
+      {
+        "name": "recent_locks",
+        "title": "历史项目锁",
+        "severity": "ok",
+        "detail": "历史项目无活锁",
+        "hint": "",
+        "fix": "",
+        "elapsed_ms": 16
+      },
+      {
+        "name": "version",
+        "title": "版本一致性",
+        "severity": "ok",
+        "detail": "v1.1.3",
+        "hint": "",
+        "fix": "",
+        "elapsed_ms": 0
+      }
+    ]
+  }
+}
