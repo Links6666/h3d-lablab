@@ -5,9 +5,10 @@
   架构 P0→L1(io)→L2(preprocess)→M2；阶段 M1-M6 + S1(COLMAP) + P1/X1/X2(可选)。业务层禁 import Open3D。
 - python `E:\h3d_lablab\.venv_lab\Scripts\python.exe`（PySide6 6.11/open3d 0.19/trimesh）；colmap
   `E:\colmap\colmap-x64-windows-cuda\bin\colmap` 4.1.1；打包 `h3d_gui.spec`（PyInstaller onefile，launcher
-  双模式 GUI/`--batch`）；Inno `D:\h3d_relic_test\InnoSetup7\ISCC.exe`。当前版本 1.1.7（r11）。
+  双模式 GUI/`--batch`）；Inno `D:\h3d_relic_test\InnoSetup7\ISCC.exe`。当前版本 1.1.9（r13）。
 - 清理后磁盘基线（2026-10-26）：`E:\h3d_lablab` 4.5 GB、`E:\兵马俑照片` 2.6 GB
-  （原先 19 GB / 9.6 GB）。保留发行版 1.1.5 / 1.1.6 / 1.1.7（目录 + zip 均留）。
+  （原先 19 GB / 9.6 GB）。保留发行版 1.1.5 / 1.1.6 / 1.1.7 / 1.1.8 / 1.1.9（目录 + zip 均留，
+  每个 ≈465 MB，五个共 ≈4.6 GB；再攒就要按「只留最近三个」清）。
 
 ## 交付
 - 每任务必出中文结构化 PDF：`gen_*_content.py`→content.json→`render_pdf.py`，存 `output/`，名
@@ -165,15 +166,22 @@
 - ~~M5 中误差口径~~ **1.1.8（r12）已修**：三口径 `rmse_mm`/`rmse_units`/`rmse_rel` 并行落盘，
   无锚点 `rmse_mm="N/A"`，判门两条前提（`metric_units` + `rmse_reliable`）缺一只判覆盖率。
   实机 41.16「mm」= 0.0412 单位 = 对角线 0.68%。**场景①的绝对精度仍未在真机标定**（缺真值件）。
-- **P0：图集不进交付包**（2026-10-26 实机暴露）。`texture.export_formats:[ply]` 时
-  publish 按此跳过 obj/glb，而 PLY 带不了图像纹理 → 交付只有 85,420 顶点色，
-  2048²/264 万纹素图集只躺在 `99_runs/atlas_cache`。修：M4 无条件把图集 PNG 落
-  `50_tex/<件>/<件>_L1.0_diffuse.png`；M4 metrics 记 `texture_png`；GUI 选 ply-only 时提示。
-- **P0：M5 纹理质检断链**（同一根因）。M5 找 `*_L1.0_diffuse.png`，而该文件只在导出
-  obj/glb 时才生成 → 五项纹理指标全 N/A，与 M4 的 94.89% 自相矛盾。
-- **P1：终端状态第三次归并**：`photo_texture.enabled:false` 的 P1 被计入「未执行」，
-  整批判「部分完成」。终态应扩**五态**（完成/跳过/失败/**未启用**/未执行），
-  报表分母只算已启用阶段。
+- ~~P0：图集不进交付包~~ **1.1.9（r13）已修**：图集落盘与导出格式**解耦**——烘焙完即无条件写
+  `50_tex/<件>/<件>_L1.0_diffuse.png` 并进 M4 产物；新增 `photo_texture.auto_textured_format`
+  （默认 true），formats 里无可承载纹理的格式时自动补导 OBJ 并 WARNING，记
+  `auto_added_formats`/`texture_carrier`；publish 新增 `deliver_texture_atlas` 复制进 `80_export`。
+  实测 3 文件 → 7 文件（ply + obj 13.8 MB + mtl + 2048² 图集 4.67 MB + 3 csv），承载=obj。
+  **教训：产物落盘不能挂在导出格式上**——「格式是选项、主产物不是」。
+- ~~P0：M5 纹理质检断链~~ **1.1.9 已修**：三级定位（M4 `atlas_png` → 命名约定 L1.0/L1/uv `_0` →
+  目录扫描），扫描**必须排除 `*_mask.png`**（与图集同尺寸，误读得 `texture_available=True`
+  + 无意义清晰度，比 N/A 更误导）。实测 sharpness 71.89 / seam 2.34 / 覆盖 59.8% / 填充 94.9%，
+  与 M4 的 0.5977 / 0.9489 对上。
+- ~~P1：终端状态第三次归并~~ **1.1.9 已修**：`TaskStatus` 扩**五态**
+  （done / fail / skipped+`skip_kind`(condition|degraded|resume) / disabled / 键不存在=未执行）；
+  `mark_disabled()` **不动任务级状态**（配置关闭是用户意图，条件不满足才是意外）；
+  报表分母 = 件数 × 阶段数 − 未启用，判定新增「通过（含跳过）」一档。
+- ~~元数据与产物不一致~~ **1.1.9 已修**：`build_meta` 取 M6 真实 `outputs`（此前恒空）；
+  交付清单按 `item_id` 覆盖（M6 重跑曾现「1 件/2 已发布」）；跳过/未启用 `elapsed=None`→报表「—」。
 - **P0 提速：`dense_geom_consistency: false`** 省 842 s（全流程 44.7%），
   31.4 min → 17.3 min；须同步 fusion `--input_type photometric`。
   注意瓶颈会前移到 M4（占比 3.8%→12.2%），别重复 1.1.6 那一轮。
@@ -188,4 +196,7 @@
 - 相机模型写死 SIMPLE_RADIAL（只 k1）：本组重投影中位 0.36 px 够用，换镜头即失准 → 加 `camera_model` + 重投影自检。
 - 质检判别力不足：`quality.samples=4000`（117k 面模型偏少）· `coverage_threshold=0.3`（实测 81.75%，形同虚设）。
 - **强制重算无法只重算某一件**：`force_rerun` 是布尔（整批）。扩成集合要动 `item_id` 与配置序列化，暂缓。
-- 真机待验：GUI 弹窗点选、多进程抢锁、v1.1.8 多件批处理（复用索引 `cross_project` 命中、结果条三态）。
+- 真机待验：GUI 弹窗点选、多进程抢锁、v1.1.9 打包版多件批处理（五态终态在 GUI 里的显示、
+  自动补导 OBJ 是否与用户显式选择冲突、图集复制耗时）。
+- **git push 到 GitHub 当前不通**（代理 127.0.0.1:58358 回 502 / 直连 443 超时）：
+  v1.1.9 提交 `af5a678` 已在本地，网络恢复后补 `git push origin HEAD`。
