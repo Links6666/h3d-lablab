@@ -1043,6 +1043,28 @@ def incremental_dense_new_views(photo_dir: str, workspace: str, colmap: str,
 _S1_INDEX_REL = os.path.join("99_runs", "s1_reuse_index.json")
 #: 索引未命中时，最多扫多少件已完成 S1 的兄弟目录（避免百件项目全量哈希）
 _REUSE_SCAN_LIMIT = 12
+#: 用户级索引文件名（2026-10-26：跨项目共享）
+_INDEX_NAME = "s1_reuse_index.json"
+#: 用户级索引最多保留多少条指纹（按登记时间淘汰最旧，防止无限增长）
+_INDEX_MAX_ENTRIES = 500
+
+
+def user_index_dir() -> str:
+    """用户级索引目录。
+
+    ``H3D_HOME`` 环境变量优先（便携版 / 测试用 tmp 目录 / 多用户隔离），
+    否则 ``~/.h3d``。不用 ``%LOCALAPPDATA%``：那是 Windows 专有，而本系统
+    在 Linux 上也要能跑（持续集成是用 Linux 跑的单元测试）。
+    """
+    home = os.environ.get("H3D_HOME")
+    if home:
+        return os.path.abspath(os.path.expanduser(home))
+    return os.path.join(os.path.expanduser("~"), ".h3d")
+
+
+def _entry_root(ent: dict) -> str:
+    """索引条目里记录的项目根（老索引没有该字段 → 视为当前项目）。"""
+    return str(ent.get("root") or "")
 
 
 def photo_set_fingerprint(photo_dir: str) -> str:
@@ -1073,8 +1095,8 @@ def _sfm_params_key(cfg) -> str:
         s.dense_min_pixels, s.dense_max_pixels))
 
 
-def _load_reuse_index(root: str) -> dict:
-    path = os.path.join(root, _S1_INDEX_REL)
+def _load_index_file(path: str) -> dict:
+    """读一份索引文件（缺失/损坏/结构不对一律返回空索引，不抛异常）。"""
     try:
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
@@ -1085,21 +1107,81 @@ def _load_reuse_index(root: str) -> dict:
     return {"version": 1, "entries": {}}
 
 
+def _load_reuse_index(root: str) -> dict:
+    """加载复用索引：**用户级为主，项目级为兼容**。
+
+    2026-10-26 起索引提升到用户级（``~/.h3d/s1_reuse_index.json``），
+    这样同一批照片在「最终测试」「测试测试111」两个项目里只解一次 SfM，
+    而不必各自解 30 分钟。项目级 ``99_runs/s1_reuse_index.json`` 仍会被读取
+    （老项目升级后第一次运行即可命中），但新登记一律写用户级。
+
+    合并规则：同指纹以**用户级**为准（它更新），项目级条目补 root 字段后并入
+    —— 老条目没有 root，只能认定属于它所在的那个项目。
+    """
+    user = _load_index_file(os.path.join(user_index_dir(), _INDEX_NAME))
+    legacy = _load_index_file(os.path.join(root, _S1_INDEX_REL))
+    entries = dict(legacy.get("entries") or {})
+    for fp, ent in entries.items():
+        if isinstance(ent, dict) and not ent.get("root"):
+            ent["root"] = os.path.abspath(root)
+    entries.update(user.get("entries") or {})
+    return {"version": 2, "entries": entries}
+
+
 def _save_reuse_index(root: str, data: dict) -> None:
-    """原子写（tmp + os.replace）：索引损坏只影响复用，不能影响主流程。"""
-    path = os.path.join(root, _S1_INDEX_REL)
+    """原子写用户级索引；并镜像一份到项目级（供旧版本 exe 读取）。
+
+    写前**重新读一次**再合并：并发（workers>1 的进程池 / 用户开了两个项目）
+    时两个进程各自持有旧快照，直接覆盖会丢掉对方刚登记的指纹，表现为
+    「明明解算过却总是不命中」。
+
+    索引损坏只影响复用、不影响主流程，所有失败都降级为 WARNING。
+    """
+    entries = dict((data or {}).get("entries") or {})
+    # 按登记时间淘汰最旧，防止索引无限增长
+    if len(entries) > _INDEX_MAX_ENTRIES:
+        def _ts(key):
+            ent = entries.get(key) or {}
+            return float(ent.get("ts") or 0.0)
+        keep = sorted(entries, key=_ts, reverse=True)[:_INDEX_MAX_ENTRIES]
+        entries = {k: entries[k] for k in keep}
+        log.info("S1 复用索引超上限，按时间淘汰旧条目（保留 %d 条）",
+                 _INDEX_MAX_ENTRIES)
+    payload = {"version": 2, "entries": entries}
+
+    path = os.path.join(user_index_dir(), _INDEX_NAME)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        merged = _load_index_file(path).get("entries") or {}
+        stale = {k: v for k, v in merged.items() if k not in entries}
+        if stale:
+            entries.update(stale)
+            payload["entries"] = entries
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, ensure_ascii=False, indent=1)
+            json.dump(payload, fh, ensure_ascii=False, indent=1)
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp, path)
     except OSError as exc:  # noqa: BLE001
         log.warning("S1 复用索引写入失败（不影响主流程）：%s", exc)
+        return
+    # 项目级镜像：新版不再读它（用户级已覆盖），但换回旧 exe 时还能命中。
+    legacy = os.path.join(root, _S1_INDEX_REL)
+    try:
+        os.makedirs(os.path.dirname(legacy), exist_ok=True)
+        tmp2 = legacy + ".tmp"
+        with open(tmp2, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False, indent=1)
+        os.replace(tmp2, legacy)
+    except OSError as exc:  # noqa: BLE001 - 镜像失败无所谓
+        log.debug("S1 复用索引项目级镜像写入失败：%s", exc)
 
 
 def _reuse_outputs(root: str, item: str) -> tuple[str, str] | None:
     """某件的 S1 可复用产物：(fused_dense.ply, capture_meta.json)，缺一不可。"""
+    if not root:
+        return None
     fused = os.path.join(root, "10_dense", item, "fused_dense.ply")
     meta = os.path.join(root, "90_meta", f"{item}_{CAPTURE_META}")
     if os.path.exists(fused) and os.path.exists(meta):
@@ -1126,12 +1208,16 @@ def reuse_sfm_result(task, cfg, photo_dir: str) -> dict | None:
     entries = idx["entries"]
 
     donor = None
+    donor_root = ""
     params_known = True
     ent = entries.get(fp)
     if ent and ent.get("params") == params:
-        if ent.get("item") != task.item_id and _reuse_outputs(
-                task.root, ent["item"]):
-            donor = ent["item"]
+        ent_root = _entry_root(ent) or os.path.abspath(task.root)
+        if (ent.get("item") != task.item_id
+                or os.path.abspath(ent_root) != os.path.abspath(task.root)):
+            if _reuse_outputs(ent_root, ent["item"]):
+                donor = ent["item"]
+                donor_root = ent_root
     if donor is None:
         # 旧项目 / 升级前已解算的件没有索引，扫同根兄弟目录（限量）。
         # 这类复用源不记录参数，一致性未知 —— 必须降级为 WARNING 告知。
@@ -1153,16 +1239,24 @@ def reuse_sfm_result(task, cfg, photo_dir: str) -> dict | None:
             try:
                 if photo_set_fingerprint(os.path.join(pdir, name)) == fp:
                     donor = name
+                    donor_root = task.root
                     break
             except OSError as exc:  # noqa: BLE001
                 log.debug("S1 复用扫描 %s 失败：%s", name, exc)
 
     if donor is None:
         return None
-    src = _reuse_outputs(task.root, donor)
+    src = _reuse_outputs(donor_root, donor)
     if src is None:      # 竞态：扫描后文件被删
         return None
     fused, meta = src
+    same_root = os.path.abspath(donor_root) == os.path.abspath(task.root)
+    if not same_root:
+        # 跨项目复用是**更强的语义变化**：两件文物在不同项目里，用同一份重建
+        # 结果。必须显式告知，并提醒交付包应各自独立保存。
+        log.warning("S1 跨项目复用：%s（本项目）← %s（%s）——两件产物逐字节同源，"
+                    "交付时请确认是否为同一件器物的重复拍摄",
+                    task.item_id, donor, donor_root)
     dst_fused = os.path.join(task.root, "10_dense", task.item_id,
                              "fused_dense.ply")
     dst_meta = os.path.join(task.root, "90_meta",
@@ -1181,12 +1275,14 @@ def reuse_sfm_result(task, cfg, photo_dir: str) -> dict | None:
     except (OSError, ValueError) as exc:  # noqa: BLE001
         log.warning("S1 复用：capture_meta 解析失败（%s），计数留 0", exc)
 
-    entries[fp] = {"item": task.item_id, "params": params, "donor": donor}
+    entries[fp] = {"item": task.item_id, "params": params, "donor": donor,
+                   "root": os.path.abspath(task.root), "ts": time.time()}
     _save_reuse_index(task.root, idx)
 
     elapsed = time.time() - t0
-    log.info("S1 复用：%s ← %s（照片集完全相同，指纹 %s，跳过 SfM 与稠密重建）",
-             task.item_id, donor, fp[:12])
+    log.info("S1 复用：%s ← %s（照片集完全相同，指纹 %s，跳过 SfM 与稠密重建%s）",
+             task.item_id, donor, fp[:12],
+             "" if same_root else f"（跨项目：{donor_root}）")
     if not params_known:
         log.warning("S1 复用源 %s 是旧版本产物，稠密参数一致性未知；"
                     "若改过 dense_* 参数，请把 sfm_solve.reuse_identical_photos "
@@ -1203,7 +1299,9 @@ def reuse_sfm_result(task, cfg, photo_dir: str) -> dict | None:
         "calibrated": {"calibrated": False, "reused": True},
         "incremental": {"incremental": False},
         "s1_reuse": {"from": donor, "fingerprint": fp[:12],
-                     "params_match": params_known},
+                     "params_match": params_known,
+                     "from_root": donor_root,
+                     "cross_project": not same_root},
         "timings": {"sparse_s": 0.0, "dense_s": 0.0,
                     "reuse_s": round(elapsed, 2), "total_s": round(elapsed, 2)},
     }
@@ -1212,14 +1310,16 @@ def reuse_sfm_result(task, cfg, photo_dir: str) -> dict | None:
 
 
 def _record_reuse_index(task, cfg, photo_dir: str) -> None:
-    """正常解算完成后登记指纹，供后续同照片的件复用。"""
+    """正常解算完成后登记指纹，供后续同照片的件（含跨项目）复用。"""
     if not getattr(cfg.sfm_solve, "reuse_identical_photos", True):
         return
     try:
         fp = photo_set_fingerprint(photo_dir)
         idx = _load_reuse_index(task.root)
         idx["entries"][fp] = {"item": task.item_id,
-                              "params": _sfm_params_key(cfg)}
+                              "params": _sfm_params_key(cfg),
+                              "root": os.path.abspath(task.root),
+                              "ts": time.time()}
         _save_reuse_index(task.root, idx)
     except OSError as exc:  # noqa: BLE001
         log.debug("S1 复用索引登记失败：%s", exc)

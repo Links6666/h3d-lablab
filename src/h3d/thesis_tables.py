@@ -18,7 +18,8 @@ from h3d.core import get_logger
 log = get_logger("thesis_tables")
 
 THESIS_HEADERS = [
-    "文物编号", "S1注册率", "M5覆盖率", "M5中误差(mm)", "纹理清晰度",
+    "文物编号", "S1注册率", "M5覆盖率", "M5中误差(mm)",
+    "M5相对中误差(%对角线)", "纹理清晰度",
     "纹理接缝", "X1最大形变(mm)", "X1变化占比", "X2平均ΔE", "判定",
 ]
 
@@ -64,11 +65,16 @@ def export_thesis_table(task_root: str, item_ids: Optional[List[str]] = None,
         x2 = stages.get(f"{item}/X2", {})
         reg = s1.get("n_registered", 0)
         nph = s1.get("n_photos", 0)
+        # 中误差口径（2026-10-26）：无激光锚点时 rmse_mm 是「模型单位×1000」，
+        # 不是毫米——论文表格里直接印出来就是错误数据。此时 mm 列填 N/A，
+        # 只给相对中误差（中误差 / 包围盒对角线），后者与尺度无关、可跨批比较。
+        metric_units = bool(m5.get("metric_units", True)) if m5 else True
         rows.append([
             item,
             f"{reg / nph * 100:.0f}%" if nph else "N/A",
             f"{m5.get('coverage', 0.0) * 100:.1f}%" if m5 else "N/A",
-            f"{m5.get('rmse_mm', float('nan')):.2f}" if m5 else "N/A",
+            _fmt(m5.get("rmse_mm")) if (m5 and metric_units) else "N/A",
+            _fmt_pct(m5.get("rmse_rel")),
             _fmt(m5.get("texture_sharpness")),
             _fmt(m5.get("texture_seam")),
             _fmt_x1(x1.get("max_change_mm")),
@@ -89,6 +95,11 @@ def export_thesis_table(task_root: str, item_ids: Optional[List[str]] = None,
 
 def _fmt(v):
     return "N/A" if v is None else f"{float(v):.2f}"
+
+
+def _fmt_pct(v):
+    """比例 -> 百分数文本（None 显示 N/A）。"""
+    return "N/A" if v is None else f"{float(v) * 100:.2f}%"
 
 
 def _fmt_x1(v):

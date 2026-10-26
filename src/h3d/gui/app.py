@@ -19,8 +19,9 @@ import os
 import shutil
 import sys
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog,
+from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog,
                                QFrame, QGridLayout, QHBoxLayout, QLabel,
                                QMainWindow, QMessageBox, QPlainTextEdit,
                                QProgressBar, QPushButton, QSplitter,
@@ -168,6 +169,20 @@ class MainWindow(QMainWindow):
             "QPushButton:disabled{background:#666;}")
         self.btn_run.clicked.connect(self._start_run)
         v.addWidget(self.btn_run)
+        # 强制重算（2026-10-26）：此前想重算只能自己去删 10_dense/30_dense，
+        # 路径写错还会留下半残项目。勾选后忽略断点续跑、全部阶段重跑，
+        # 并让 S1 重建稠密工作区（位姿变了但深度图残留是典型场景）。
+        self.chk_force = QCheckBox("强制重算（忽略断点续跑）")
+        self.chk_force.setChecked(bool(getattr(self.cfg, "force_rerun", False)))
+        self.chk_force.setToolTip(
+            "勾选后：不再跳过「已完成」的阶段，M1~M6（含 S1）全部重跑，\n"
+            "S1 的稠密工作区（含深度图）一并重建。\n\n"
+            "什么时候需要：① 改过相机位姿或稠密参数后怀疑残留；\n"
+            "② 手动改过中间产物；③ 要复现一次完整耗时。\n"
+            "什么时候不必：只是想重出报表/重贴图——那属于缓存命中，不花时间。\n\n"
+            "注意：S1 照片指纹复用与 M4 图集缓存按参数判定，参数没变仍会命中\n"
+            "（否则每次强制重算都要白等 30 分钟）。")
+        v.addWidget(self.chk_force)
         self.btn_cancel = QPushButton("暂停 / 取消")
         self.btn_cancel.setEnabled(False)
         self.btn_cancel.clicked.connect(self._cancel_run)
@@ -236,6 +251,12 @@ class MainWindow(QMainWindow):
             self.lamps[sid] = lb
             lamps.addWidget(lb)
         v.addLayout(lamps)
+        # 结果条（2026-10-26）：跑完不再弹模态框。
+        # 模态框的问题不是"丑"，而是**必须点掉才能继续操作**：用户看到
+        # 「完成」后的下一个动作通常是去看模型/导出，而弹窗挡在前面；
+        # 更糟的是失败弹窗，点掉之后想「打开报表」还得自己去文件管理器里找。
+        # 结果条把「结论 + 后续动作」放在界面里常驻，直到用户主动关闭。
+        v.addWidget(self._build_result_bar())
         # 实时日志
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
@@ -260,6 +281,80 @@ class MainWindow(QMainWindow):
         return w
 
     # ------------------------------------------------------------ 运行
+    def _build_result_bar(self) -> QWidget:
+        """结果条：结论文字 + 三个后续动作，默认隐藏。"""
+        bar = QFrame()
+        bar.setObjectName("resultBar")
+        bar.setFrameShape(QFrame.StyledPanel)
+        bar.setStyleSheet(
+            "QFrame#resultBar{border-radius:6px;padding:8px 12px;"
+            "background:#1f2a37;border:1px solid #33415a;}")
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(10, 6, 10, 6)
+        self.lbl_result = QLabel("")
+        self.lbl_result.setWordWrap(True)
+        self.lbl_result.setStyleSheet("QLabel{font-size:13px;}")
+        h.addWidget(self.lbl_result, 1)
+        self.btn_result_open = QPushButton("打开输出目录")
+        self.btn_result_open.clicked.connect(self._open_output_dir)
+        self.btn_result_report = QPushButton("查看报表")
+        self.btn_result_report.clicked.connect(self._open_report)
+        self.btn_result_rerun = QPushButton("重跑")
+        self.btn_result_rerun.clicked.connect(self._start_run)
+        self.btn_result_close = QPushButton("关闭")
+        self.btn_result_close.clicked.connect(lambda: bar.setVisible(False))
+        for b in (self.btn_result_open, self.btn_result_report,
+                  self.btn_result_rerun, self.btn_result_close):
+            b.setStyleSheet("QPushButton{padding:4px 10px;border-radius:4px;}")
+            h.addWidget(b)
+        self.result_bar = bar
+        bar.setVisible(False)
+        return bar
+
+    def _show_result(self, ok: bool, summary: str,
+                     skipped_only: bool = False) -> None:
+        """在界面里展示运行结论（替代模态弹窗）。
+
+        三态配色：完成=绿 / 无需重跑=蓝灰 / 未完成=红。失败时**额外**弹一次
+        模态框——那确实需要用户确认（结果与预期不符，不看会继续误操作）。
+        """
+        if ok and skipped_only:
+            color, title = "#8fb3d9", "已是最新（无需重跑）"
+        elif ok:
+            color, title = "#3fb950", "生成完成"
+        else:
+            color, title = "#ff6b6b", "运行未完成"
+        self.lbl_result.setText(f"<b style='color:{color}'>{title}</b>　{summary}")
+        self.lbl_result.setStyleSheet(
+            f"QLabel{{font-size:13px;color:{color};}}")
+        # 只暴露**当前真的存在**的动作：没有产物时「打开输出目录」点了也是空的
+        has_out = os.path.isdir(os.path.join(self.cfg.root_dir, "80_export")) \
+            or os.path.isdir(os.path.join(self.cfg.root_dir, "50_tex"))
+        self.btn_result_open.setEnabled(has_out)
+        self.btn_result_open.setToolTip(
+            "" if has_out else "本次运行未生成产物目录（80_export / 50_tex）")
+        self.btn_result_report.setEnabled(os.path.isfile(
+            os.path.join(self.cfg.root_dir, "report", "report.html")))
+        self.result_bar.setVisible(True)
+
+    def _open_output_dir(self) -> None:
+        """打开本次运行的输出根（优先 80_export，没有就退回项目根）。"""
+        for cand in (os.path.join(self.cfg.root_dir, "80_export"),
+                     os.path.join(self.cfg.root_dir, "report"),
+                     self.cfg.root_dir):
+            if cand and os.path.isdir(cand):
+                QDesktopServices.openUrl(QUrl.fromLocalFile(cand))
+                return
+        self._log("[界面] 未找到可打开的输出目录")
+
+    def _open_report(self) -> None:
+        """用系统默认程序打开 report.html。"""
+        path = os.path.join(self.cfg.root_dir, "report", "report.html")
+        if not os.path.isfile(path):
+            self._log(f"[界面] 报表不存在：{path}")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
     def _busy(self) -> bool:
         """是否正有一次运行在进行（按钮状态之外的**第二道**闸门）。
 
@@ -286,6 +381,17 @@ class MainWindow(QMainWindow):
         finally:
             self._starting = False
 
+    def _confirm_force_rerun(self) -> bool:
+        """强制重算的二次确认。返回 False 表示用户放弃。"""
+        msg = ("强制重算会忽略「已完成」的判定，把本项目的全部阶段重新跑一遍。\n\n"
+               "· 纯照片项目：S1 稠密重建从零开始，单件约 20~40 分钟；\n"
+               "· 场景①：M1~M6 全链重算，S1 若开启也会重建稠密工作区；\n"
+               "· S1 照片指纹复用与 M4 图集缓存照常生效（参数没变仍会命中）。")
+        ret = QMessageBox.question(
+            self, "确认强制重算", msg,
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        return ret == QMessageBox.Yes
+
     def _start_run_inner(self):
         # 由界面控件回写配置
         voxel_map = dict(VOXEL_PRESETS)
@@ -297,6 +403,12 @@ class MainWindow(QMainWindow):
         self.cfg.poisson_blend = self.cb_blend.currentText() == "开启"
         self.cfg.quality_enabled = self.cb_qc.currentText() == "开启"
         self.advanced.apply()  # 高级面板写回
+        # 强制重算：勾选是**一次性意图**，写进本次配置；二次确认防误触
+        # （纯照片项目一次强制重算 = 30 分钟起的 SfM，不能靠一次误点触发）。
+        self.cfg.force_rerun = bool(self.chk_force.isChecked())
+        if self.cfg.force_rerun and not self._confirm_force_rerun():
+            self._log("▶ 已取消强制重算（未启动管线）")
+            return
         # 建立目录 + 复制数据
         try:
             layout = self.cfg.build_layout()
@@ -320,6 +432,7 @@ class MainWindow(QMainWindow):
             return
         for sid in STAGE_ORDER:
             self.lamps[sid].setStyleSheet(_lamp_style("waiting"))
+        self.result_bar.setVisible(False)   # 新一轮开始：上一轮结论作废
         self.btn_run.setEnabled(False)
         self.btn_cancel.setEnabled(True)
         self.btn_export.setEnabled(False)
@@ -629,6 +742,18 @@ class MainWindow(QMainWindow):
             self.lbl_state.setStyleSheet(
                 "QLabel{color:#ff6b6b;font-weight:bold;font-size:13px;}")
         self._log(f"● {summary}")
+        # 强制重算是一次性意图：跑完立刻把勾选与 yaml 里的标记清零。
+        # 不清的话，用户下次打开项目点一次生成又会重跑全链（而且要 30 分钟）。
+        if getattr(self.cfg, "force_rerun", False):
+            self.cfg.force_rerun = False
+            self.chk_force.setChecked(False)
+            try:
+                if not os.path.isdir(self.cfg.root_dir):
+                    raise OSError(f"项目根不存在：{self.cfg.root_dir}")
+                self.cfg.to_yaml(os.path.join(self.cfg.root_dir, "config.yaml"))
+                self._log("● 强制重算标记已复位（下次运行为正常断点续跑）")
+            except Exception as exc:  # noqa: BLE001 - 复位失败不阻断
+                self._log(f"[界面] 强制重算标记复位失败（请手动取消勾选）：{exc}")
 
         # 预览：成品缺失时回退到中间产物
         shown = ""
@@ -670,14 +795,14 @@ class MainWindow(QMainWindow):
         from h3d.gui.viewer3d import load_x1_changes
         if load_x1_changes(self.cfg.root_dir, self._item_id()) is not None:
             self.btn_x1.setEnabled(True)
-        if ok:
-            QMessageBox.information(
-                self, "无需重跑" if rerun_skipped else "完成",
-                f"{summary}\n\n"
-                + ("全部阶段命中已有产物，没有重新计算任何东西。\n"
-                   "如需强制重算，请先删除对应阶段的中间产物。"
-                   if rerun_skipped else "可一键导出交付包。"))
-        else:
+        # 结论进结果条（常驻、可继续操作），不再让用户先点掉一个弹窗。
+        # 失败仍弹模态框：结果与预期不符，不看就直接接着操作更危险。
+        self._show_result(ok, summary, skipped_only=rerun_skipped)
+        if ok and rerun_skipped:
+            self.lbl_result.setText(
+                self.lbl_result.text()
+                + "　（如需重算：勾选左侧「强制重算」后再点一次）")
+        if not ok:
             QMessageBox.warning(
                 self, "运行未完成",
                 f"{summary}\n\n失败原因：{self._failure_text() or '见日志'}\n"

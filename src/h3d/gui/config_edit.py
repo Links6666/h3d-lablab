@@ -83,6 +83,12 @@ class ProjectConfig:
     poisson_blend: bool = True
     icp_align: bool = True
     density_ratio: float = 0.02
+    #: 强制重算（2026-10-26）：忽略断点续跑，M1~M6（含 S1）全部重跑。
+    #:
+    #: 这是**一次性意图**，不是项目的长期属性：只在「这一次点一键生成」时
+    #: 生效，跑完由界面写回 false（见 MainWindow._on_finished）。所以
+    #: :meth:`from_root` 不恢复它——否则用户下次打开项目会莫名重跑一遍全链。
+    force_rerun: bool = False
     #: 打开历史项目时读到的**原始 config.yaml 内容**。
     #:
     #: 实机缺陷（2026-10-25）：``to_yaml`` 原先无条件用模板重写整份配置，
@@ -157,6 +163,8 @@ class ProjectConfig:
         run = data.get("runner") or {}
         self.x1_enabled = bool(run.get("x1_enabled", False))
         self.x2_enabled = bool(run.get("x2_enabled", False))
+        # force_rerun 故意**不**读回：它是一次性意图，留在 yaml 里会让用户
+        # 「打开历史项目 → 点一次生成」就莫名重跑 30 分钟。这里保持默认 False。
         self.quality_enabled = bool((data.get("quality") or {}).get(
             "coverage_threshold") is not None)
         # 文物编号从 00_raw 反查（与任务发现同口径），找不到就沿用默认
@@ -257,6 +265,9 @@ class ProjectConfig:
         cfg["photo_texture"]["icp_align"] = bool(self.icp_align)
         cfg["runner"]["x1_enabled"] = self.x1_enabled
         cfg["runner"]["x2_enabled"] = self.x2_enabled
+        # 强制重算必须是**显式写 true**：子进程（H3D.exe --batch）只认 yaml，
+        # 界面里的勾选不落盘就等于没勾（「假控件」的老毛病）。
+        cfg["runner"]["force_rerun"] = bool(self.force_rerun)
         # manifest 与 CLI 默认一致（output/run_manifest.json）：
         # 历史项目 resume 命中完整交付状态
         cfg["runner"]["manifest"] = os.path.join(

@@ -223,7 +223,8 @@ def _findings(items: list[str],
             out.append({"level": "info", "text": (
                 f"{item}：无激光锚点，几何来自 SfM 稠密重建——坐标是**任意单位**，"
                 f"包围盒对角线 {_num(m5.get('model_bbox_diag'), 3)}（非米）。"
-                "报表中的 mm 指标只反映模型内部自洽性，不能当作真实精度对外引用；"
+                f"引精度请用<b>相对中误差 {_pct(m5.get('rmse_rel'), 2)}</b>"
+                "（中误差 / 对角线），它与尺度无关；"
                 "要出毫米级报告必须补尺度控制点（X2）或激光扫描件。")})
 
         novel = m1.get("dense_novel_ratio")
@@ -372,6 +373,7 @@ _TEMPLATE = """<!DOCTYPE html>
 <h2>四、质检指标（M5）</h2>
 <table>
   <tr><th>文物编号</th><th>表面覆盖率</th><th>中误差（{{ rmse_unit }}）</th>
+      <th>相对中误差（%对角线）</th>
       <th>平均点间距（{{ mps_unit }}）</th><th>边界占比</th>
       <th>纹理清晰度</th><th>纹理接缝</th><th>纹理图集覆盖率</th><th>岛内填充率</th>
       <th>纹理达标</th><th>判定</th></tr>
@@ -379,6 +381,7 @@ _TEMPLATE = """<!DOCTYPE html>
   <tr>
     <td>{{ row.item }}</td>
     <td class="num">{{ row.coverage }}</td><td class="num">{{ row.rmse }}</td>
+    <td class="num">{{ row.rmse_rel }}</td>
     <td class="num">{{ row.mps }}</td><td class="num">{{ row.boundary }}</td>
     <td class="num">{{ row.tex_sharpness }}</td><td class="num">{{ row.tex_seam }}</td>
     <td class="num">{{ row.tex_coverage }}</td><td class="num">{{ row.tex_fill }}</td>
@@ -386,14 +389,18 @@ _TEMPLATE = """<!DOCTYPE html>
     <td class="{{ 'pass' if row.qc == 'pass' else 'fail' }}">{{ row.qc }}</td>
   </tr>
   {% else %}
-  <tr><td colspan="11">无质检数据（M5 未执行{% if n_fail %}——上游阶段失败{% endif %}）</td></tr>
+  <tr><td colspan="12">无质检数据（M5 未执行{% if n_fail %}——上游阶段失败{% endif %}）</td></tr>
   {% endfor %}
 </table>
 <p class="footnote">
   <b>表面覆盖率</b>＝网格表面点中能在参考点云中找到近邻的比例（几何一致性），
   与上一节的「贴图」比例无关；<b>中误差</b>＝网格到参考点云的 RMS 距离。
-  {% if rmse_unit != 'mm' %}本批<b>无激光锚点</b>，两者单位均为 SfM 任意单位，不可当作毫米精度。
-  {% endif %}
+  {% if rmse_unit != 'mm' %}本批<b>无激光锚点</b>，坐标是 SfM 任意单位：
+  中误差按<b>模型单位</b>给出（不是毫米），且不参与质量门判定；
+  <b>请引用「相对中误差」</b>——即中误差占模型包围盒对角线的百分比，
+  它与尺度无关，是同批/跨批可比的口径。
+  {% else %}「相对中误差」＝ 中误差 / 包围盒对角线，供跨尺度比对；
+  报告判门仍以毫米阈值为准。{% endif %}
 </p>
 
 <h2>五、交付包索引（M6 发布）</h2>
@@ -604,16 +611,33 @@ def generate_html(manifest: RunManifest,
     # ---------------- 四、M5 质检 ----------------
     qc_rows: list[dict] = []
     unit_flags: list[bool] = []
+    #: 先定全表口径（批内混排时以「是否有件缺锚点」为准），再逐行按自身口径取值
     for item in items:
         m5 = get(item, "M5")
         if not m5:
             continue
         if m5.get("metric_units") is not None:
             unit_flags.append(bool(m5.get("metric_units")))
+    metric_ok = bool(unit_flags) and all(unit_flags)
+    for item in items:
+        m5 = get(item, "M5")
+        if not m5:
+            continue
+        row_metric = (metric_ok if m5.get("metric_units") is None
+                      else bool(m5.get("metric_units")))
+        # 有米制语义 → 展示毫米；否则展示模型单位原值（×1000 的 rmse_mm 是伪毫米，
+        # 2026-10-26 起不再出现在报表里）
+        if row_metric:
+            rmse_text = _num(m5.get("rmse_mm"), 2)
+        else:
+            rmse_text = _num(m5.get("rmse_units"), 4)
+            if metric_ok and rmse_text != "N/A":   # 全表按 mm 排，本行须标注
+                rmse_text += " (模型单位)"
         qc_rows.append({
             "item": item,
             "coverage": _pct(m5.get("coverage")),
-            "rmse": _num(m5.get("rmse_mm"), 2),
+            "rmse": rmse_text,
+            "rmse_rel": _pct(m5.get("rmse_rel")),
             "mps": _num(m5.get("mps_m"), 4),
             "boundary": _pct(m5.get("boundary_ratio")),
             "tex_sharpness": _num(m5.get("texture_sharpness"), 2),
@@ -624,9 +648,8 @@ def generate_html(manifest: RunManifest,
                        else ("N/A" if m5.get("texture_sharpness") is None else "否")),
             "qc": "pass" if m5.get("status") == "done" else "fail",
         })
-    metric_ok = bool(unit_flags) and all(unit_flags)
-    rmse_unit = "mm" if metric_ok else "任意单位"
-    mps_unit = "m" if metric_ok else "任意单位"
+    rmse_unit = "mm" if metric_ok else "模型单位"
+    mps_unit = "m" if metric_ok else "模型单位"
 
     # ---------------- 五、M6 交付 ----------------
     publish_rows: list[dict] = []

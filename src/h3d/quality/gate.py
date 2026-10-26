@@ -28,9 +28,15 @@ from h3d.core import QualityConfig, get_logger
 log = get_logger("quality.gate")
 
 # accuracy.csv 表头（教学版 18.3 扩展：含覆盖率 / 边界比 / 判定）
+#: 2026-10-26：新增「相对中误差(%对角线)」列。原表只有「中误差(mm)」，而纯照片
+#: 场景没有米制语义，那一列填的是「模型单位 ×1000」——数字自洽性都不成立
+#: （实机 41.16「mm」 vs 对角线 6.06 单位）。现在：
+#:   · 有激光锚点 → 中误差(mm) 填真实毫米，相对值并列供交叉核对；
+#:   · 无激光锚点 → 中误差(mm) 填 N/A，只给相对值（唯一可对外引用的口径）。
 ACCURACY_HEADERS = [
     ("object", "文物编号"),
     ("reg_error_mm", "中误差(mm)"),
+    ("reg_error_rel", "相对中误差(%对角线)"),
     ("coverage", "覆盖率"),
     ("boundary_ratio", "边界边比例"),
     ("mps_m", "平均点间距(m)"),
@@ -43,7 +49,7 @@ ACCURACY_HEADERS = [
 
 
 def check_quality(metrics: dict[str, Any], cfg: QualityConfig) -> bool:
-    """质量门判定：覆盖率 >= 阈值；中误差门仅在参考足够密时启用。
+    """质量门判定：覆盖率 >= 阈值；中误差门仅在「有米制语义且参考足够密」时启用。
 
     参数
     ----
@@ -54,14 +60,19 @@ def check_quality(metrics: dict[str, Any], cfg: QualityConfig) -> bool:
     ----
     True 达标；False 不达标（调用方据此抛 QualityGateError E500 或标记 fail）。
 
-    说明：表面采样 RMSE 受参考点云密度主导（稀疏扫描的 MPS 即达几十 mm），
-    若无条件判 RMSE 会把「扫描稀疏」误判为「模型不合格」。故仅当参考点云
-    平均点间距 MPS <= 中误差阈值（能分辨阈值量级偏差）时启用 RMSE 门，
-    否则中误差标记 N/A、仅以覆盖率判门（《设计书》§36.4「缺参考靶标 ->
-    仅输出覆盖，中误差记为 N/A」的工程化扩展）。
+    中误差门的两个前提（缺一不判）：
+
+    1. **米制语义**（``metric_units``）：场景② 纯照片的坐标是 SfM 任意单位，
+       ``rmse_mm`` 只是「模型单位 ×1000」，拿它去比 5 mm 没有意义
+       （2026-10-25 实机：rmse 报 41.16「mm」，而模型对角线只有 6.06）。
+    2. **参考足够密**（``rmse_reliable``）：表面采样 RMSE 受参考点云密度主导，
+       稀疏扫描的 MPS 即达几十 mm；无条件判 RMSE 会把「扫描稀疏」误判成
+       「模型不合格」（《设计书》§36.4 的工程化扩展）。
     """
     if metrics["coverage"] < cfg.coverage_threshold:
         return False
+    if not metrics.get("metric_units", True):
+        return True          # 无度量基准：只判覆盖率
     if metrics.get("rmse_reliable") and not math.isnan(metrics.get("rmse_mm", math.nan)) \
             and metrics["rmse_mm"] > cfg.rmse_threshold_mm:
         return False
@@ -90,10 +101,26 @@ def build_report(
     生成的文件绝对路径列表。
     """
     ok = check_quality(metrics, cfg)
+    metric_units = bool(metrics.get("metric_units", True))
+    rmse_mm = metrics["rmse_mm"]
+    rmse_rel = metrics.get("rmse_rel")
     record = {
         "item_id": item_id,
         "coverage": round(metrics["coverage"], 4),
-        "rmse_mm": round(metrics["rmse_mm"], 4) if not math.isnan(metrics["rmse_mm"]) else "N/A",
+        # rmse_mm 只在有米制语义时才是毫米；纯照片下它等于「模型单位 ×1000」，
+        # 报表一律不展示，只在 qc_metrics.json 里留档以便追溯旧口径。
+        "rmse_mm": (round(rmse_mm, 4)
+                    if (metric_units and not math.isnan(rmse_mm)) else "N/A"),
+        "rmse_units": (round(metrics["rmse_units"], 6)
+                       if metrics.get("rmse_units") is not None
+                       and not math.isnan(metrics["rmse_units"]) else "N/A"),
+        "rmse_rel": (round(float(rmse_rel), 6)
+                     if isinstance(rmse_rel, (int, float))
+                     and not math.isnan(float(rmse_rel)) else "N/A"),
+        "rmse_unit": metrics.get("rmse_unit") or ("mm" if metric_units
+                                                  else "模型单位"),
+        "metric_units": metric_units,
+        "model_bbox_diag": metrics.get("model_bbox_diag"),
         "boundary_ratio": round(metrics["boundary_ratio"], 4),
         "mps_m": round(metrics["mps_m"], 6),
         "texture_sharpness": metrics.get("texture_sharpness"),
@@ -130,9 +157,13 @@ def _write_accuracy_csv(path: str, record: dict[str, Any]) -> None:
     import csv
 
     headers = [h for _, h in ACCURACY_HEADERS]
+    rel = record.get("rmse_rel")
+    rel_text = (f"{float(rel) * 100:.2f}%" if isinstance(rel, (int, float))
+                else "N/A")
     values = [
         record["item_id"],
         record["rmse_mm"],
+        rel_text,
         f"{record['coverage']:.1%}",
         f"{record['boundary_ratio']:.1%}",
         record["mps_m"],

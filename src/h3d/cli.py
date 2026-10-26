@@ -40,6 +40,9 @@ def _build_parser() -> argparse.ArgumentParser:
                          help="跳过开跑前自检（不建议：会把可提前发现的问题留到中途）")
     p_batch.add_argument("--fix", action="store_true",
                          help="自检时自动清理可安全清理的残留（如崩溃留下的陈旧锁）")
+    p_batch.add_argument("--force", action="store_true",
+                         help="强制重算：忽略断点续跑，全部阶段重跑（S1 深度图工作区"
+                              "一并重建）。等价配置 runner.force_rerun=true")
 
     p_doctor = sub.add_parser(
         "doctor", help="系统自检：环境（boot）+ 项目（project）是否可运行")
@@ -120,13 +123,18 @@ def _preflight_or_stop(cfg, *, fix: bool, no_preflight: bool) -> bool:
 
 
 def _cmd_batch(cfg_path: str, dry_run: bool, no_preflight: bool = False,
-               fix: bool = False) -> int:
+               fix: bool = False, force: bool = False) -> int:
     from h3d.core import load, setup_logging, RunManifest
     from h3d.runner import run_batch
     from h3d.runner.batch_processor import discover_from_config
 
     cfg = load(cfg_path)
     setup_logging("INFO")
+    if force:
+        # 命令行开关优先于配置文件：`--force` 明确表达「这次要重算」，
+        # 不必为了跑一次去改 yaml 再改回来（改配置文件最容易忘改回）。
+        cfg.runner.force_rerun = True
+        print("[force] 强制重算已开启：忽略断点续跑，全部阶段重跑")
 
     if not _preflight_or_stop(cfg, fix=fix, no_preflight=no_preflight):
         return 1
@@ -262,7 +270,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.command == "batch":
             return _cmd_batch(args.config, args.dry_run,
                               no_preflight=getattr(args, "no_preflight", False),
-                              fix=getattr(args, "fix", False))
+                              fix=getattr(args, "fix", False),
+                              force=getattr(args, "force", False))
         if args.command == "doctor":
             return _cmd_doctor(args.config, fix=args.fix, as_json=args.json,
                                show_all=args.all, deep=args.deep)

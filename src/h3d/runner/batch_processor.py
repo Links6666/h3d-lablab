@@ -336,6 +336,28 @@ def _applied_voxel(cfg) -> float:
         return 0.0
 
 
+def _force_dense_restart(cfg):
+    """强制重算：返回一份把 ``sfm_solve.force_redense`` 打开**的副本**。
+
+    不能就地改：``self.cfg`` 是整批共享的对象，就地改会把「强制重算」泄漏到
+    下一件、以及本进程后续的任何运行（含 GUI 里下一次点「一键生成」）。
+
+    只打开 ``force_redense``，不动 ``reuse_identical_photos`` —— 后者按照片
+    内容与稠密参数做键，参数没变时复用得到的就是同一次解算结果，删了只是
+    白花 30 分钟；而 ``force_redense`` 解决的是「位姿变了但深度图残留」
+    （patch_match_stereo 见到 photometric.bin 就跳过，rc=0 但点云错乱）。
+    """
+    import copy
+
+    try:
+        out = copy.deepcopy(cfg)
+        out.sfm_solve.force_redense = True
+        return out
+    except Exception as exc:  # noqa: BLE001 - 深拷贝失败就退回原配置
+        log.warning("强制重算：无法生成配置副本（%s），S1 深度图不会强制重建", exc)
+        return cfg
+
+
 def resolve_task_config(task: Task, cfg) -> tuple[Any, dict]:
     """解算任务的「生效配置」：按几何尺度线性缩放距离类参数。
 
@@ -636,6 +658,13 @@ class BatchProcessor:
         failures: list[dict[str, Any]] = []
 
         workers = int(getattr(self.cfg.runner, "workers", 1) or 1)
+        # 强制重算必须有一条显式日志：否则用户看到「明明开了强制重算，
+        # 耗时却和上次一样」无法自证（也可能只是缓存命中，不是没生效）。
+        if getattr(self.cfg.runner, "force_rerun", False):
+            log.warning("强制重算已开启（runner.force_rerun=true）：忽略断点续跑，"
+                        "%d 件的全部阶段重跑；S1 稠密工作区（含深度图）将重建。"
+                        "M4 图集缓存与 S1 照片指纹复用仍按参数判定，参数未变则命中",
+                        len(tasks))
         if workers > 1 and len(tasks) > 1:
             tasks, failures = self._run_parallel(tasks, manifest, failures, workers)
         else:
@@ -702,15 +731,22 @@ class BatchProcessor:
         后续阶段级联重跑（上游产物变化后，下游旧产物视为过期，保证一致性）。
         """
         rerun_chain = False  # 本轮已触发重跑 -> 后续阶段一律不跳过
+        # 强制重算（2026-10-26）：不看 manifest 的「已完成」，也不看产物是否还在。
+        # 只影响跳过判定，**不动缓存**——图集/照片指纹缓存是参数键控的。
+        force = bool(getattr(self.cfg.runner, "force_rerun", False))
         # 尺度自适应：按本件的几何尺度解算生效配置（距离类参数线性缩放），
         # 使「参数 / 物体尺寸」之比恒定，同一套配置可覆盖文物与大/中/小件。
         cfg, scale_info = resolve_task_config(task, self.cfg)
+        if force:
+            # S1 的稠密工作区会被跳过式复用（photometric.bin 存在即不重算），
+            # 位姿变过而深度图残留正是「强制重算」要解决的场景，这里一并打开。
+            cfg = _force_dense_restart(cfg)
         _record_scale(task, scale_info)
         for stage_id, stage_fn in self.stages.items():
             key = f"{task.item_id}/{stage_id}"
 
-            # 断点续跑：已完成 且 产物仍在 且 上游未重跑 -> 跳过
-            if (self.cfg.runner.resume and not rerun_chain
+            # 断点续跑：已完成 且 产物仍在 且 上游未重跑 且 未强制重算 -> 跳过
+            if (self.cfg.runner.resume and not force and not rerun_chain
                     and manifest.is_done(key) and self._outputs_exist(manifest, key)):
                 # 关键：跳过 ≠ 无产物。必须把 manifest 里的产物与指标恢复到
                 # task.results，否则下游 M3/M4/M5 读 outputs_of() 得到空列表

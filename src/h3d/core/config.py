@@ -308,6 +308,17 @@ class RunnerConfig(_ConfigBase):
 
     fail_isolation: bool = Field(dtype=bool, default=True)
     resume: bool = Field(dtype=bool, default=True)
+    #: 强制重算（2026-10-26）：忽略 manifest 的「已完成」判定，M1~M6（含 S1）
+    #: 全部重跑，并让 S1 丢弃既有深度图工作区（等价 sfm_solve.force_redense）。
+    #:
+    #: 为什么需要它：断点续跑是默认行为，但有几类情况**产物存在也不可信**——
+    #: 位姿改过而深度图残留（patch_match_stereo 会跳过已存在的 photometric.bin，
+    #: 导致点云错乱但 rc=0）、手动改过中间文件、想复现一次完整耗时。此前只能
+    #: 让用户自己去删 10_dense/30_dense，路径写错还会留下半残项目。
+    #:
+    #: 注意它**不动缓存**：M4 图集缓存与 S1 照片指纹复用都是「参数键控」的，
+    #: 参数没变则结果必然相同，删掉只是白等。
+    force_rerun: bool = Field(dtype=bool, default=False)
     manifest: str = Field(dtype=str, default="output/run_manifest.json")
     workers: int = Field(dtype=int, default=1, low=1)
     x1_enabled: bool = Field(dtype=bool, default=False)
@@ -366,6 +377,10 @@ class QualityConfig(_ConfigBase):
     coverage_k_mps:     覆盖率判定阈值 = k × MPS（平均点间距）——尺度自适应，
                         不写死绝对距离（《软著方案》2.7.2 独创点）。
     samples:            网格采样点数（覆盖率 / 中误差估计）。
+    rmse_rel_warn:      相对中误差提示阈值（中误差 / 包围盒对角线，无量纲）。
+                        **只发 WARNING，不参与判门**。用于纯照片场景——没有
+                        激光锚点就没有毫米可言，此时唯一可对外引用的是相对值
+                        （2026-10-26）。
     """
 
     enabled: bool = Field(dtype=bool, default=True)
@@ -373,6 +388,7 @@ class QualityConfig(_ConfigBase):
     coverage_threshold: float = Field(dtype=float, default=0.80, low=0.0, high=1.0)
     coverage_k_mps: float = Field(dtype=float, default=3.0, low=0.0)
     samples: int = Field(dtype=int, default=50000, low=100)
+    rmse_rel_warn: float = Field(dtype=float, default=0.02, low=0.0)
 
 
 class TextureConfig(_ConfigBase):

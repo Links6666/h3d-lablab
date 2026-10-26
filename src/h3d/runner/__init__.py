@@ -443,20 +443,28 @@ def _stage_quality(task: Task, cfg) -> StageResult:
         pc = load_point_cloud(src)
         ref = pc if ref is None else ref + pc
 
-    metrics = quality_run(mesh, ref, cfg.quality)
-    # 尺度口径（2026-10-18）：报表里的 rmse 单位写死 "mm"，但场景②（纯照片）
-    # 的坐标是 SfM **任意单位**，没有激光锚点就没有"毫米"可言。这里把
-    # 「是否存在度量基准」和模型自身包围盒对角线一起落盘，报表据此改写单位说明。
+    # 尺度口径（2026-10-18 / 2026-10-26）：报表里的 rmse 单位写死 "mm"，但场景②
+    # （纯照片）的坐标是 SfM **任意单位**，没有激光锚点就没有"毫米"可言。
+    # 现在把「是否有度量基准」**在算之前**传给 quality.run —— 它据此决定
+    #   · 有锚点：rmse_mm 是真实毫米，按 rmse_threshold_mm 判门；
+    #   · 无锚点：rmse_mm 只是「模型单位×1000」，不判门，改报
+    #     rmse_rel = rmse_units / 包围盒对角线（无量纲，唯一可对外引用的口径）。
+    metric_units = bool(task.raw_paths)
+    metrics = quality_run(mesh, ref, cfg.quality, metric_units=metric_units)
     try:
         import numpy as _np
         metrics["model_bbox_diag"] = round(float(_np.linalg.norm(
             _np.asarray(mesh.get_max_bound()) - _np.asarray(mesh.get_min_bound()))), 6)
     except Exception:  # noqa: BLE001 - 仅用于报表展示，失败留空
         metrics["model_bbox_diag"] = None
-    metrics["metric_units"] = bool(task.raw_paths)
-    if not task.raw_paths:
+    metrics["metric_units"] = metric_units
+    if not metric_units:
+        _rel = metrics.get("rmse_rel")
         log.warning("本件几何来自 SfM 重建（无激光锚点）：坐标是任意单位，"
-                    "报表中的 mm 指标只反映模型内部自洽性，不能当真实精度")
+                    "rmse %.4f 模型单位（对角线的 %s），报表不再按毫米展示；"
+                    "要出毫米级精度必须补尺度控制点（X2）或激光扫描件",
+                    float(metrics.get("rmse_units") or 0.0),
+                    ("N/A" if _rel is None else f"{float(_rel) * 100:.2f}%"))
 
     # 纹理质量维度（M4 产物存在时评估：清晰度/接缝/填充率）
     from h3d.quality.texture_quality import texture_quality
@@ -498,16 +506,35 @@ def _stage_quality(task: Task, cfg) -> StageResult:
     reports = build_report(task.item_id, metrics, cfg.quality, qc_dir, rpt_dir)
 
     if not metrics["ok"]:
+        # 失败文案要按口径说人话：纯照片场景没有毫米，硬写 mm 会误导用户
+        # 去「修精度」，而真正的问题多半是覆盖率（几何缺片 / 背景未剔除）。
+        if metric_units:
+            rmse_txt = (f"rmse={metrics['rmse_mm']:.2f}mm "
+                        f"(阈值 {cfg.quality.rmse_threshold_mm:.1f}mm)")
+        else:
+            _rel = metrics.get("rmse_rel")
+            rmse_txt = ("中误差不参与判定（无激光锚点）"
+                        if _rel is None else
+                        f"相对中误差 {float(_rel) * 100:.2f}%（不参与判定）")
         raise QualityGateError(
             f"质检不达标: coverage={metrics['coverage']:.1%} "
-            f"(阈值 {cfg.quality.coverage_threshold:.0%}), "
-            f"rmse={metrics['rmse_mm']:.2f}mm "
-            f"(阈值 {cfg.quality.rmse_threshold_mm:.1f}mm)",
+            f"(阈值 {cfg.quality.coverage_threshold:.0%}), {rmse_txt}",
             item_id=task.item_id, stage="M5")
+
+    log.info("M5 完成：%s（coverage=%.1f%%, rmse=%.4f %s -> pass）",
+             task.item_id, metrics["coverage"] * 100,
+             float(metrics.get("rmse_units") or 0.0),
+             metrics.get("rmse_unit") or "mm")
 
     manifest_metrics = {
         "coverage": round(float(metrics["coverage"]), 4),
         "rmse_mm": round(float(metrics["rmse_mm"]), 4),
+        # 三个口径一起落盘（2026-10-26）：报表按 rmse_unit 决定展示哪一列，
+        # 论文引用相对值时不必再从 rmse_mm 反推。
+        "rmse_units": round(float(metrics.get("rmse_units") or 0.0), 6),
+        "rmse_rel": (None if metrics.get("rmse_rel") is None
+                     else round(float(metrics["rmse_rel"]), 6)),
+        "rmse_unit": metrics.get("rmse_unit"),
         "boundary_ratio": round(float(metrics["boundary_ratio"]), 4),
         "mps_m": round(float(metrics["mps_m"]), 6),
         "texture_available": tq["texture_available"],
@@ -522,8 +549,6 @@ def _stage_quality(task: Task, cfg) -> StageResult:
         "model_bbox_diag": metrics.get("model_bbox_diag"),
         "metric_units": metrics.get("metric_units"),
     }
-    log.info("M5 完成：%s（coverage=%.1f%%, rmse=%.2fmm -> pass）",
-             task.item_id, metrics["coverage"] * 100, metrics["rmse_mm"])
     return StageResult("M5", TaskStatus.DONE, reports, manifest_metrics)
 
 

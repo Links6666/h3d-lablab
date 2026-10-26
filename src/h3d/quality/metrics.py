@@ -11,7 +11,9 @@
        批量求每点最近邻距离，取平均得到平均点间距（尺度自适应的基准）。
     2. ``surface_coverage`` 网格均匀采样 N 点，统计距参考点云最近邻距离
        <= max_dist 的占比（被有效点云覆盖的表面积比例，设计书 18.1）。
-    3. ``qc_rmse`` 同源距离数组的均方根（米 -> 毫米），对照 WW/T 中误差限值。
+    3. ``qc_rmse`` 同源距离数组的均方根（米 -> 毫米）——**仅当模型单位是米时**
+       ／``qc_rmse_units`` 原值／``bbox_diag`` 供 ``rmse_rel = rmse / diag``
+       换算成无量纲相对误差（纯照片任意单位场景的唯一可引用口径）。
     4. ``boundary_ratio`` 统计只被一个三角面引用的边（边界边）占总边数比例，
        作为孔洞率 / 网格闭合性的量化指标。
 """
@@ -70,11 +72,13 @@ def surface_coverage(mesh, ref_pcd, max_dist: float, samples: int = 50000) -> fl
     return float(np.mean(dists <= max_dist))
 
 
-def qc_rmse(mesh, ref_pcd, samples: int = 50000) -> float:
-    """表面中误差（毫米）：网格采样点到参考点云最近邻距离的均方根。
+def qc_rmse_units(mesh, ref_pcd, samples: int = 50000) -> float:
+    """表面中误差（**模型自身单位**）：采样点到参考点云最近邻距离的均方根。
 
-    反映重建网格对参考（扫描 / 靶标）表面的贴合程度，对照 WW/T 0115/0117
-    中误差限值（精细级 <= 5 mm）。缺参考时调用方负责标记 N/A。
+    这是口径正确的原值。``qc_rmse`` 的 ``*1000`` 只有在「模型单位就是米」时
+    才等于毫米；纯照片（SfM）场景坐标是任意单位，乘 1000 等于把 1 模型单位
+    当成 1 米（2026-10-25 实机：报 41.16「mm」，而包围盒对角线只有 6.06，
+    真值是 0.041 单位）。
     """
     import numpy as np
 
@@ -82,7 +86,37 @@ def qc_rmse(mesh, ref_pcd, samples: int = 50000) -> float:
         return float("nan")
     pts = mesh.sample_points_uniformly(int(samples))
     dists = np.asarray(pts.compute_point_cloud_distance(ref_pcd))
-    return float(np.sqrt(np.mean(np.square(dists))) * 1000.0)  # 米 -> 毫米
+    return float(np.sqrt(np.mean(np.square(dists))))
+
+
+def bbox_diag(geometry) -> float:
+    """几何体包围盒对角线长度（模型单位）。"""
+    import numpy as np
+
+    try:
+        bbox = geometry.get_axis_aligned_bounding_box()
+    except Exception:  # noqa: BLE001 - 空几何 / 非网格
+        return 0.0
+    lo = np.asarray(bbox.get_min_bound(), dtype=float)
+    hi = np.asarray(bbox.get_max_bound(), dtype=float)
+    if lo.size != 3 or hi.size != 3:
+        return 0.0
+    return float(np.linalg.norm(hi - lo))
+
+
+def qc_rmse(mesh, ref_pcd, samples: int = 50000) -> float:
+    """表面中误差（毫米）：网格采样点到参考点云最近邻距离的均方根。
+
+    反映重建网格对参考（扫描 / 靶标）表面的贴合程度，对照 WW/T 0115/0117
+    中误差限值（精细级 <= 5 mm）。缺参考时调用方负责标记 N/A。
+
+    .. warning::
+       ``*1000`` 的语义前提是**模型的 1 个单位就是 1 米**。纯照片场景没有
+       激光锚点，坐标是 SfM 任意单位，此时该返回值不是毫米——调用方必须
+       用 :func:`qc_rmse_units` 或 ``rmse_rel``（相对中误差）对外表述。
+    """
+    v = qc_rmse_units(mesh, ref_pcd, samples)
+    return float("nan") if v != v else float(v * 1000.0)  # 米 -> 毫米
 
 
 def boundary_ratio(mesh) -> float:
@@ -105,4 +139,5 @@ def boundary_ratio(mesh) -> float:
     return float(n_boundary / len(edge_count))
 
 
-__all__ = ["estimate_mps", "surface_coverage", "qc_rmse", "boundary_ratio"]
+__all__ = ["estimate_mps", "surface_coverage", "qc_rmse", "qc_rmse_units",
+          "bbox_diag", "boundary_ratio"]
