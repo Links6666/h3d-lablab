@@ -514,6 +514,14 @@ class PhotoTextureConfig(_ConfigBase):
                   复用后几何逐位相同 → xatlas 展开与逐纹素采样必然同结果，
                   复用把单件纹理耗时从 83~85 s 降到 4~6 s；几何/位姿/照片/
                   参数任一不同即自动重算，不会串件。
+    auto_textured_format: 照片纹理（paint_mode='photo'）**无条件**在 50_tex 落盘
+                  图集 PNG（``<item>_L1.0_diffuse.png``）之后，若 ``export_formats``
+                  里没有任何能承载图像纹理的格式（obj / gltf 外挂、glb 内嵌），
+                  自动补导 OBJ（obj+mtl+diffuse）。
+                  为什么：图集是逐纹素采样 50 s 的成果，PLY 只能带顶点色——
+                  实机 2026-10-26 交付包只剩 85,420 个顶点色，图集 2,639,926 个
+                  纹素一个都没交出去（差 31 倍）。补导会打 WARNING 并记
+                  ``auto_added_formats``；设为 false 则只告警不补导。
     """
 
     enabled: bool = Field(dtype=bool, default=False)
@@ -526,6 +534,7 @@ class PhotoTextureConfig(_ConfigBase):
     blend_iterations: int = Field(dtype=int, default=150, low=10)
     export_formats: list = Field(default=["obj", "glb"])
     reuse_atlas: bool = Field(dtype=bool, default=True)
+    auto_textured_format: bool = Field(dtype=bool, default=True)
 
 
 class PipelineConfig(_ConfigBase):

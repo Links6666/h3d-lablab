@@ -61,7 +61,9 @@ def _degraded_entry(exc: Exception, elapsed: float) -> dict:
     return {
         "status": TaskStatus.SKIPPED.value,
         "outputs": [],
-        "metrics": {"degraded": True, "reason": str(exc)[:300]},
+        "metrics": {"degraded": True, "skip_kind": "degraded",
+                    "skip_reason": str(exc)[:300],
+                    "reason": str(exc)[:300]},
         "elapsed_s": round(elapsed, 4),
         "error": "",
     }
@@ -470,6 +472,28 @@ def _stage_enabled(stage_id: str, cfg) -> bool:
     return True     # 主线阶段恒执行
 
 
+def _disabled_reason(stage_id: str, cfg) -> str:
+    """「配置关闭」的可读原因（写进 manifest 的 ``skip_reason``）。
+
+    必须与「已启用但条件不满足」区分：前者是用户的意图，后者是运行时的意外。
+    旧实现两者都只在 debug 留痕、且都不写 manifest，报表只能把它们一起
+    归成"未执行"，用户无从判断该改配置还是该修上游（2026-10-26 实机：
+    "完成 7 · 未执行 1 → 部分完成"，那个"未执行"其实是 P1 被配置关掉了）。
+    """
+    if stage_id == "S1":
+        return "配置关闭：sfm_solve.enabled=false（未启用照片位姿解算）"
+    if stage_id == "P1":
+        if getattr(cfg.texture, "paint_mode", "") == "photo":
+            return ("配置关闭：M4 已按 paint_mode=photo 输出照片纹理，"
+                    "P1 与 M4 互斥（同目录重复投影）")
+        return "配置关闭：photo_texture.enabled=false（可选增强未启用）"
+    if stage_id == "X1":
+        return "配置关闭：runner.x1_enabled=false（未启用多时相形变检测）"
+    if stage_id == "X2":
+        return "配置关闭：runner.x2_enabled=false（未启用色差评估）"
+    return "配置关闭：该阶段本次未启用"
+
+
 def _inject_scale_metrics(stage_id: str, res: StageResult, info: dict) -> None:
     """把尺度信息注入阶段指标（仅 M1 —— 任务首个几何阶段，代表任务级尺度）。
 
@@ -523,8 +547,23 @@ def _run_task_worker(cfg_dict: dict, task: Task, stages: dict,
             elapsed = time.time() - t0
             _inject_scale_metrics(stage_id, res, scale_info)
             if res.status == TaskStatus.SKIPPED:
-                # 可选 stage 默认关闭：跳过，不写入结果（主进程不 record）
-                task.mark_skipped(stage_id)
+                # 可选 stage 未执行：把"配置关闭"与"条件不满足"分开回传主进程，
+                # 由主进程写进 manifest（worker 不写共享文件）。见 _run_task 同处注释。
+                reason = str((res.metrics or {}).get("skip_reason")
+                             or "前置条件不满足")
+                if _stage_enabled(stage_id, cfg):
+                    task.mark_skipped(stage_id)
+                    results[stage_id] = {
+                        "status": TaskStatus.SKIPPED.value, "outputs": [],
+                        "metrics": {"skip_kind": "condition",
+                                    "skip_reason": reason[:300]},
+                        "elapsed_s": round(elapsed, 4), "error": ""}
+                else:
+                    task.mark_disabled(stage_id)
+                    results[stage_id] = {
+                        "status": TaskStatus.DISABLED.value, "outputs": [],
+                        "metrics": {"skip_reason": _disabled_reason(stage_id, cfg)},
+                        "elapsed_s": round(elapsed, 4), "error": ""}
                 continue
             task.finish_stage(stage_id, res.outputs, res.metrics, elapsed)
             results[stage_id] = {
@@ -718,6 +757,11 @@ class BatchProcessor:
                                         **_strip_reserved(res["metrics"]))
                     elif res["status"] == TaskStatus.FAIL.value:
                         manifest.record_fail(key, res["error"])
+                    elif res["status"] in (TaskStatus.SKIPPED.value,
+                                           TaskStatus.DISABLED.value):
+                        # 五态终态：worker 已判好 skip_kind，这里原样落盘
+                        manifest.record(key, res["status"], [], res["elapsed_s"],
+                                        **_strip_reserved(res["metrics"]))
                 failures.extend(task_failures)
         return [done_tasks.get(t.item_id, t) for t in tasks], failures
 
@@ -770,21 +814,28 @@ class BatchProcessor:
                 elapsed = time.time() - t0
                 _inject_scale_metrics(stage_id, res, scale_info)
                 if res.status == TaskStatus.SKIPPED:
-                    # 可选 stage 默认关闭：跳过、不设 rerun_chain、不写 manifest。
-                    #
-                    # 2026-10-18：原来这里只有 log.debug。凡是「已打过 ▶ 开始」
-                    # （_stage_enabled 为真）却返回 SKIPPED 的阶段（S1 无照片、
-                    # X1 无参考期、X2 无纹理图、P1 与 M4 重复），界面永远等不到
-                    # 完成行 → 那盏灯橙色卡死、进度条少一格。现在：真跳过必须
-                    # 打一条 INFO（带原因），界面据此把灯置灰并计入进度。
-                    task.mark_skipped(stage_id)
+                    # 可选 stage 未执行。必须区分两种原因（终态五态，2026-10-26）：
+                    #   · 配置关闭   -> DISABLED，是用户的意图，不计入报表分母；
+                    #   · 条件不满足 -> SKIPPED，是运行时事实（无照片/无参考期/与 M4 互斥）。
+                    # 旧实现两者都不写 manifest，报表只能统统算「未执行」，
+                    # 于是"我关掉了 P1"和"P1 被上游拖死"印成同一句话。
+                    reason = str((res.metrics or {}).get("skip_reason")
+                                 or "前置条件不满足")
                     if _stage_enabled(stage_id, cfg):
-                        reason = str((res.metrics or {}).get("skip_reason")
-                                     or "前置条件不满足")
+                        task.mark_skipped(stage_id)
+                        # elapsed 传 None：跳过/未启用的阶段不该在报表里显示
+                        # 「0.00 s」——那会被读成"跑了但瞬间结束"。
+                        manifest.record(key, TaskStatus.SKIPPED.value, [], None,
+                                        skip_kind="condition",
+                                        skip_reason=reason[:300])
                         log.info("○ %s 跳过：%s（%s）",
                                  stage_id, task.item_id, reason)
                     else:
-                        log.debug("可选 stage 未启用，跳过：%s", key)
+                        task.mark_disabled(stage_id)
+                        manifest.record(key, TaskStatus.DISABLED.value, [], None,
+                                        skip_reason=_disabled_reason(stage_id, cfg))
+                        log.debug("可选 stage 未启用，跳过：%s（%s）", key, reason)
+                    self._save_manifest(manifest)
                     continue
                 rerun_chain = True  # 真正执行才触发级联重跑
                 task.finish_stage(stage_id, res.outputs, res.metrics, elapsed)
@@ -845,8 +896,9 @@ class BatchProcessor:
         """
         reason = str(exc)
         task.mark_skipped(stage_id)
-        manifest.record(key, "skipped", [], elapsed,
-                        degraded=True, reason=reason[:300])
+        manifest.record(key, TaskStatus.SKIPPED.value, [], elapsed,
+                        skip_kind="degraded", degraded=True,
+                        skip_reason=reason[:300], reason=reason[:300])
         log.warning(
             "可选阶段降级（主线继续）：item=%s stage=%s -> %s；"
             "该增强本次不生效，M1~M6 照常执行。"

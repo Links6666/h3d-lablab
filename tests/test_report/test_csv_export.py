@@ -136,9 +136,10 @@ class TestExportManifestCsv:
         assert ("rock001", "M2") in rows_by_key
         assert ("rock002", "M1") in rows_by_key
 
-        # 状态列
-        assert rows_by_key[("rock001", "M1")][2] == "done"
-        assert rows_by_key[("rock002", "M1")][2] == "fail"
+        # 状态列：五态终态的中文口径（与 HTML 报表同一套词，
+        # 两处不一致用户就得对照着猜「skipped 到底是关掉了还是没数据」）
+        assert rows_by_key[("rock001", "M1")][2] == "完成"
+        assert rows_by_key[("rock002", "M1")][2] == "失败"
         # 关键指标列包含 fitness（列序：编号/阶段/状态/耗时/产物数/产物路径/指标/备注）
         header = content[0]
         col = {name: i for i, name in enumerate(header)}

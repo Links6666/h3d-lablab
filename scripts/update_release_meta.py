@@ -24,8 +24,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _relver import REL, REL_NAME, VER, VTAG  # noqa: E402  单一来源
 
-REV = "r12"
-# 2026-10-26：1.1.7 / 1.1.8 都在这一日打包（1.1.8 紧随其后，只间隔数小时）。
+REV = "r13"
+# 2026-10-26：1.1.7 / 1.1.8 / 1.1.9 都在这一日打包（间隔数小时）。
 # 千万不要为了「日期不同」把 DATE 往后改 —— 它同时决定 NOTE_PDF 文件名，
 # 一改就与 docs/ 里实际存在的 PDF 对不上。
 DATE = "2026-10-26"
@@ -479,6 +479,84 @@ README_REV13 = """\
 
 """
 
+README_REV15 = """\
+--------------------------------------------------------------------------------
+★ 2026-10-26 修订十五（1.1.9：把跑出来的图集交出去，把没跑的说清楚）
+--------------------------------------------------------------------------------
+接修订十四：精度口径改对了、重算做成了开关。这一版处理一次真实运行
+（30 张照片、纯照片场景，31.4 min）暴露出来的三件事——它们的共同点是
+「管线算对了，但交付和报表没跟上」。
+
+【十五之一】2048² 图集没进交付包，264 万纹素只交出 8.5 万
+事实：50_tex 里 2048² 图集岛内填充率 94.89%、2,639,926 个纹素、
+      逐纹素采样花了 50.18 s；交付包 80_export 里只有一个 85,420 顶点的 .ply。
+根因：配置是 texture/photo_texture.export_formats: [ply]。PLY 只能存顶点色，
+      **无法引用图像纹理**；而旧实现把「图集落盘」交给导出器做——只有导出
+      obj/glb 时才会写下 <item>_L1.0_diffuse.png。于是图集只留在
+      99_runs/atlas_cache/tex/ 里，M4 的主产物 100% 没交出去（有效色彩采样
+      从 264 万降到 8.5 万，差 31 倍），下游无从复原。
+修复：图集落盘与导出格式**彻底解耦**——烘焙完成即无条件写
+      50_tex/<item>/<item>_L1.0_diffuse.png 并进 M4 产物列表；
+      若 formats 里没有任何能承载纹理的格式（obj/gltf 外挂、glb 内嵌），
+      按 photo_texture.auto_textured_format（默认 true）自动补导 OBJ 并 WARNING，
+      记 auto_added_formats / texture_carrier，可显式关闭。
+      M6 另加 deliver_texture_atlas：无论交付哪些模型格式，图集一律复制进
+      80_export/<item>/<item>_diffuse.png；无模型引用它时 WARNING 说清。
+
+【十五之二】M5 纹理质检整段失效，五项指标全 N/A
+事实：M5 的纹理清晰度 / 接缝 / 图集覆盖率 / 岛内填充率 / 达标判定全是 N/A，
+      而同一份报表里 M4 自报岛内填充率 94.89% —— 自相矛盾。
+根因：M5 只找 <item>_L1.0_diffuse.png，该文件只在导出 obj/glb 时才生成。
+      "质检没做"伪装成了"质检没问题"。
+修复：M5 改为三级定位——M4 指标里的 atlas_png（权威）→ 命名约定逐个试
+      （L1.0 / L1 / uv 模式 _0）→ 目录扫描（显式排除 *_mask.png，
+      掩膜与图集同尺寸，误读会算出"清晰度 0"的假指标）。
+      找不到时按 paint_mode 区分：顶点色链路属正常（INFO），
+      照片链路属异常（WARNING 指明应检查哪个文件）；texture_atlas 与
+      texture_mask_source 一并进 manifest，N/A 的成因可审计。
+      实测同一批数据：sharpness=71.89 / seam=2.34 / 覆盖 59.8% / 填充 94.9%，
+      与 M4 的 94.89% 对上。
+
+【十五之三】终态又归并了：「完成 7 · 未执行 1 → 部分完成」
+事实：那 1 个「未执行」是 photo_texture.enabled=false 的 P1 —— 用户主动关掉的。
+根因：配置关闭的可选阶段**根本不写 manifest**，报表只能把它算成「未执行」；
+      而「未执行」在同一张报表里也用来表示"上游失败、从未到达"。两种完全
+      不同的东西共用一个词，据此排查必然走错方向（1.1.7「跳过≠失败」的同类）。
+修复：阶段终态正式扩成**五态**：
+      · 完成     本次跑完
+      · 失败     本次失败（下游未执行）
+      · 跳过     已启用但没跑（skip_kind 再细分 条件不满足 / 降级 / 续跑复用）
+      · 未启用   配置里关掉了，**不计入评估分母**，也不是异常
+      · 未执行   本次运行无该阶段记录（多为上游失败）
+      manifest 里两者分成 status=disabled 与 status=skipped（带 skip_kind），
+      并各带 skip_reason 说明是哪一项开关；报表分母改为
+      「件数 × 阶段数 − 未启用」，判定新增「通过（含跳过）」一档；
+      CSV 状态列同步中文化，备注列读不到 reason 时回退 skip_reason。
+      实测同一项目：完成 7 · 未启用 1 · 未执行 0，分母 7 → 整体判定：通过。
+      P1 行直接写明「配置关闭：M4 已按 paint_mode=photo 输出照片纹理，
+      P1 与 M4 互斥（同目录重复投影）」。
+
+【十五之四】90_meta 与产物对不上
+事实：90_meta 的 delivery.models 是空列表，而 80_export 里躺着模型；
+      manifest 的 M6 写着 formats=[ply, obj, glb] 而实际只交付了 1 个格式。
+根因：build_meta 从 stage_metrics["M6"]["outputs"] 取交付清单，而 M6 的
+      stage_metrics 只被 setdefault 塞了个 {"status": "done"}；formats 记的是
+      配置请求值，没有记实际交付值。
+修复：M6 把自己的 outputs 写进 stage_metrics；formats 拆成
+      formats_requested / formats_delivered / formats_missing 三项，
+      缺失时 WARNING 并指明"多为 M4 未导出该格式，见 texture.export_formats"；
+      交付清单按 item_id **覆盖**而不是 append（重跑 M6 曾出现
+      「1 件文物 / 2 件已发布」）；图集也进 delivery.models 与清单的 texture 字段。
+
+【本版验证】778 项测试通过（1.1.8 为 757，+21）；新增
+  test_atlas_delivery(11)、test_terminal_states(10)。
+  真机复跑同一项目（S1~M3 断点续跑、M4 图集缓存命中 2 s、M5/M6 重算）：
+  交付包 = ply + obj(13.8 MB) + mtl + 图集 PNG(4.67 MB, 2048²)，
+  「纹理承载 = obj」；M5 五项纹理指标全部算出；P1 记未启用、分母 7、判定通过。
+
+"""
+
+
 README_REV14 = """\
 --------------------------------------------------------------------------------
 ★ 2026-10-26 修订十四（1.1.8：把「精度」量对，把「重算」做成开关）
@@ -568,6 +646,9 @@ def update_readme(fill: bool) -> None:
     s = _upsert_section(s, "★ 2026-10-26 修订十四", "★ 2026-10-26 修订十三",
                         README_REV14,
                         uniq="★ 2026-10-26 修订十四（1.1.8")
+    s = _upsert_section(s, "★ 2026-10-26 修订十五", "★ 2026-10-26 修订十四",
+                        README_REV15,
+                        uniq="★ 2026-10-26 修订十五（1.1.9")
     s = _upsert_section(s, "★ 2026-10-26 修订十三", "★ 2026-10-24 修订十二",
                         README_REV13,
                         uniq="★ 2026-10-26 修订十三（1.1.7")
@@ -771,6 +852,53 @@ VERSION_REV9 = ("-" * 80 + "\n" + """\
 
 """ + "-" * 80 + "\n")
 
+VERSION_REV13 = ("-" * 80 + "\n" + """\
+2026-10-26 r13 修复（1.1.9：图集进交付包 / M5 纹理质检接通 / 五态终态）
+--------------------------------------------------------------------------------
+【现象·一】2048² 图集（2,639,926 纹素、逐纹素采样 50.18 s）没进交付包，
+        交付的只有一个 85,420 顶点的 .ply —— 有效色彩采样差 31 倍。
+【根因】配置 export_formats=[ply]，而 PLY 无法引用图像纹理；旧实现把「图集落盘」
+        交给导出器，只有导 obj/glb 时才写 <item>_L1.0_diffuse.png，于是图集
+        只留在 99_runs/atlas_cache/tex/ 里，M4 主产物整体没交出去。
+【修复】图集落盘与导出格式解耦：烘焙完即无条件写 50_tex/<item>_L1.0_diffuse.png
+        并进 M4 产物列表；formats 里没有可承载纹理的格式时按
+        photo_texture.auto_textured_format（默认 true）自动补导 OBJ 且 WARNING；
+        M6 新增 deliver_texture_atlas，图集一律复制进 80_export（含 mtl 引用）。
+
+【现象·二】M5 五项纹理指标全 N/A，而 M4 自报岛内填充率 94.89%。
+【根因】M5 只找 <item>_L1.0_diffuse.png，该文件只在导出 obj/glb 时才生成 ——
+        "质检没做"被显示成"没有异常"。
+【修复】三级定位：M4 指标 atlas_png → 命名约定（L1.0/L1/uv _0）→ 目录扫描
+        （显式排除 *_mask.png，掩膜与图集同尺寸，误读会算出"清晰度 0"）。
+        找不到时按 paint_mode 区分正常/异常；texture_atlas 与
+        texture_mask_source 进 manifest。实测 sharpness=71.89 / seam=2.34 /
+        覆盖 59.8% / 填充 94.9%，与 M4 一致。
+
+【现象·三】报表写「完成 7 · 未执行 1 → 部分完成」，那 1 个是配置关闭的 P1。
+【根因】配置关闭的可选阶段根本不写 manifest，报表只能归成「未执行」；
+        而「未执行」同时用来表示"上游失败、从未到达"。两种东西共用一个词。
+【修复】终态扩成五态：完成 / 失败 / 跳过（skip_kind=条件不满足|降级|续跑）/
+        未启用（配置关闭，不计入分母）/ 未执行（无记录）。
+        manifest 分 status=disabled 与 status=skipped，各带 skip_reason 写明
+        是哪个开关；报表分母改为「件数×阶段数−未启用」，判定新增
+        「通过（含跳过）」；CSV 状态列中文化、备注回退 skip_reason。
+        实测本项目：完成 7 · 未启用 1 · 未执行 0，分母 7 → 通过。
+
+【现象·四】90_meta 的 delivery.models 恒为空；M6 formats 写着 [ply,obj,glb]
+        而实际只交付 1 个格式 —— 元数据与产物自相矛盾。
+【根因】build_meta 取 stage_metrics["M6"]["outputs"]，而 M6 只被 setdefault 成
+        {"status":"done"}；formats 记的是配置请求值而非实际交付值。
+【修复】M6 outputs 写进 stage_metrics；formats 拆成 requested / delivered /
+        missing 三项并对缺失 WARNING；交付清单按 item_id 覆盖而非 append
+        （重跑曾出现「1 件文物 / 2 件已发布」）；图集进 models 与 texture 字段。
+
+【验证】778 项测试通过（1.1.8 为 757，+21）：test_atlas_delivery(11) /
+        test_terminal_states(10)。真机复跑同一 30 张照片项目：交付包 =
+        ply + obj(13.8 MB) + mtl + 图集 PNG(4.67 MB / 2048²)，纹理承载=obj。
+
+""" + "-" * 80 + "\n")
+
+
 VERSION_REV12 = ("-" * 80 + "\n" + """\
 2026-10-26 r12 修复（1.1.8：中误差口径 / 结果条 / 强制重算 / 用户级复用索引）
 --------------------------------------------------------------------------------
@@ -915,14 +1043,13 @@ def update_version(fill: bool) -> None:
     j = s.find("【运行环境】")
     assert i > 0 and j > i
     s = s[:i] + (
-        "【本次升级】      中误差改三口径（无激光锚点时不再报假毫米，"
-        "改引相对中误差）\n"
-        "                  结果条替代成功弹窗（含打开目录/报告/强制重算）\n"
-        "                  强制重算入口（GUI 勾选 / --force，跑完自动复位）\n"
-        "                  S1 复用索引提升到用户级 ~/.h3d（跨项目命中）\n"
-        "                  （含 r11：GUI 终态语义 / 配置读回 / 假控件；\n"
-        "                   r10：图集跨件复用 / OBJ 快速写出 / 泊松单线程；\n"
-        "                   r9：进度模型按件计分 / 同照片多件复用 S1）\n"
+        "【本次升级】      图集无条件落盘并进交付包（含 auto_textured_format）\n"
+        "                  M5 纹理质检接通（五项指标不再 N/A）\n"
+        "                  阶段终态扩成五态（配置关闭 ≠ 未执行，不计入分母）\n"
+        "                  元数据与产物一致（formats 拆分 / 清单去重）\n"
+        "                  （含 r12：中误差三口径 / 结果条 / 强制重算 / 用户级复用索引；\n"
+        "                   r11：GUI 终态语义 / 配置读回 / 假控件；\n"
+        "                   r10：图集跨件复用 / OBJ 快速写出 / 泊松单线程）\n"
     ) + s[j:]
 
     # 文件清单
@@ -968,6 +1095,8 @@ def update_version(fill: bool) -> None:
                         VERSION_REV8, uniq="2026-10-23 r8 修复（")
     s = _upsert_section(s, "2026-10-26 r12 修复", "2026-10-26 r11 修复",
                         VERSION_REV12, uniq="2026-10-26 r12 修复（")
+    s = _upsert_section(s, "2026-10-26 r13 修复", "2026-10-26 r12 修复",
+                        VERSION_REV13, uniq="2026-10-26 r13 修复（")
     s = _upsert_section(s, "2026-10-26 r11 修复", "2026-10-24 r10 优化",
                         VERSION_REV11, uniq="2026-10-26 r11 修复（")
     s = _upsert_section(s, "2026-10-24 r10 优化", "2026-10-24 r9 修复",

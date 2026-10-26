@@ -92,6 +92,76 @@ def export_delivery(tex_dir: str, out_dir: str, item_id: str,
     return outputs
 
 
+def deliver_texture_atlas(tex_dir: str, out_dir: str, item_id: str,
+                          formats: Optional[list[str]] = None) -> Optional[str]:
+    """把 M4 的纹理图集复制进交付包（``80_export/<item>/<item>_diffuse.png``）。
+
+    为什么需要单独一步（实机 2026-10-26）：交付包原先只复制
+    ``export_formats`` 里的模型文件。当配置是 ``[ply]`` 时，交付包内
+    **没有任何图像纹理**——PLY 只能存顶点色，2048² 图集（2,639,926 纹素）
+    留在 50_tex 里没被带走，有效色彩采样从 264 万掉到 8.5 万。
+    图集是照片纹理链路的核心产物，**无论导出格式如何都必须随交付包归档**：
+    它是"重新生成 obj/glb 即可复原纹理"的唯一依据，也是质检与复核的凭据。
+
+    参数
+    ----
+    tex_dir:  M4 输出目录（50_tex/<item>/）。
+    out_dir:  交付输出目录（80_export/<item>/）。
+    item_id:  文物编号。
+    formats:  本次已交付的模型格式（含 obj 时图集已由 ``_copy_obj_sidecars``
+              以同名复制，这里只校验存在性、不重复搬运）。
+
+    返回
+    ----
+    交付包内图集路径；无图集（顶点色路径 / uv 模式无图集）时返回 None。
+    """
+    formats = [str(f).lstrip(".").lower() for f in (formats or [])]
+    src = _find_atlas(tex_dir, item_id)
+    if not src:
+        return None
+    os.makedirs(out_dir, exist_ok=True)
+    dst = os.path.join(out_dir, f"{item_id}_diffuse.png")
+    try:
+        if not (os.path.exists(dst) and _same_file(src, dst)):
+            shutil.copy2(src, dst)
+    except OSError as exc:
+        log.warning("图集复制失败（交付包将缺纹理图集）：%s（%s）", dst, exc)
+        return None
+    if "obj" in formats:
+        log.info("交付包图集：%s（由 OBJ 材质引用）", os.path.basename(dst))
+    else:
+        log.warning("交付包只含 %s，无模型可引用图集 %s；"
+                    "如需「可直接贴图的模型」，请在 texture.export_formats 里加 obj/glb",
+                    formats or ["（空）"], os.path.basename(dst))
+    return os.path.abspath(dst)
+
+
+def _find_atlas(tex_dir: str, item_id: str) -> Optional[str]:
+    """在 50_tex/<item>/ 里定位纹理图集 PNG（多命名兼容，排除着色掩膜）。"""
+    if not os.path.isdir(tex_dir):
+        return None
+    for name in (f"{item_id}_L1.0_diffuse.png", f"{item_id}_L1_diffuse.png",
+                 f"{item_id}_diffuse.png"):
+        cand = os.path.join(tex_dir, name)
+        if os.path.exists(cand):
+            return cand
+    # uv 模式（Open3D 原生命名 <item>_L1.0_0.png）/ 其他 LOD 变体
+    cands = sorted(
+        f for f in os.listdir(tex_dir)
+        if f.lower().endswith((".png", ".jpg"))
+        and f.startswith(item_id) and "mask" not in f.lower())
+    return os.path.join(tex_dir, cands[0]) if cands else None
+
+
+def _same_file(a: str, b: str) -> bool:
+    """两个路径是否指向同一份内容（大小 + mtime 近似判定，避免重复搬运）。"""
+    try:
+        sa, sb = os.stat(a), os.stat(b)
+    except OSError:
+        return False
+    return sa.st_size == sb.st_size and abs(sa.st_mtime - sb.st_mtime) < 1.0
+
+
 def _copy_obj_sidecars(src_obj: str, dst_obj: str, item_id: str) -> None:
     """复制 OBJ 的材质与贴图，并改写交付包内的相对引用。
 
@@ -257,6 +327,7 @@ def build_delivery_manifest(entries: list[dict[str, Any]],
 
 __all__ = [
     "export_delivery",
+    "deliver_texture_atlas",
     "build_meta",
     "write_meta",
     "copy_qc_report",

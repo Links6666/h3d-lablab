@@ -29,6 +29,9 @@ CHUNK_SIZE = 1024 * 1024  # 1 MiB 分块读，避免大文件整体载入内存
 _STATUS_DONE = "done"
 _STATUS_FAIL = "fail"
 _STATUS_RUNNING = "running"
+#: 五态终态的另两态（2026-10-26）：「已启用但没跑」与「配置关闭」
+_STATUS_SKIPPED = "skipped"
+_STATUS_DISABLED = "disabled"
 
 
 def _logger():
@@ -157,13 +160,23 @@ class RunManifest:
 
     # -- 汇总 --------------------------------------------------------------
     def summary(self) -> dict[str, Any]:
-        """输出运行摘要：完成 / 失败阶段计数与逐阶段状态。"""
+        """输出运行摘要：五态计数与逐阶段状态。
+
+        ``skipped`` 与 ``disabled`` 必须分开统计：前者是运行时的意外
+        （条件不满足 / 降级 / 续跑复用），后者是用户配置的意图。
+        """
         done = sum(1 for s in self.stages.values() if s.get("status") == _STATUS_DONE)
         failed = sum(1 for s in self.stages.values() if s.get("status") == _STATUS_FAIL)
+        skipped = sum(1 for s in self.stages.values()
+                      if s.get("status") == _STATUS_SKIPPED)
+        disabled = sum(1 for s in self.stages.values()
+                       if s.get("status") == _STATUS_DISABLED)
         return {
             "run_id": self.run_id,
             "done": done,
             "failed": failed,
+            "skipped": skipped,
+            "disabled": disabled,
             "stages": {k: v.get("status") for k, v in self.stages.items()},
         }
 

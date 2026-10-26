@@ -416,6 +416,36 @@ def _stage_texture(task: Task, cfg) -> StageResult:
     return StageResult("M4", TaskStatus.DONE, outputs, metrics)
 
 
+def _locate_texture_atlas(tex_dir: str, item_id: str,
+                          m4: dict) -> Optional[str]:
+    """定位 M4 的纹理图集 PNG（M5 纹理质检的唯一输入）。
+
+    优先级（从"最可信"到"兜底"）：
+        1. M4 指标里记的 ``atlas_png`` 绝对路径——唯一权威来源，M4 落盘在哪就是哪；
+        2. 50_tex/<item>/ 下按命名约定逐个试（照片纹理 L1.0 / L1 / uv 模式 _0）；
+        3. 目录扫描（排除着色掩膜 ``*_mask.png``——它的尺寸与图集相同，
+           误当图集读进去会算出"清晰度 0"的假指标）。
+    全部失败返回 None（M5 据此把五项指标标为不可评估，并打 WARNING 说明原因）。
+    """
+    cand = m4.get("atlas_png")
+    if cand and os.path.exists(str(cand)):
+        return str(cand)
+    if not os.path.isdir(tex_dir):
+        return None
+    for name in (f"{item_id}_L1.0_diffuse.png", f"{item_id}_L1_diffuse.png",
+                 f"{item_id}_diffuse.png",
+                 f"{item_id}_L1.0_0.png", f"{item_id}_L1_0.png"):
+        path = os.path.join(tex_dir, name)
+        if os.path.exists(path):
+            return path
+    cands = sorted(
+        f for f in os.listdir(tex_dir)
+        if f.lower().endswith((".png", ".jpg"))
+        and (f.endswith("diffuse.png") or f.endswith("_0.png"))
+        and "mask" not in f.lower())
+    return os.path.join(tex_dir, cands[0]) if cands else None
+
+
 @register_stage("M5")
 def _stage_quality(task: Task, cfg) -> StageResult:
     """M5 质检质量门：对照标准阈值给出达标判定并生成报告（几何质量可报告）。
@@ -466,26 +496,39 @@ def _stage_quality(task: Task, cfg) -> StageResult:
                     float(metrics.get("rmse_units") or 0.0),
                     ("N/A" if _rel is None else f"{float(_rel) * 100:.2f}%"))
 
-    # 纹理质量维度（M4 产物存在时评估：清晰度/接缝/填充率）
+    # 纹理质量维度（M4 产物存在时评估：清晰度/接缝/填充率/覆盖率）
+    #
+    # 实机 2026-10-26：M5 只认 `<item>_L1.0_diffuse.png`，而这个 PNG 过去
+    # **只在导出 obj/glb 时才由导出器写**。配置 texture.export_formats=[ply] 时
+    # 文件根本不存在 → texture_available=False → 五项纹理指标全 N/A，
+    # 与 M4 自报的岛内填充率 94.89% 直接矛盾（质检"没做"伪装成"没问题"）。
+    # 两处修正：① M4 现在无条件把图集落盘到 50_tex；② M5 优先读 M4 记下的
+    # 绝对路径（metrics.atlas_png），再回退目录扫描，最后才判定"不可评估"。
     from h3d.quality.texture_quality import texture_quality
     tex_dir = os.path.join(task.root, "50_tex", task.item_id)
-    tex_png = os.path.join(tex_dir, f"{task.item_id}_L1.0_diffuse.png")
-    if not os.path.exists(tex_png):
-        # uv 模式产物名可能不同：回退扫描 50_tex
-        if os.path.isdir(tex_dir):
-            cands = [f for f in os.listdir(tex_dir)
-                     if f.endswith("diffuse.png") or f.endswith("_0.png")]
-            if cands:
-                tex_png = os.path.join(tex_dir, sorted(cands)[0])
+    m4 = task.metrics_of("M4") if hasattr(task, "metrics_of") else {}
+    tex_png = _locate_texture_atlas(tex_dir, task.item_id, m4)
     # 着色掩膜与图集利用率都来自 M4 指标：覆盖率改按真实着色区算，
     # 不再用"亮度 > 20"猜（暗色器物会被误判为"没贴图"）
-    m4 = task.metrics_of("M4") if hasattr(task, "metrics_of") else {}
     mask_png = m4.get("texture_mask") or os.path.join(
         tex_dir, f"{task.item_id}_L1.0_mask.png")
-    tq = texture_quality(tex_png if os.path.exists(tex_png) else None,
+    tq = texture_quality(tex_png,
                          mask_path=mask_png,
                          atlas_utilization=m4.get("atlas_utilization"))
     metrics.update(tq)
+    metrics["texture_atlas"] = (os.path.basename(tex_png) if tex_png else None)
+    if not tq["texture_available"]:
+        # 不可评估必须说清原因，否则报表上只是一片 N/A（读起来像"全合格"）
+        paint = (m4.get("paint_mode_effective") or m4.get("paint_mode")
+                 or getattr(cfg.texture, "paint_mode", ""))
+        if paint and paint != "photo":
+            log.info("M5 纹理质检跳过：paint_mode=%s 无 UV 图集（属正常，"
+                     "顶点色模型无图像纹理可评）", paint)
+        else:
+            log.warning("M5 纹理质检不可用：50_tex/%s 下找不到图集 PNG"
+                        "（M4 paint_mode=%s）——五项纹理指标将为 N/A，"
+                        "请检查 M4 是否成功落盘 <item>_L1.0_diffuse.png",
+                        task.item_id, paint or "?")
     if tq["texture_available"]:
         log.info("M5 纹理质量：sharpness=%.2f seam=%.2f 填充率=%s 覆盖率=%.1f%%",
                  tq["texture_sharpness"] or 0.0, tq["texture_seam"] or 0.0,
@@ -543,6 +586,12 @@ def _stage_quality(task: Task, cfg) -> StageResult:
         "texture_coverage": tq["texture_coverage"],
         "texture_fill_ratio": tq.get("texture_fill_ratio"),
         "texture_ok": tq["texture_ok"],
+        # 图集来源必须进 manifest：五项纹理指标为 N/A 时，报表才能区分
+        # 「没有图集可评」与「评了但没通过」。
+        "texture_atlas": metrics.get("texture_atlas"),
+        # 覆盖率口径来源：mask = 真实着色掩膜（可靠）；luma = 亮度阈值兜底
+        # （暗色器物会被低估）。审计时必须能看出用的是哪一种。
+        "texture_mask_source": tq.get("mask_source"),
         # 尺度口径必须进 manifest：报表要据此把 rmse/mps 的单位写成
         # 「任意单位」而不是 mm（2026-10-18）。原先只写进 quality 报告，
         # 结果 HTML/CSV 一律按 mm 展示，纯照片项目的精度数字全是假的。
@@ -567,6 +616,7 @@ def _stage_publish(task: Task, cfg) -> StageResult:
         build_delivery_manifest,
         build_meta,
         copy_qc_report,
+        deliver_texture_atlas,
         export_delivery,
         write_meta,
     )
@@ -578,6 +628,20 @@ def _stage_publish(task: Task, cfg) -> StageResult:
     # 1) 交付模型（80_export/<item>/）
     export_dir = os.path.join(task.root, "80_export", task.item_id)
     models = export_delivery(tex_dir, export_dir, task.item_id, cfg.publish.formats)
+    # 「配置要的」与「实际交付的」必须分开记：旧实现只把 cfg.publish.formats
+    # 写进元数据，于是 90_meta 里写着 formats=[ply, obj, glb] 而目录里只有
+    # 一个 .ply —— 元数据与产物自相矛盾，验收时无从判断是"没配"还是"弄丢了"。
+    requested = [str(f).lstrip(".").lower() for f in (cfg.publish.formats or [])]
+    delivered = [os.path.splitext(m)[1].lstrip(".").lower() for m in models]
+    missing = [f for f in requested if f not in delivered]
+    if missing:
+        log.warning("交付格式缺失：%s（请求 %s，实际 %s）——多为 M4 未导出该格式，"
+                    "见 texture.export_formats", missing, requested, delivered)
+
+    # 1.5) 纹理图集随交付包归档（与导出格式无关）
+    # 实机 2026-10-26：配置只写 ply 时交付包内没有任何图像纹理，2048² 图集
+    # （2,639,926 纹素）留在 50_tex，交付只剩 85,420 个顶点色（差 31 倍）。
+    atlas = deliver_texture_atlas(tex_dir, export_dir, task.item_id, delivered)
 
     # 2) 该件各阶段指标（从 task 内存状态取，manifest 批处理结束才落盘）
     stage_metrics = {}
@@ -586,7 +650,12 @@ def _stage_publish(task: Task, cfg) -> StageResult:
         if res is not None:
             stage_metrics[stage_id] = dict(res.metrics)
             stage_metrics[stage_id]["status"] = res.status.value
-    stage_metrics.setdefault("M6", {"status": "done"})
+    # M6 自己的产物也要进 stage_metrics：build_meta 从
+    # ``stage_metrics["M6"]["outputs"]`` 取 delivery.models，旧实现 setdefault
+    # 只放了个 {"status": "done"}，于是 90_meta 的 delivery.models 恒为空列表，
+    # 而交付目录里明明有模型。
+    stage_metrics["M6"] = {"status": TaskStatus.DONE.value,
+                           "outputs": list(models) + ([atlas] if atlas else [])}
 
     # 3) 元数据快照（90_meta/<item>_meta.json，manifest 溯源）
     project = {"name": cfg.project.name, "operator": cfg.project.operator}
@@ -613,15 +682,26 @@ def _stage_publish(task: Task, cfg) -> StageResult:
         log.warning("论文表格归档失败（跳过）：%s", exc)
 
     # 5) 追加到交付清单（90_meta/delivery_manifest.json）
+    #    必须**按 item_id 覆盖**而不是无脑 append：M6 重跑（改配置、强制重算、
+    #    或只删 M6 条目）时旧实现会把同一件重复登记，实测出现过「1 件文物 /
+    #    2 件已发布」的清单——验收时按清单点数就会算错交付量。
     entries = []
     dm_path = os.path.join(task.root, "90_meta", "delivery_manifest.json")
     if os.path.exists(dm_path):
-        with open(dm_path, encoding="utf-8") as fh:
-            entries = json.loads(fh.read()).get("deliveries", [])
+        try:
+            with open(dm_path, encoding="utf-8") as fh:
+                entries = json.loads(fh.read()).get("deliveries", [])
+        except (OSError, ValueError) as exc:
+            log.warning("交付清单读取失败，按空清单重建：%s（%s）", dm_path, exc)
+            entries = []
+    entries = [e for e in entries if e.get("item_id") != task.item_id]
     entries.append({
         "item_id": task.item_id,
         "status": "published",
         "models": models,
+        "texture": atlas,
+        "formats_delivered": delivered,
+        "formats_missing": missing,
         "qc_report": qc_report,
         "thesis_table": thesis_table,
         "qc_status": stage_metrics.get("M5", {}).get("status", "N/A"),
@@ -630,15 +710,24 @@ def _stage_publish(task: Task, cfg) -> StageResult:
     })
     delivery_manifest = build_delivery_manifest(entries, dm_path)
 
-    outputs = models + [meta_path, delivery_manifest] + ([qc_report] if qc_report else [])
+    outputs = (models + [meta_path, delivery_manifest]
+               + ([atlas] if atlas else []) + ([qc_report] if qc_report else []))
     metrics = {
-        "formats": list(cfg.publish.formats),
+        # formats 保留旧键（兼容报表/测试），语义收敛为「配置请求的格式」
+        "formats": requested,
+        "formats_requested": requested,
+        "formats_delivered": delivered,
+        "formats_missing": missing,
         "n_models": len(models),
+        "atlas": os.path.basename(atlas) if atlas else None,
+        "atlas_delivered": bool(atlas),
+        "texture_carrier": stage_metrics.get("M4", {}).get("texture_carrier"),
         "meta": os.path.basename(meta_path),
         "delivery_manifest": os.path.basename(delivery_manifest),
     }
-    log.info("M6 完成：%s（%d 格式模型 + 元数据快照 + 交付清单）",
-             task.item_id, len(models))
+    log.info("M6 完成：%s（交付 %s，图集 %s，元数据快照 + 交付清单）",
+             task.item_id, delivered or "无",
+             os.path.basename(atlas) if atlas else "无")
     return StageResult("M6", TaskStatus.DONE, outputs, metrics)
 
 

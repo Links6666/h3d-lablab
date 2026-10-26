@@ -17,13 +17,25 @@ from typing import Any, Optional
 
 
 class TaskStatus(str, Enum):
-    """任务 / 阶段状态机（《设计书》23.1）。"""
+    """任务 / 阶段状态机（《设计书》23.1）。
+
+    阶段级终态共 **五态**（2026-10-26 扩，实机「完成 7 · 未执行 1 → 部分完成」）：
+        DONE      完成
+        FAIL      失败
+        SKIPPED   已启用但本次没跑（前置条件不满足 / 降级 / 断点续跑）
+        DISABLED  配置里根本没启用（``photo_texture.enabled=false`` 之类）
+        （无记录） 未执行 —— 上游失败导致从未到达
+    DISABLED 与 SKIPPED 必须分开：前者是**用户的意图**，后者是**运行时的意外**。
+    旧实现把两者都折进"未执行"，报表于是把「我关掉了 P1」和「P1 被上游拖死了」
+    印成同一句话，用户据此排查必然走错方向（1.1.7「跳过≠失败」的同类复现）。
+    """
 
     PENDING = "pending"      # 未开始
     RUNNING = "running"      # 运行中
     DONE = "done"            # 完成
     FAIL = "fail"            # 失败
-    SKIPPED = "skipped"      # 断点续跑时跳过（已完成）
+    SKIPPED = "skipped"      # 已启用但未执行（条件不满足 / 降级 / 续跑复用）
+    DISABLED = "disabled"    # 配置关闭（不是异常，不计入分母）
 
 
 @dataclass
@@ -102,6 +114,15 @@ class Task:
         self.results[stage] = StageResult(stage=stage, status=TaskStatus.SKIPPED)
         if self.status in (TaskStatus.PENDING, TaskStatus.RUNNING):
             self.status = TaskStatus.SKIPPED
+
+    def mark_disabled(self, stage: str) -> None:
+        """该阶段在配置里没启用（``*.enabled=false`` / 与其它阶段互斥）。
+
+        与 :meth:`mark_skipped` 的区别：这是**用户的意图**，不是运行时的意外，
+        所以**不动任务级状态**——一件器物的 M1~M6 全跑完、只有 P1 被关掉，
+        它的任务状态就是 DONE，不该因为一个从未参与的可选阶段变成 SKIPPED。
+        """
+        self.results[stage] = StageResult(stage=stage, status=TaskStatus.DISABLED)
 
     # -- 查询 --------------------------------------------------------------
     def restore_stage(

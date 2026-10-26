@@ -154,8 +154,12 @@ class TestEndToEndPipeline:
         assert m2["fitness"] >= 0.3
         # 末站 fitness 写到顶层
         assert m2["inlier_rmse"] >= 0.0
-        # 1 件文物 × 6 阶段（M1~M6）= 6 个阶段条目（M6 发布收官）
-        assert len(m.stages) == 6
+        # 五态终态（2026-10-26）：配置关闭的可选阶段**也要写 manifest**，
+        # 只是记成 disabled 而不是"没有记录"。旧实现不写，报表只能把它
+        # 归进「未执行」，与「上游失败导致从未到达」混为一谈。
+        for sid in ("S1", "P1", "X1", "X2"):
+            assert m.stages[f"rock001/{sid}"]["status"] == "disabled"
+        assert len(m.stages) == 10
 
     def test_multiple_items_with_one_failing(self, tmp_path):
         """两件文物：rock001 正常；rock002 故意构造为单点云（只 1 站）+M2 应跳过。"""
@@ -203,8 +207,9 @@ class TestEndToEndPipeline:
         # 3) 两站合并（每站约 2k 点预处理后）
         assert m3["n_input_points"] > 3000
 
-        # 4) 阶段顺序齐全：M1 -> ... -> M6 共 6 个阶段条目（主线收官）
-        assert list(m.stages.keys()) == [
+        # 4) 阶段齐全：主线 M1~M6 全部 done；可选阶段（S1/P1/X1/X2）本次
+        #    配置关闭 → disabled（不是"没有记录"，也不是"跳过"）
+        assert [k for k in m.stages if m.stages[k]["status"] == "done"] == [
             "rock001/M1", "rock001/M2", "rock001/M3",
             "rock001/M4", "rock001/M5", "rock001/M6"]
 
@@ -258,8 +263,8 @@ class TestEndToEndPipeline:
         assert 0.0 < m5["coverage"] <= 1.0
         assert m5["rmse_mm"] > 0
         assert m5["mps_m"] > 0
-        # 3) 阶段顺序：M1 -> ... -> M6（主线收官）
-        assert list(m.stages.keys()) == [
+        # 3) 主线阶段全部完成（可选阶段本次配置关闭 → disabled）
+        assert [k for k in m.stages if m.stages[k]["status"] == "done"] == [
             "rock001/M1", "rock001/M2", "rock001/M3",
             "rock001/M4", "rock001/M5", "rock001/M6"]
 
@@ -347,12 +352,12 @@ class TestEndToEndPipeline:
         assert dm["deliveries"][0]["status"] == "published"
         assert dm["deliveries"][0]["qc_status"] == "done"
 
-        # 4) manifest M6 指标 + 完整阶段顺序
+        # 4) manifest M6 指标 + 主线阶段全部完成
         m = RunManifest.load(cfg.runner.manifest)
         m6 = m.stages["rock001/M6"]
         assert m6["status"] == "done"
         assert m6["n_models"] == 2
-        assert list(m.stages.keys()) == [
+        assert [k for k in m.stages if m.stages[k]["status"] == "done"] == [
             "rock001/M1", "rock001/M2", "rock001/M3",
             "rock001/M4", "rock001/M5", "rock001/M6"]
 

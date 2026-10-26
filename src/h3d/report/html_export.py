@@ -44,12 +44,23 @@ log = get_logger("report.html")
 #: P1 紧跟 M4 而不是排在最后——它是对 M4 的增强，不是独立收尾）
 _STAGE_ORDER = ("S1", "M1", "M2", "M3", "M4", "P1", "M5", "M6")
 
-#: 状态中文名 + CSS 类
+#: 状态中文名 + CSS 类（**五态**，2026-10-26）
+#: 完成 / 失败 / 跳过（已启用但没跑）/ 未启用（配置关闭）/ 未执行（无记录）
 _STATUS_CN = {
     "done": ("完成", "pass"),
     "fail": ("失败", "fail"),
     "running": ("运行中", "running"),
     "pending": ("未执行", "skip"),
+    "skipped": ("跳过", "skip"),
+    "disabled": ("未启用", "skip"),
+}
+
+#: 「跳过」的细分原因（manifest 的 ``skip_kind``）。
+#: 不细分的话，"条件不满足"和"降级"读起来一样，用户不知道要不要补拍/补数据。
+_SKIP_KIND_CN = {
+    "condition": "跳过·条件不满足",
+    "degraded": "跳过·降级",
+    "resume": "跳过·续跑复用",
 }
 
 #: 几何来源中文说明
@@ -115,12 +126,15 @@ def _stage_note(entry: dict) -> str:
     失败时取 reason 首行（用户最需要的是一句话原因，而不是完整堆栈）；
     成功时显示产物个数，便于确认该阶段确实落盘；
     **done 但 0 个产物必须显式提示**——旧 M2 就是这个状态，报表里看起来一切正常。
+    **跳过/未启用必须带原因**——否则「跳过」二字无法区分"我关掉了"与"没数据"。
     """
     status = entry.get("status")
     if status == "fail":
         reason = (entry.get("reason") or "").strip()
         first = reason.splitlines()[0] if reason else "（无异常信息）"
         return first[:200]
+    if status in ("skipped", "disabled"):
+        return str(entry.get("skip_reason") or entry.get("reason") or "")[:200]
     outputs = entry.get("outputs") or []
     if outputs:
         return f"{len(outputs)} 个产物"
@@ -284,19 +298,26 @@ _TEMPLATE = """<!DOCTYPE html>
 <div class="summary">
   <b>项目</b>：{{ project }}　<b>运行标识</b>：<span class="meta">{{ run_id }}</span><br>
   <b>处理文物</b>：{{ n_items }} 件　<b>配置哈希</b>：<span class="meta">{{ config_sha }}</span><br>
-  <b>阶段统计</b>：完成 {{ n_done }}　失败 {{ n_fail }}　未执行 {{ n_pending }}
-  （按 {{ n_items }} 件 × {{ n_stages }} 个阶段计）
+  <b>阶段统计</b>：完成 {{ n_done }}　失败 {{ n_fail }}　跳过 {{ n_skipped }}
+  　未启用 {{ n_disabled }}　未执行 {{ n_pending }}
+  <br><span class="meta">分母 {{ n_evaluated }} = {{ n_items }} 件 × {{ n_stages }} 阶段
+  − 未启用 {{ n_disabled }}（配置关闭的阶段不计入评估范围）</span>
 </div>
 {% if n_fail %}
 <div class="banner-fail">
   <b>整体判定：失败</b>　共 {{ n_fail }} 个阶段失败，下游阶段未执行。
   失败原因见「失败清单」，可执行的处置建议见「自动诊断」与「诊断建议」。
 </div>
+{% elif n_done and not n_pending and not n_skipped %}
+<div class="banner-ok"><b>整体判定：通过</b>　已启用的 {{ n_done }} 个阶段全部完成
+  {%- if n_disabled %}（另有 {{ n_disabled }} 个阶段被配置关闭，与本次结论无关）{% endif %}。</div>
 {% elif n_done and not n_pending %}
-<div class="banner-ok"><b>整体判定：通过</b>　全部 {{ n_done }} 个阶段完成。</div>
+<div class="banner-ok"><b>整体判定：通过（含跳过）</b>　完成 {{ n_done }} 个阶段，
+  {{ n_skipped }} 个阶段按条件跳过（前置条件不满足或降级），无阶段处于未执行状态。</div>
 {% elif n_done %}
 <div class="banner-ok"><b>整体判定：部分完成</b>　完成 {{ n_done }} 个阶段，
-  另有 {{ n_pending }} 个阶段未执行（可能被配置跳过或尚未开始）。</div>
+  另有 {{ n_pending }} 个阶段<b>未执行</b>（上游失败导致从未到达），
+  {{ n_skipped }} 个阶段按条件跳过。</div>
 {% else %}
 <div class="hint">本次运行未产生任何阶段结果（可能尚未开始，或任务队列为空）。</div>
 {% endif %}
@@ -322,8 +343,15 @@ _TEMPLATE = """<!DOCTYPE html>
   <tr><td colspan="5">无阶段记录</td></tr>
   {% endfor %}
 </table>
-<p class="footnote">「未执行」＝该阶段在本次运行中没有记录（上游失败、被配置关闭或尚未开始），
-  不是"执行了但没产物"——后者会显示为「0 个产物」。</p>
+<p class="footnote">
+  <b>五态终态口径</b>（2026-10-26 起）：
+  <code>完成</code>＝本次跑完；
+  <code>跳过·条件不满足</code>＝阶段已启用，但前置条件不成立（无照片 / 无参考期 / 与 M4 互斥）；
+  <code>跳过·降级</code>＝增强阶段失败但主线可继续（原始原因见备注列）；
+  <code>未启用</code>＝配置里根本关掉了（<code>*.enabled=false</code>），<b>不是异常</b>，
+  也不计入评估分母；
+  <code>未执行</code>＝本次运行没有该阶段记录（通常是上游失败导致从未到达）。
+  均不是"执行了但没产物"——后者会显示为「0 个产物」。</p>
 
 <h2>二、几何与尺度</h2>
 <table>
@@ -405,14 +433,27 @@ _TEMPLATE = """<!DOCTYPE html>
 
 <h2>五、交付包索引（M6 发布）</h2>
 <table>
-  <tr><th>文物编号</th><th>状态</th><th>交付模型数</th></tr>
+  <tr><th>文物编号</th><th>状态</th><th>交付模型数</th><th>实际格式</th>
+      <th>缺失格式</th><th>纹理图集</th><th>纹理承载</th></tr>
   {% for row in publish_rows %}
   <tr><td>{{ row.item }}</td><td class="pass">{{ row.status }}</td>
-      <td class="num">{{ row.n_models }}</td></tr>
+      <td class="num">{{ row.n_models }}</td>
+      <td>{{ row.formats }}</td>
+      <td class="{{ 'warn' if row.missing != '—' else '' }}">{{ row.missing }}</td>
+      <td>{{ row.atlas }}</td><td>{{ row.carrier }}</td></tr>
   {% else %}
-  <tr><td colspan="3">无交付记录（M6 未执行{% if n_fail %}——上游阶段失败{% endif %}）</td></tr>
+  <tr><td colspan="7">无交付记录（M6 未执行{% if n_fail %}——上游阶段失败{% endif %}）</td></tr>
   {% endfor %}
 </table>
+<p class="footnote">
+  <b>「实际格式」与「缺失格式」必须分开看</b>：前者取自交付目录里真实存在的文件，
+  后者＝<code>publish.formats</code> 请求了但 M4 没导出的格式
+  （多因 <code>texture.export_formats</code> 未勾选，属配置不一致而非运行故障）。
+  <b>「纹理图集」</b>是照片纹理链路的核心产物（UV 图集 PNG），
+  无论导出哪些模型格式都随交付包归档；<b>「纹理承载」</b>说明哪个模型真正引用了它——
+  显示 <code>无</code> 时交付包里的图集是孤立文件（PLY 只能存顶点色，
+  无法引用图像纹理），需要 OBJ/GLB 才能"打开就带颜色"。
+</p>
 
 <h2>六、多时相形变（X1，P2 指标入报表）</h2>
 <table>
@@ -511,7 +552,7 @@ def generate_html(manifest: RunManifest,
 
     # ---------------- 一、阶段状态行（缺失阶段也要成行） ----------------
     stage_rows: list[dict] = []
-    n_done = n_fail = n_pending = 0
+    n_done = n_fail = n_pending = n_skipped = n_disabled = 0
     for item in items:
         item_failed = any(get(item, s).get("status") == "fail" for s in _STAGE_ORDER)
         for stage_id in _STAGE_ORDER:
@@ -534,6 +575,13 @@ def generate_html(manifest: RunManifest,
                 n_done += 1
             elif status == "fail":
                 n_fail += 1
+            elif status == "disabled":
+                # 配置关闭：是用户的意图，**不计入分母**（下面 n_evaluated）
+                n_disabled += 1
+            elif status == "skipped":
+                # 已启用但本次没跑：条件不满足 / 降级 / 续跑复用
+                n_skipped += 1
+                label = _SKIP_KIND_CN.get(entry.get("skip_kind") or "", label)
             else:
                 n_pending += 1
             stage_rows.append({
@@ -542,6 +590,10 @@ def generate_html(manifest: RunManifest,
                 "elapsed": _num(entry.get("elapsed_s"), 2, default="—"),
                 "note": _stage_note(entry),
             })
+    # 分母 = 实际参与评估的阶段格数（件数 × 阶段数 − 配置关闭的格数）。
+    # 「完成 7 · 未执行 1 → 部分完成」之所以荒谬，就是因为分母把用户主动
+    # 关掉的 P1 也算了进去（2026-10-26 实机）。
+    n_evaluated = max(0, len(items) * len(_STAGE_ORDER) - n_disabled)
 
     # ---------------- 二、几何与尺度 ----------------
     geom_rows: list[dict] = []
@@ -656,9 +708,16 @@ def generate_html(manifest: RunManifest,
     for item in items:
         m6 = get(item, "M6")
         if m6 and m6.get("status") == "done":
+            fmt_done = m6.get("formats_delivered") or []
+            fmt_missing = m6.get("formats_missing") or []
+            carrier = m6.get("texture_carrier")
             publish_rows.append({
                 "item": item, "status": "已发布",
                 "n_models": _num(m6.get("n_models"), 0, default="?"),
+                "formats": "、".join(fmt_done) if fmt_done else "—",
+                "missing": "、".join(fmt_missing) if fmt_missing else "—",
+                "atlas": (m6.get("atlas") or "无"),
+                "carrier": (carrier or "无"),
             })
 
     # ---------------- 六、X1 多时相 ----------------
@@ -697,6 +756,9 @@ def generate_html(manifest: RunManifest,
         n_done=n_done,
         n_fail=n_fail,
         n_pending=n_pending,
+        n_skipped=n_skipped,
+        n_disabled=n_disabled,
+        n_evaluated=n_evaluated,
         no_metric_units=no_metric_units,
         rmse_unit=rmse_unit,
         mps_unit=mps_unit,

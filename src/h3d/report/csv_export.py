@@ -108,6 +108,32 @@ def export_failures_csv(failures: list[dict[str, Any]], path: str) -> str:
 #: 阶段排序（CSV 行序与报表一致，便于 Excel 里按阶段透视）
 _STAGE_ORDER = ("S1", "M1", "M2", "M3", "M4", "P1", "M5", "M6", "X1", "X2")
 
+#: 五态终态的中文（与 HTML 报表同一口径，两处必须一致）
+_STATUS_TEXT = {
+    "done": "完成",
+    "fail": "失败",
+    "running": "运行中",
+    "pending": "未执行",
+    "skipped": "跳过",
+    "disabled": "未启用",
+}
+
+
+def _status_cn(entry: dict) -> str:
+    """把 manifest 状态翻成中文（跳过按 skip_kind 再细分）。
+
+    CSV 里只写英文 ``skipped`` 的话，「配置关闭」「条件不满足」「降级」
+    三者完全无法区分——而这正是 2026-10-26 实机报表把「我关掉了 P1」
+    读成「P1 出问题了」的原因。
+    """
+    status = str(entry.get("status") or "")
+    if status == "skipped":
+        kind = str(entry.get("skip_kind") or "")
+        return {"condition": "跳过·条件不满足",
+                "degraded": "跳过·降级",
+                "resume": "跳过·续跑复用"}.get(kind, "跳过")
+    return _STATUS_TEXT.get(status, status)
+
 
 def export_manifest_csv(manifest: RunManifest, path: str) -> str:
     """从 run_manifest.json 导出阶段汇总 CSV（每阶段一行）。
@@ -130,17 +156,19 @@ def export_manifest_csv(manifest: RunManifest, path: str) -> str:
         outputs = [str(p) for p in (entry.get("outputs") or [])]
         metrics = {
             k: v for k, v in entry.items()
-            if k not in ("status", "outputs", "elapsed_s", "reason")
+            if k not in ("status", "outputs", "elapsed_s", "reason", "skip_reason")
         }
         rows.append({
             "item_id": item_id or stage_key,
             "stage": stage or item_id,
-            "status": entry.get("status", ""),
+            "status": _status_cn(entry),
             "elapsed_s": entry.get("elapsed_s", ""),
             "n_outputs": len(outputs),
             "outputs": "; ".join(outputs),
             "metrics": _fmt_metrics(metrics, outputs),
-            "remark": _first_line(entry.get("reason")),
+            # 跳过/未启用没有 reason，只有 skip_reason：只读 reason 会让
+            # 「为什么没跑」在 CSV 里彻底丢失（2026-10-26）
+            "remark": _first_line(entry.get("reason") or entry.get("skip_reason")),
         })
 
     order = {s: i for i, s in enumerate(_STAGE_ORDER)}

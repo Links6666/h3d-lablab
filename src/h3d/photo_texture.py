@@ -490,6 +490,29 @@ def _build_zbuf(u, v, depth, w, h):
     return buf
 
 
+def _save_atlas_png(image, path: str) -> bool:
+    """把烘焙好的纹理图集写成 PNG（M4 主产物，**无条件**落盘）。
+
+    为什么必须与 ``export_formats`` 解耦：图集是逐纹素多视图采样的成果，
+    只有 obj/gltf（外挂 mtl+png）或 glb（内嵌）能引用它；若配置只写了 ply，
+    旧实现连 PNG 都不写，于是 2048² 图集只存在于缓存目录，交付包与 M5
+    质检都拿不到（实机 2026-10-26：2,639,926 纹素 → 85,420 顶点色）。
+
+    返回是否写出成功（失败只告警，不阻断几何/顶点色交付）。
+    """
+    try:
+        from PIL import Image as _Image
+
+        arr = np.asarray(image)
+        if arr.dtype != np.uint8:
+            arr = np.clip(arr, 0, 255).astype(np.uint8)
+        _Image.fromarray(arr).save(path)
+        return True
+    except Exception as exc:  # noqa: BLE001 - 图集落盘失败不阻断交付
+        log.warning("图集 PNG 落盘失败：%s（%s）", path, exc)
+        return False
+
+
 def _export_vertex_colored_ply(mesh, uv, faces, image, out_dir: str,
                                item_id: str):
     """用已烘焙的纹理给顶点上色并导出 PLY（照片模式的兜底彩模）。"""
@@ -736,9 +759,51 @@ def texture_mesh_from_photos(mesh, task_root: str, item_id: str, cfg,
         log.warning("着色掩膜写出失败（M5 将退回亮度阈值）：%s", exc)
     # uv/image 必须一并传入：GLB 的纹理只能由 trimesh 写出（Open3D 静默丢图），
     # 且 diffse PNG 由导出器统一落为 <item>_L1.0_diffuse.png 并改写 MTL。
-    outputs = export_textured(new_mesh, out_dir, item_id, "L1.0",
-                              cfg.photo_texture.export_formats,
+    #
+    # ---- 图集落盘（无条件）+ 纹理承载格式自检（2026-10-26 实机）----------
+    # 实机：texture/photo_texture.export_formats=[ply] → export_textured 只写 PLY，
+    # 而 **PLY 无法引用图像纹理**。于是 2048² 图集（2,639,926 纹素、逐纹素采样
+    # 50.18 s）只留在 99_runs/atlas_cache/ 里，交付包只剩 85,420 个顶点色
+    # （有效色彩采样差 31 倍）；同时 M5 找不到 ``*_diffuse.png``，五项纹理指标
+    # 全 N/A，与 M4 自报的岛内填充率 94.89% 自相矛盾。
+    # 结论：**图集是 M4 的主产物，与"导出哪些格式"无关**——必须先无条件落盘，
+    # 再单独判断有没有模型引用它。
+    requested = [str(f).lstrip(".").lower()
+                 for f in (cfg.photo_texture.export_formats or [])]
+    formats = list(requested)
+    external = [f for f in formats if f in ("obj", "gltf")]
+    embedded = "glb" in formats
+    auto_added: list[str] = []
+    if not external and not embedded:
+        base_msg = ("照片纹理已烘焙 %d² 图集，但 export_formats=%s 里没有任何格式能"
+                    "承载图像纹理（PLY 只能存顶点色）——图集将成为孤立文件")
+        if bool(getattr(cfg.photo_texture, "auto_textured_format", True)):
+            auto_added = ["obj"]
+            formats.append("obj")
+            external = ["obj"]
+            log.warning(base_msg + "；已自动补导 OBJ（obj+mtl+diffuse），"
+                        "如需禁止请设 photo_texture.auto_textured_format=false",
+                        int(cfg.photo_texture.texture_size), requested)
+        else:
+            log.warning(base_msg + "；auto_textured_format=false，按配置原样导出，"
+                        "图集仅单独落盘、不被任何模型引用",
+                        int(cfg.photo_texture.texture_size), requested)
+
+    atlas_rel = f"{item_id}_L1.0_diffuse.png"
+    atlas_path = os.path.join(out_dir, atlas_rel)
+    # OBJ 导出会把图集写成同名 PNG（_normalize_obj_texture），此时不重复写盘
+    if "obj" not in formats:
+        _save_atlas_png(image, atlas_path)
+    outputs = export_textured(new_mesh, out_dir, item_id, "L1.0", formats,
                               uv=uv, image=image)
+    if not os.path.exists(atlas_path):
+        # 防御：只有 glb（纹理内嵌）或导出器改名时，图集仍须独立可查
+        _save_atlas_png(image, atlas_path)
+    atlas_ok = os.path.exists(atlas_path)
+    if atlas_ok and os.path.abspath(atlas_path) not in outputs:
+        outputs.append(os.path.abspath(atlas_path))
+    elif not atlas_ok:
+        log.warning("图集 PNG 落盘失败（M5 纹理质检将不可用）：%s", atlas_path)
     # 顶点色 PLY 兜底：照片纹理只有 obj/glb 能承载，而 publish.formats 里
     # 通常含 ply。缺 PLY 时交付包会少一个"任何软件都能打开"的彩模，
     # 且用户排查贴图问题时没有独立参照。此处按同一套视角加权把颜色写到顶点上。
@@ -754,6 +819,17 @@ def texture_mesh_from_photos(mesh, task_root: str, item_id: str, cfg,
         "icp_align": align_metrics or {"status": "skipped"},
         "n_outputs": len(outputs),
         "paint_mode": "photo",
+        # formats = 实际导出格式（含自动补导）；requested = 配置原值。
+        # 两个都落盘，报表/元数据才能自证「配置 ≠ 产物」是不是有意为之。
+        "formats": formats,
+        "formats_requested": requested,
+        "auto_added_formats": auto_added,
+        "texture_carrier": ("obj" if "obj" in formats
+                            else "gltf" if "gltf" in formats
+                            else "glb" if "glb" in formats else None),
+        "atlas_png": os.path.abspath(atlas_path) if atlas_ok else None,
+        "atlas_size_px": int(image.shape[0]),
+        "atlas_bytes": (int(os.path.getsize(atlas_path)) if atlas_ok else 0),
         "export_s": round(_time.time() - t_exp, 2),
     })
     return outputs, metrics

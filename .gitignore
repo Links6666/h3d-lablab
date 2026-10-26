@@ -48,6 +48,8 @@ output/_*/
 output/_build/dist_v*/
 
 # ========== 运行期派生目录（<项目根>/99_runs 下全部可重算） ==========
+data/
+
 99_runs/
 
 # pip editable install 临时构建产物
