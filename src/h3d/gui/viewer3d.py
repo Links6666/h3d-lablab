@@ -19,13 +19,16 @@ def show_open3d_window(mesh_path: str, title: str = "H3D 3D 交互窗口",
     按键：R/G/B 切换纯色，T 纹理，+/- 缩放。独立窗口。
     """
     import open3d as o3d
+    from h3d.gui.meshload import read_image, read_mesh
     if not os.path.exists(mesh_path):
         return False
-    mesh = o3d.io.read_triangle_mesh(mesh_path)
-    if mesh.is_empty():
+    # 中文路径下的 OBJ 会抛 UnicodeDecodeError（Open3D 走 ASSIMP 时按 ANSI
+    # 传路径），这里统一走 meshload 的 ASCII 副本回退，见该模块文档。
+    mesh = read_mesh(mesh_path)
+    if mesh is None or mesh.is_empty():
         return False
     if texture_path and os.path.exists(texture_path):
-        img = o3d.io.read_image(texture_path)
+        img = read_image(texture_path)
         if img is not None:
             try:
                 mesh.textures = [img]
@@ -82,11 +85,12 @@ def load_x1_changes(root_dir: str, item_id: str) -> np.ndarray | None:
 def show_x1_heatmap(mesh_path: str, root_dir: str, item_id: str) -> bool:
     """X1 形变热力图：网格顶点按形变量着色（红=形变大）并打开窗口。"""
     import open3d as o3d
+    from h3d.gui.meshload import read_mesh
     from matplotlib import colormaps
     if not os.path.exists(mesh_path):
         return False
-    mesh = o3d.io.read_triangle_mesh(mesh_path)
-    if mesh.is_empty():
+    mesh = read_mesh(mesh_path)
+    if mesh is None or mesh.is_empty():
         return False
     changes = load_x1_changes(root_dir, item_id)
     verts = np.asarray(mesh.vertices)

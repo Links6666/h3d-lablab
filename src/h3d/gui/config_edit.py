@@ -277,6 +277,11 @@ class ProjectConfig:
         cfg["photo_texture"]["texture_size"] = self.texture_size
         cfg["photo_texture"]["export_formats"] = self.export_formats
         cfg["texture"]["export_formats"] = self.export_formats
+        # 交付格式必须 **⊆ M4 实际产出格式**。旧实现 publish.formats 恒为
+        # [ply, obj, glb] 模板值，用户在约束里只选 ply+obj 时，M6 请求 glb
+        # 而 50_tex 里没有 glb → 报表里出现 formats_missing=['glb'] 的假告警
+        # （实机 2026-10-26）。M6 只是从 50_tex 复制，能交付的只有 M4 写出的。
+        cfg["publish"]["formats"] = list(self.export_formats)
         cfg["preprocess"]["voxel_down_sample"] = self.voxel
         cfg["mesh"]["poisson_depth"] = self.poisson_depth
         cfg["mesh"]["density_ratio"] = float(self.density_ratio)

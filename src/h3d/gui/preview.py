@@ -1,14 +1,13 @@
 """h3d.gui.preview : 3D 预览（matplotlib 内嵌）+ 纹理查看。
 
 matplotlib FigureCanvasQTAgg 内嵌 3D 散点/网格视图；纹理用 QLabel 显示
-diffuse 贴图（附带缩放适配）。open3d 数据读取复用 h3d.io。
+diffuse 贴图（附带缩放适配）。网格读取统一走 :mod:`h3d.gui.meshload`
+（非 ASCII 路径自动走 ASCII 副本），保证预览失败不影响主流程。
 """
 
 from __future__ import annotations
 
 import os
-
-import numpy as np
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
@@ -38,17 +37,25 @@ class MeshPreview(FigureCanvasQTAgg):
         self.fig.tight_layout()
 
     def load_mesh(self, mesh_path: str) -> bool:
-        """加载 PLY/OBJ 网格并显示（open3d 读取）。"""
-        import open3d as o3d
-        if not os.path.exists(mesh_path):
+        """加载 PLY/OBJ 网格并显示；任何失败都返回 ``False``，**绝不抛异常**。
+
+        实机缺陷（2026-10-26）：中文路径下的 OBJ 会让
+        ``o3d.io.read_triangle_mesh`` 抛 ``UnicodeDecodeError``。异常从 Qt 槽
+        ``_on_finished`` 里逃走 → PySide6 只打 stderr（windowed 打包版静默）→
+        该槽后续代码（结果条、导出按钮、X1 按钮）全部不执行，用户看到的是
+        "跑完了，预览一片空白"。读取统一走 :mod:`h3d.gui.meshload`（内含
+        ASCII 副本回退），这里再兜一层，保证预览失败不可能影响主流程。
+        """
+        from h3d.gui.meshload import preview_arrays
+        if not mesh_path or not os.path.exists(mesh_path):
             return False
-        mesh = o3d.io.read_triangle_mesh(mesh_path)
-        if not mesh.has_triangles():
-            pcd = o3d.io.read_point_cloud(mesh_path)
-            return self._plot_points(np.asarray(pcd.points))
-        verts = np.asarray(mesh.vertices)
-        tris = np.asarray(mesh.triangles)
-        return self._plot_mesh(verts, tris)
+        try:
+            verts, tris = preview_arrays(mesh_path)
+        except Exception:  # noqa: BLE001 - 预览失败不得冒泡
+            return False
+        if len(tris):
+            return self._plot_mesh(verts, tris)
+        return self._plot_points(verts)
 
     def show_text(self, message: str) -> None:
         """在预览区显示纯文本提示（无模型时替代空白画面）。
@@ -66,9 +73,12 @@ class MeshPreview(FigureCanvasQTAgg):
     def _plot_mesh(self, verts, tris) -> bool:
         if len(verts) == 0:
             return False
-        self.ax.clear()
-        self.ax.plot_trisurf(verts[:, 0], verts[:, 1], verts[:, 2],
-                             triangles=tris, shade=True, alpha=0.95)
+        try:
+            self.ax.clear()
+            self.ax.plot_trisurf(verts[:, 0], verts[:, 1], verts[:, 2],
+                                 triangles=tris, shade=True, alpha=0.95)
+        except Exception:  # noqa: BLE001 - 退化网格不得打断界面
+            return False
         self._style_axes()
         self.draw_idle()
         return True
@@ -76,10 +86,13 @@ class MeshPreview(FigureCanvasQTAgg):
     def _plot_points(self, pts) -> bool:
         if len(pts) == 0:
             return False
-        self.ax.clear()
-        step = max(1, len(pts) // 20000)
-        p = pts[::step]
-        self.ax.scatter(p[:, 0], p[:, 1], p[:, 2], s=0.4, c="r", alpha=0.6)
+        try:
+            self.ax.clear()
+            step = max(1, len(pts) // 20000)
+            p = pts[::step]
+            self.ax.scatter(p[:, 0], p[:, 1], p[:, 2], s=0.4, c="r", alpha=0.6)
+        except Exception:  # noqa: BLE001
+            return False
         self._style_axes()
         self.draw_idle()
         return True

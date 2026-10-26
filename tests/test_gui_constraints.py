@@ -118,6 +118,23 @@ class TestProjectConfigIntegration:
         assert cfg.constraints_confirmed is True
         assert cfg.constraints["texture_size"] == 4096
 
+    def test_publish_formats_follow_constraints(self, tmp_path):
+        """交付格式必须跟着约束走（实机 2026-10-26：报表报 glb 缺失）。
+
+        用户只选 ply+obj 时，旧实现 ``publish.formats`` 仍是模板里的
+        ``[ply, obj, glb]``，M6 请求 glb 而 50_tex 里没有 → 报表出现
+        ``formats_missing=['glb']`` 的假告警，验收时无从判断是"没配"还是"弄丢了"。
+        """
+        from h3d.gui.config_edit import ProjectConfig
+        from h3d.gui.constraints import Constraints, apply_to_project_config
+        cfg = ProjectConfig()
+        cfg.root_dir = str(tmp_path)
+        apply_to_project_config(cfg, Constraints(export_formats=["ply", "obj"]))
+        path = cfg.to_yaml(str(tmp_path / "config.yaml"))
+        data = yaml.safe_load(open(path, encoding="utf-8"))
+        assert data["publish"]["formats"] == ["ply", "obj"]
+        assert data["texture"]["export_formats"] == ["ply", "obj"]
+
     def test_from_root_without_confirmed_flag_stays_unconfirmed(self, tmp_path):
         """手写 yaml 里塞了 constraints 但没写 confirmed → 仍要确认一次。"""
         p = tmp_path / "config.yaml"

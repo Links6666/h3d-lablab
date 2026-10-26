@@ -76,6 +76,13 @@ class MainWindow(QMainWindow):
         self._build()
         self._migrate_layout_if_needed()
         self._fit_to_screen()
+        # 打开已有项目时立刻显示上次的成果（旧实现只在运行结束后才载入，
+        # 打开一个跑完的项目预览永远空白）。
+        try:
+            if self.cfg.root_dir and os.path.isdir(self.cfg.root_dir):
+                self._refresh_preview(ok=True, show_placeholder=False)
+        except Exception as exc:  # noqa: BLE001 - 打开项目不能因预览失败中断
+            self._log(f"[界面] 初始预览加载失败（不影响运行）：{exc}")
 
     def _migrate_layout_if_needed(self) -> bool:
         """打开历史项目时把旧布局就地迁到「综合文件夹 + 两棵子树」。
@@ -1027,10 +1034,52 @@ class MainWindow(QMainWindow):
         预览面板永远空白——用户误以为"系统没有任何可视化产物"。
         实际上 M3 网格（30_dense）或 S1 稠密点云（10_dense）往往已经生成，
         完全可以先给用户看一眼中间结果。
+
+        **顺序改成 PLY 优先**（2026-10-26 实机）：OBJ/GLB 在 Open3D 里走
+        ASSIMP，路径含中文时会抛 ``UnicodeDecodeError``（``0xb1`` 是「兵」的
+        GBK 首字节）；PLY 走原生 reader，不受路径编码影响，且预览本来就不显示
+        贴图，两者几何完全一致。
         """
         name = self._item_id()
         return _paths.model_candidates(self.cfg.root_dir, name,
-                                       exts=("obj", "ply", "glb"))
+                                       exts=("ply", "obj", "glb"))
+
+    def _refresh_preview(self, ok: bool = True,
+                         show_placeholder: bool = False) -> str:
+        """把当前文物的模型/贴图/热力图按钮刷新到界面；返回载入的路径。
+
+        打开项目时（构造完窗口）与每次运行结束后都会调一次——旧实现只在
+        ``_on_finished`` 里载入，**打开一个已完成的项目预览永远是空的**。
+        """
+        shown = ""
+        for cand in self._preview_candidates():
+            if not os.path.exists(cand):
+                continue
+            if self.mesh_preview.load_mesh(cand):
+                shown = cand
+                break
+            self._log(f"[界面] 预览跳过 {os.path.basename(cand)}（无法读取）")
+        if shown:
+            self._preview_path = shown
+            self.btn_open3d.setEnabled(True)
+            if not ok:
+                self._log(f"▶ 已加载中间产物预览：{shown}")
+        else:
+            self._preview_path = ""
+            self.btn_open3d.setEnabled(False)
+            if show_placeholder:
+                reason = self._failure_text() if not ok else "本次运行未生成网格"
+                self.mesh_preview.show_text(
+                    "未生成可预览的三维模型\n" + (reason or ""))
+
+        tex = os.path.join(_paths.stage_root(self.cfg.root_dir), "50_tex",
+                           self._item_id())
+        if os.path.isdir(tex):
+            for f in sorted(os.listdir(tex)):
+                if f.endswith("diffuse.png"):
+                    self.tex_view.show_texture(os.path.join(tex, f))
+                    break
+        return shown
 
     def _item_id(self) -> str:
         """当前展示的文物编号（**不是**项目名）。
@@ -1122,31 +1171,17 @@ class MainWindow(QMainWindow):
             except Exception as exc:  # noqa: BLE001 - 复位失败不阻断
                 self._log(f"[界面] 强制重算标记复位失败（请手动取消勾选）：{exc}")
 
-        # 预览：成品缺失时回退到中间产物
-        shown = ""
-        for cand in self._preview_candidates():
-            if os.path.exists(cand) and self.mesh_preview.load_mesh(cand):
-                shown = cand
-                break
-        if shown:
-            self._preview_path = shown
-            self.btn_open3d.setEnabled(True)
-            if not ok:
-                self._log(f"▶ 已加载中间产物预览：{shown}")
-        else:
+        # 预览：成品缺失时回退到中间产物。
+        # 单独 try/except 包住——预览读模型失败（中文路径下的 ASSIMP、损坏文件）
+        # 绝不能让后面的结果条 / 导出按钮 / X1 按钮一起停摆。实机缺陷
+        # （2026-10-26）：异常从本槽逃走，PySide6 只打 stderr，windowed 打包版
+        # stderr 为 None → 界面表现为"跑完了但预览空白，结果条也不出现"。
+        try:
+            self._refresh_preview(ok=ok, show_placeholder=True)
+        except Exception as exc:  # noqa: BLE001 - 预览失败不影响主流程
             self._preview_path = ""
             self.btn_open3d.setEnabled(False)
-            reason = self._failure_text() if not ok else "本次运行未生成网格"
-            self.mesh_preview.show_text(
-                "未生成可预览的三维模型\n" + (reason or ""))
-
-        tex = os.path.join(_paths.stage_root(self.cfg.root_dir), "50_tex",
-                           self._item_id())
-        if os.path.isdir(tex):
-            for f in sorted(os.listdir(tex)):
-                if f.endswith("diffuse.png"):
-                    self.tex_view.show_texture(os.path.join(tex, f))
-                    break
+            self._log(f"[界面] 预览加载失败（不影响交付物）：{exc}")
 
         if not ok:
             # 失败时把"去哪看"写清楚，而不是只弹一句"失败"
@@ -1159,10 +1194,13 @@ class MainWindow(QMainWindow):
             if os.path.isdir(logs):
                 self._log(f"✗ COLMAP 完整日志：{logs}")
 
-        # X1 结果存在才启用热力图
-        from h3d.gui.viewer3d import load_x1_changes
-        if load_x1_changes(self.cfg.root_dir, self._item_id()) is not None:
-            self.btn_x1.setEnabled(True)
+        # X1 结果存在才启用热力图（同样不能因读取失败连累结果条）
+        try:
+            from h3d.gui.viewer3d import load_x1_changes
+            if load_x1_changes(self.cfg.root_dir, self._item_id()) is not None:
+                self.btn_x1.setEnabled(True)
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[界面] X1 结果读取失败（热力图按钮保持禁用）：{exc}")
         # 结论进结果条（常驻、可继续操作），不再让用户先点掉一个弹窗。
         # 失败仍弹模态框：结果与预期不符，不看就直接接着操作更危险。
         self._show_result(ok, summary, skipped_only=rerun_skipped)
@@ -1202,9 +1240,8 @@ class MainWindow(QMainWindow):
         item = self._item_id()
         model = getattr(self, "_preview_path", "")
         if not model or not os.path.exists(model):
-            for cand in _paths.model_candidates(self.cfg.root_dir, item):
-                if os.path.exists(cand) and cand.endswith((".obj", ".ply",
-                                                           ".glb")):
+            for cand in self._preview_candidates():
+                if os.path.exists(cand):
                     model = cand
                     break
         if not os.path.exists(model):
@@ -1219,16 +1256,35 @@ class MainWindow(QMainWindow):
                 if f.endswith("diffuse.png"):
                     tex_png = os.path.join(tex, f)
                     break
-        show_open3d_window(model, texture_path=tex_png)
+        try:
+            ok = show_open3d_window(model, texture_path=tex_png)
+        except Exception as exc:  # noqa: BLE001 - 交互窗口失败要给可见提示
+            self._log(f"[界面] 打开 3D 交互窗口失败：{exc}")
+            QMessageBox.warning(self, "无法打开 3D 窗口",
+                                f"{type(exc).__name__}: {exc}\n\n模型：{model}")
+            return
+        if not ok:
+            QMessageBox.warning(self, "无法打开 3D 窗口",
+                                f"模型读取失败或为空：\n{model}\n\n"
+                                "可改用「3D 模型预览」面板查看，交付物本身不受影响。")
 
     def _show_x1(self):
         from h3d.gui.viewer3d import show_x1_heatmap
         item = self._item_id()
         ddir = _paths.delivery_item_dir(self.cfg.root_dir, item)
-        model = os.path.join(ddir, f"{item}.obj")
+        model = os.path.join(ddir, f"{item}.ply")
         if not os.path.exists(model):
-            model = os.path.join(ddir, f"{item}.ply")
-        show_x1_heatmap(model, self.cfg.root_dir, item)
+            model = os.path.join(ddir, f"{item}.obj")
+        try:
+            ok = show_x1_heatmap(model, self.cfg.root_dir, item)
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"[界面] 打开 X1 热力图失败：{exc}")
+            QMessageBox.warning(self, "无法打开 X1 热力图",
+                                f"{type(exc).__name__}: {exc}")
+            return
+        if not ok:
+            QMessageBox.information(self, "X1 热力图",
+                                    "未找到可用的模型或 X1 差分结果（需至少两期数据）。")
 
     def _log(self, line: str):
         """日志着色：把"加载/进度"行突出出来，失败行一眼可见。
