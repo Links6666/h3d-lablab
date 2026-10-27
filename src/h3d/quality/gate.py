@@ -33,9 +33,15 @@ log = get_logger("quality.gate")
 #: （实机 41.16「mm」 vs 对角线 6.06 单位）。现在：
 #:   · 有激光锚点 → 中误差(mm) 填真实毫米，相对值并列供交叉核对；
 #:   · 无激光锚点 → 中误差(mm) 填 N/A，只给相对值（唯一可对外引用的口径）。
+#: 2026-10-26 二次修订（真机 r15 反馈）：新增「中误差口径」列。
+#: 上一版只解决「无锚点→N/A」，漏了另一半：**有锚点但判不了门**。
+#: 实机 mps=23.6 mm（> 5 mm 阈值）→ ``rmse_reliable=False`` → 毫米门根本没启用，
+#: 报表却仍印「38.26 mm」并把脚注写成「判门仍以毫米阈值为准」。读者（答辩委员）
+#: 只会记住「38.26 mm」和「pass」。这一列把「这个数字到底参不参与判门」写在行内。
 ACCURACY_HEADERS = [
     ("object", "文物编号"),
     ("reg_error_mm", "中误差(mm)"),
+    ("rmse_scope", "中误差口径"),
     ("reg_error_rel", "相对中误差(%对角线)"),
     ("coverage", "覆盖率"),
     ("boundary_ratio", "边界边比例"),
@@ -73,6 +79,10 @@ def check_quality(metrics: dict[str, Any], cfg: QualityConfig) -> bool:
         return False
     if not metrics.get("metric_units", True):
         return True          # 无度量基准：只判覆盖率
+    # 单位存疑（声称米制却算出 6 米级的"中小型文物"）→ 毫米门同样不成立。
+    # 与 rmse_reliable 是两把独立的锁：前者管"数字是不是毫米"，后者管"参考够不够密"。
+    if not metrics.get("units_plausible", True):
+        return True
     if metrics.get("rmse_reliable") and not math.isnan(metrics.get("rmse_mm", math.nan)) \
             and metrics["rmse_mm"] > cfg.rmse_threshold_mm:
         return False
@@ -104,6 +114,18 @@ def build_report(
     metric_units = bool(metrics.get("metric_units", True))
     rmse_mm = metrics["rmse_mm"]
     rmse_rel = metrics.get("rmse_rel")
+    # 口径三态（见 ACCURACY_HEADERS 注释）：无量纲 / 不判门（参考稀疏 / 单位存疑）
+    # / 实测判门。老 manifest 没有 rmse_scope 时按两个布尔现推。
+    scope = metrics.get("rmse_scope")
+    if not scope:
+        if not metric_units:
+            scope = "无量纲（SfM 任意单位）"
+        elif not metrics.get("units_plausible", True):
+            scope = "不判门（单位存疑）"
+        elif not metrics.get("rmse_reliable"):
+            scope = "不判门（参考稀疏）"
+        else:
+            scope = "实测（参与 5 mm 判门）"
     record = {
         "item_id": item_id,
         "coverage": round(metrics["coverage"], 4),
@@ -111,6 +133,9 @@ def build_report(
         # 报表一律不展示，只在 qc_metrics.json 里留档以便追溯旧口径。
         "rmse_mm": (round(rmse_mm, 4)
                     if (metric_units and not math.isnan(rmse_mm)) else "N/A"),
+        "rmse_scope": scope,
+        "rmse_reliable": bool(metrics.get("rmse_reliable")),
+        "units_plausible": bool(metrics.get("units_plausible", True)),
         "rmse_units": (round(metrics["rmse_units"], 6)
                        if metrics.get("rmse_units") is not None
                        and not math.isnan(metrics["rmse_units"]) else "N/A"),
@@ -163,6 +188,7 @@ def _write_accuracy_csv(path: str, record: dict[str, Any]) -> None:
     values = [
         record["item_id"],
         record["rmse_mm"],
+        record.get("rmse_scope") or "N/A",
         rel_text,
         f"{record['coverage']:.1%}",
         f"{record['boundary_ratio']:.1%}",

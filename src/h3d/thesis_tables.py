@@ -18,7 +18,7 @@ from h3d.core import get_logger
 log = get_logger("thesis_tables")
 
 THESIS_HEADERS = [
-    "文物编号", "S1注册率", "M5覆盖率", "M5中误差(mm)",
+    "文物编号", "S1注册率", "M5覆盖率", "M5中误差(mm)", "M5中误差口径",
     "M5相对中误差(%对角线)", "纹理清晰度",
     "纹理接缝", "X1最大形变(mm)", "X1变化占比", "X2平均ΔE", "判定",
 ]
@@ -74,6 +74,7 @@ def export_thesis_table(task_root: str, item_ids: Optional[List[str]] = None,
             f"{reg / nph * 100:.0f}%" if nph else "N/A",
             f"{m5.get('coverage', 0.0) * 100:.1f}%" if m5 else "N/A",
             _fmt(m5.get("rmse_mm")) if (m5 and metric_units) else "N/A",
+            _rmse_scope(m5, metric_units),
             _fmt_pct(m5.get("rmse_rel")),
             _fmt(m5.get("texture_sharpness")),
             _fmt(m5.get("texture_seam")),
@@ -95,6 +96,36 @@ def export_thesis_table(task_root: str, item_ids: Optional[List[str]] = None,
 
 def _fmt(v):
     return "N/A" if v is None else f"{float(v):.2f}"
+
+
+def _rmse_scope(m5: dict, metric_units: bool) -> str:
+    """中误差口径（三态）：这个数字到底能不能当"实测精度"引用。
+
+    论文表格里「M5中误差(mm)」是一个会被直接搬进正文的数字。2026-10-26 真机
+    出现过 ``38.26`` + 「通过」的组合——因为参考点云 MPS 23.6 mm 远粗于 5 mm
+    阈值，毫米门根本没启用，38.26 只是「网格到自身降采样点云」的重采样损失。
+    只印数字、不印口径，等于把「未判定」读成「已达标」。
+
+    取值：实测（参与 5 mm 判门）/ 不判门（参考稀疏）/ 不判门（单位存疑）/
+    无量纲（SfM 任意单位）。老 manifest 没有 ``rmse_scope`` 时按布尔现推。
+    """
+    if not m5:
+        return "N/A"
+    scope = m5.get("rmse_scope")
+    if scope:
+        return str(scope)
+    if not metric_units:
+        return "无量纲（SfM 任意单位）"
+    plausible = m5.get("units_plausible")
+    if plausible is None:
+        # 旧 manifest 没这个键：按包围盒现推（与报表同一判据、同一量级区间）
+        diag = m5.get("model_bbox_diag")
+        if isinstance(diag, (int, float)) and diag > 0:
+            plausible = 0.02 <= float(diag) <= 3.0
+    if plausible is False:
+        return "不判门（单位存疑）"
+    return ("实测（参与 5 mm 判门）" if m5.get("rmse_reliable")
+            else "不判门（参考稀疏）")
 
 
 def _fmt_pct(v):

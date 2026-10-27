@@ -30,6 +30,7 @@ from __future__ import annotations
 from h3d import __version__
 
 import base64
+import html
 import math
 import os
 from typing import Any, Callable, Optional
@@ -68,6 +69,11 @@ _SOURCE_CN = {
     "sfm_only": "SfM 稠密（唯一几何源）",
     "laser+sfm": "激光 + SfM 融合",
     "laser": "激光扫描",
+    # 2026-10-26 真机：把本系统照片重建的 PLY 放进 00_raw 跑路线一。
+    # 有 raw 文件、但与 S1 稠密模型几乎重合（novel 低于融合阈值）——
+    # 既不能写成「激光扫描」（会让人以为有外部基准），也不能写成 sfm_only
+    # （几何确实是 raw 提供的）。单独一个取值 + 降级表述。
+    "raw_looks_like_sfm": "00_raw（与 SfM 稠密同源，未经外部基准）",
 }
 
 
@@ -103,6 +109,28 @@ def _yes(value: Any, default: str = "N/A") -> str:
 # --------------------------------------------------------------------------- #
 # 阶段行 / 诊断
 # --------------------------------------------------------------------------- #
+#: 「米制」口径的合理量级（米），与 :data:`h3d.quality._PLAUSIBLE_DIAG_M` 同源。
+#: 报表侧独立留一份是为了兼容**旧 manifest**：r15 之前的 M5 没有
+#: ``units_plausible`` 键，若直接读不到就退化成"存疑=否"，会把 6 米级的
+#: 假米制照样印成「米制（激光锚定）」。这里按包围盒现推。
+_DIAG_RANGE_M = (0.02, 3.0)
+
+
+def _units_plausible(m5: dict) -> Optional[bool]:
+    """单位口径是否自洽（None = 无从判断，按"不表态"处理）。"""
+    if not m5:
+        return None
+    flag = m5.get("units_plausible")
+    if isinstance(flag, bool):
+        return flag
+    if not m5.get("metric_units"):
+        return True          # 已经是"任意单位"，无需判量级
+    diag = m5.get("model_bbox_diag")
+    if isinstance(diag, (int, float)) and diag > 0:
+        return _DIAG_RANGE_M[0] <= float(diag) <= _DIAG_RANGE_M[1]
+    return None
+
+
 def _geom_source(m1: dict) -> str:
     """几何来源判定：优先用 M1 显式落盘的 ``dense_source``。
 
@@ -113,11 +141,22 @@ def _geom_source(m1: dict) -> str:
     if src:
         return _SOURCE_CN.get(src, str(src))
     n_scans = m1.get("n_scans")
+    if m1.get("dual_source_duplicate"):
+        return _SOURCE_CN["raw_looks_like_sfm"]
     if n_scans == 0 and m1.get("dense_merged"):
         return "SfM 稠密（唯一几何源，据指标推断）"
     if isinstance(n_scans, int) and n_scans > 0:
         return "激光扫描"
     return "N/A"
+
+
+def _esc(value: Any) -> str:
+    """把外部字符串转义成可安全嵌入 ``|safe`` 片段的形式。
+
+    只在 :func:`_findings` 里用：那段文本自身带 ``<b>``/``<code>``，必须按
+    HTML 渲染；而其中夹带的件号、文件名来自磁盘，不能原样信任。
+    """
+    return html.escape(str(value if value is not None else ""), quote=False)
 
 
 def _stage_note(entry: dict) -> str:
@@ -135,6 +174,10 @@ def _stage_note(entry: dict) -> str:
         return first[:200]
     if status in ("skipped", "disabled"):
         return str(entry.get("skip_reason") or entry.get("reason") or "")[:200]
+    # M2 的「完成 0.02 s 1 个产物」读不出"这一步根本没算"，必须显式说明，
+    # 否则单站任务的配准精度会被当成"已验证"（2026-10-26 真机）。
+    if status == "done" and entry.get("identity"):
+        return "恒等落盘：单站输入，未发生任何配准变换"
     outputs = entry.get("outputs") or []
     if outputs:
         return f"{len(outputs)} 个产物"
@@ -200,27 +243,34 @@ def _findings(items: list[str],
 
     报表不能只罗列数字：用户看 4.6%"覆盖率"会以为 95% 表面没贴图，
     看 25 个连通块也未必意识到"模型碎成一把碎片"。这里把判据固化下来。
+
+    .. warning::
+       返回的 ``text`` 在模板里按 ``|safe`` 渲染（要保留 ``<b>`` / ``<code>``）。
+       因此**凡来自外部的字符串（件号、文件名）必须过 :func:`_esc`**——
+       实测 2026-10-26 之前 ``autoescape=True`` 配 ``{{ f.text }}``，页面上
+       一直是字面量 ``&lt;b&gt;``，没人发现。
     """
     out: list[dict[str, str]] = []
     for item in items:
-        m1, m3, m4, m5 = (get(item, "M1"), get(item, "M3"),
-                          get(item, "M4"), get(item, "M5"))
+        m1, m2, m3, m4, m5, m6 = (
+            get(item, "M1"), get(item, "M2"), get(item, "M3"),
+            get(item, "M4"), get(item, "M5"), get(item, "M6"))
 
         fill = m4.get("island_fill_ratio")
         if isinstance(fill, (int, float)) and fill < 0.85:
             out.append({"level": "warn", "text": (
-                f"{item}：UV 岛内仅 {_pct(fill)} 纹素采到颜色（阈值 85%）——"
+                f"{_esc(item)}：UV 岛内仅 {_pct(fill)} 纹素采到颜色（阈值 85%）——"
                 "大面积无可见相机。优先检查法线朝向是否整体翻转、位姿与遮挡判据，"
                 "其次看 UV 岛是否过碎。")})
         flipped = m4.get("normal_flipped")
         if flipped:
             out.append({"level": "warn", "text": (
-                f"{item}：法线整体朝向已被自动校正（原始网格法线半数以上指向背面）——"
+                f"{_esc(item)}：法线整体朝向已被自动校正（原始网格法线半数以上指向背面）——"
                 "这说明上游点云法线定向不可靠，贴图前必须依赖相机投票兜底。")})
         cov = m4.get("coverage_ratio")
         if isinstance(cov, (int, float)) and cov < 0.20:
             out.append({"level": "warn", "text": (
-                f"{item}：图集仅 {_pct(cov)} 像素有颜色——交付模型会呈「有几何无颜色」"
+                f"{_esc(item)}：图集仅 {_pct(cov)} 像素有颜色——交付模型会呈「有几何无颜色」"
                 "或大面积黑斑。这是贴图链路问题，不是几何问题。")})
 
         n_comp = m3.get("n_components")
@@ -228,14 +278,14 @@ def _findings(items: list[str],
         if isinstance(n_comp, int) and n_comp > 3 and isinstance(ratio, (int, float)) \
                 and ratio < 0.60:
             out.append({"level": "warn", "text": (
-                f"{item}：网格碎成 {n_comp} 个连通块，最大块仅占 {_pct(ratio)} 面积——"
+                f"{_esc(item)}：网格碎成 {n_comp} 个连通块，最大块仅占 {_pct(ratio)} 面积——"
                 "多为背景/台面被一并重建。建议在 M1/M3 增加平面剔除（RANSAC 主平面）"
                 "后重新三角化。")})
 
         mu = m5.get("metric_units")
         if mu is False:
             out.append({"level": "info", "text": (
-                f"{item}：无激光锚点，几何来自 SfM 稠密重建——坐标是**任意单位**，"
+                f"{_esc(item)}：无激光锚点，几何来自 SfM 稠密重建——坐标是**任意单位**，"
                 f"包围盒对角线 {_num(m5.get('model_bbox_diag'), 3)}（非米）。"
                 f"引精度请用<b>相对中误差 {_pct(m5.get('rmse_rel'), 2)}</b>"
                 "（中误差 / 对角线），它与尺度无关；"
@@ -244,8 +294,54 @@ def _findings(items: list[str],
         novel = m1.get("dense_novel_ratio")
         if isinstance(novel, (int, float)) and novel < 0.15 and m1.get("dense_merged"):
             out.append({"level": "info", "text": (
-                f"{item}：SfM 稠密点云相对激光几何的新增信息仅 {_pct(novel)}"
+                f"{_esc(item)}：SfM 稠密点云相对激光几何的新增信息仅 {_pct(novel)}"
                 "（阈值 15%）却仍被并入——会降低精度并增加面数。")})
+
+        # --- 2026-10-26 真机补充：四类「数字好看但不成立」的情况 ---------------
+        # 报表第七节此前对这批数据判「未发现指标层面的明显异常」，而实际上
+        # 中误差没判门、图集没承载、几何自证——三件事都没说。诊断失声比误报更危险：
+        # 用户会拿「无异常」当结论。
+        if m1.get("dual_source_duplicate"):
+            out.append({"level": "warn", "text": (
+                f"{_esc(item)}：<b>双源几何近乎重合</b>——00_raw 与 SfM 稠密模型的新增"
+                f"信息仅 {_pct(novel)}（低于 15% 融合阈值），00_raw 本身很可能就是"
+                "照片重建的产物。此时 M2 必然「无需配准」、中误差只剩重采样损失、"
+                "表面覆盖率优于自证，<b>三项指标都不能作为路线一（激光几何）的验证依据</b>。"
+                "要真正测配准：对 00_raw 施加一个已知的刚体变换再跑，看 M2 能否复原。")})
+
+        if _units_plausible(m5) is False:
+            out.append({"level": "warn", "text": (
+                f"{_esc(item)}：坐标被当作<b>米制</b>使用，但包围盒对角线算得 "
+                f"{_num(m5.get('model_bbox_diag'), 2)} 米——中小型文物定义是 5~30 cm，"
+                "量级差两个数量级以上。<b>单位换算必然有误</b>：中误差已自动退出毫米门"
+                "（报表中标 †），请核对输入点云的真实单位与 <code>scale.reference_diag</code>。")})
+
+        if m5.get("metric_units") and m5.get("rmse_reliable") is False \
+                and _units_plausible(m5) is not False:
+            out.append({"level": "info", "text": (
+                f"{_esc(item)}：参考点云平均点间距 {_num(m5.get('mps_m'), 4)} 米"
+                f"（{_num((m5.get('mps_m') or 0) * 1000, 1)} mm），粗于 5 mm 判门阈值——"
+                f"<b>中误差 {_num(m5.get('rmse_mm'), 2)} mm 不参与质量门</b>（报表中标 †），"
+                "它主要反映参考点云自身的稀疏程度，不是模型精度。"
+                f"要出可判门的毫米级结论，需把参考扫描加密到 MPS ≤ 5 mm，"
+                f"或引用与尺度无关的<b>相对中误差 {_pct(m5.get('rmse_rel'), 2)}</b>。")})
+
+        if m6 and (m6.get("texture_orphan") or (
+                m6.get("atlas") and m6.get("texture_carrier") in ("obj", "glb", "gltf")
+                and m6.get("texture_carrier") not in (m6.get("formats_delivered") or []))):
+            out.append({"level": "warn", "text": (
+                f"{_esc(item)}：<b>贴图图集孤立</b>——图集 {_esc(m6.get('atlas'))} 已随包交付，"
+                f"但真正引用它的 {_esc(m6.get('texture_carrier'))} 不在实际交付格式里"
+                f"（{_esc('、'.join(m6.get('formats_delivered') or []) or '无')}）。"
+                "PLY 只能存顶点色、无法引用图像纹理，<b>打开交付模型会是没有贴图的白模</b>。"
+                f"请在生成约束里勾选 {m6.get('texture_carrier')} 后重跑 M6。")})
+
+        if m2 and m2.get("identity") and m2.get("n_scans") == 1:
+            out.append({"level": "info", "text": (
+                f"{_esc(item)}：M2 未发生任何配准变换（单站输入，恒等落盘，"
+                "耗时通常只有十几毫秒）。"
+                "配准节点（FPFH + RANSAC + ICP）在本件<b>没有被执行过</b>，"
+                "其精度无从判断——路由一口径验证需至少两份错位的同源几何。")})
     return out
 
 
@@ -365,12 +461,18 @@ _TEMPLATE = """<!DOCTYPE html>
     <td class="num">{{ row.vertices }}</td><td class="num">{{ row.triangles }}</td>
     <td>{{ row.watertight }}</td><td class="num">{{ row.n_comp }}</td>
     <td class="num">{{ row.largest }}</td><td class="num">{{ row.bbox_diag }}</td>
-    <td class="{{ 'warn' if row.units == 'SfM 任意单位' else '' }}">{{ row.units }}</td>
+    <td class="{{ 'warn' if row.units_warn else '' }}">{{ row.units }}</td>
   </tr>
   {% else %}
   <tr><td colspan="12">无几何数据（M1/M3 未执行）</td></tr>
   {% endfor %}
 </table>
+<p class="footnote">
+  <b>「清理后点」远小于「输入点」不是数据丢失</b>：M1 先做<b>体素降采样</b>（去冗余，
+  体素边长 = <code>preprocess.voxel_down_sample × 尺度因子</code>，尺度因子 =
+  输入对角线 / <code>scale.reference_diag</code>），再做统计离群剔除。降采样后的
+  点数直接决定 M3 泊松重建的细节上限，也是 M5 中误差的主要来源之一。
+</p>
 
 <h2>三、纹理质量（M4 贴图管线）</h2>
 <table>
@@ -401,6 +503,7 @@ _TEMPLATE = """<!DOCTYPE html>
 <h2>四、质检指标（M5）</h2>
 <table>
   <tr><th>文物编号</th><th>表面覆盖率</th><th>中误差（{{ rmse_unit }}）</th>
+      <th>中误差口径</th>
       <th>相对中误差（%对角线）</th>
       <th>平均点间距（{{ mps_unit }}）</th><th>边界占比</th>
       <th>纹理清晰度</th><th>纹理接缝</th><th>纹理图集覆盖率</th><th>岛内填充率</th>
@@ -409,6 +512,7 @@ _TEMPLATE = """<!DOCTYPE html>
   <tr>
     <td>{{ row.item }}</td>
     <td class="num">{{ row.coverage }}</td><td class="num">{{ row.rmse }}</td>
+    <td>{{ row.rmse_scope }}</td>
     <td class="num">{{ row.rmse_rel }}</td>
     <td class="num">{{ row.mps }}</td><td class="num">{{ row.boundary }}</td>
     <td class="num">{{ row.tex_sharpness }}</td><td class="num">{{ row.tex_seam }}</td>
@@ -417,7 +521,7 @@ _TEMPLATE = """<!DOCTYPE html>
     <td class="{{ 'pass' if row.qc == 'pass' else 'fail' }}">{{ row.qc }}</td>
   </tr>
   {% else %}
-  <tr><td colspan="12">无质检数据（M5 未执行{% if n_fail %}——上游阶段失败{% endif %}）</td></tr>
+  <tr><td colspan="13">无质检数据（M5 未执行{% if n_fail %}——上游阶段失败{% endif %}）</td></tr>
   {% endfor %}
 </table>
 <p class="footnote">
@@ -427,8 +531,12 @@ _TEMPLATE = """<!DOCTYPE html>
   中误差按<b>模型单位</b>给出（不是毫米），且不参与质量门判定；
   <b>请引用「相对中误差」</b>——即中误差占模型包围盒对角线的百分比，
   它与尺度无关，是同批/跨批可比的口径。
-  {% else %}「相对中误差」＝ 中误差 / 包围盒对角线，供跨尺度比对；
-  报告判门仍以毫米阈值为准。{% endif %}
+  {% else %}<b>中误差口径</b>这一列决定那个毫米数能不能当"实测精度"引用：
+  <b>实测（参与 5 mm 判门）</b>才算数；标 <b>†</b> 的两种是
+  <b>不判门（参考稀疏）</b>——参考点云平均点间距本身粗于 5 mm，RMS 距离被参考
+  的稀疏度主导；<b>不判门（单位存疑）</b>——坐标虽被当作米制，但包围盒对角线
+  不在中小型文物的合理量级内。两者都只说明"没判过"，<b>不等于达标</b>；
+  此时可对外引用的仍是与尺度无关的<b>相对中误差</b>（中误差 / 包围盒对角线）。{% endif %}
 </p>
 
 <h2>五、交付包索引（M6 发布）</h2>
@@ -451,8 +559,10 @@ _TEMPLATE = """<!DOCTYPE html>
   （多因 <code>texture.export_formats</code> 未勾选，属配置不一致而非运行故障）。
   <b>「纹理图集」</b>是照片纹理链路的核心产物（UV 图集 PNG），
   无论导出哪些模型格式都随交付包归档；<b>「纹理承载」</b>说明哪个模型真正引用了它——
-  显示 <code>无</code> 时交付包里的图集是孤立文件（PLY 只能存顶点色，
-  无法引用图像纹理），需要 OBJ/GLB 才能"打开就带颜色"。
+  显示 <code>无</code> 或 <code>无（图集孤立）</code> 时，交付包里的图集是<b>孤立文件</b>
+  （PLY 只能存顶点色，无法引用图像纹理），需要 OBJ/GLB 才能"打开就带颜色"。
+  <b>注意：M4 为了挂图像纹理会自动补导 OBJ，所以 M4 的「纹理承载」恒为 obj；
+  这里显示的是「这个承载格式是否真的进了交付包」</b>——只勾 ply 时它就是孤立的。
 </p>
 
 <h2>六、多时相形变（X1，P2 指标入报表）</h2>
@@ -472,7 +582,7 @@ _TEMPLATE = """<!DOCTYPE html>
 <h2>七、自动诊断</h2>
 {% if findings %}
 <ul class="findings">
-  {% for f in findings %}<li class="{{ f.level }}">{{ f.text }}</li>
+  {% for f in findings %}<li class="{{ f.level }}">{{ f.text|safe }}</li>
   {% endfor %}
 </ul>
 {% else %}
@@ -605,6 +715,23 @@ def generate_html(manifest: RunManifest,
         units_flag = m5.get("metric_units")
         if units_flag is False:
             no_metric_units = True
+        # 「米制」这一列有三个层次，别混读（2026-10-26 真机）：
+        #   有锚点且量级合理 → 米制（激光锚定），毫米可对外引用；
+        #   有锚点但包围盒 6 米  → 米制（存疑），数字自洽但量级不成立；
+        #   有锚点但与 SfM 同源  → 米制（自证），基准就是自己的产物。
+        plausible = _units_plausible(m5)
+        dual_dup = bool(m1.get("dual_source_duplicate"))
+        if units_flag is None:
+            units_text = "N/A"
+        elif not units_flag:
+            units_text = "SfM 任意单位"
+        elif plausible is False:
+            units_text = (f"米制（存疑：对角线 "
+                          f"{_num(m5.get('model_bbox_diag'), 2)}，量级不符）")
+        elif dual_dup:
+            units_text = "米制（自证：无外部基准）"
+        else:
+            units_text = "米制（激光锚定）"
         bg = m1.get("background")
         if not isinstance(bg, dict):
             bg_text = "未启用"
@@ -626,8 +753,10 @@ def generate_html(manifest: RunManifest,
             "n_comp": _num(m3.get("n_components"), 0, default="N/A"),
             "largest": _pct(m3.get("largest_component_ratio")),
             "bbox_diag": _num(m5.get("model_bbox_diag"), 3, default="N/A"),
-            "units": ("N/A" if units_flag is None
-                      else ("米制（激光锚定）" if units_flag else "SfM 任意单位")),
+            "units": units_text,
+            # 只有「米制（激光锚定）」是干净的；其余三种都要高亮，避免读者
+            # 只看到「米制」两个字就当成有外部基准。
+            "units_warn": units_text not in ("米制（激光锚定）", "N/A"),
         })
 
     # ---------------- 三、纹理质量（M4） ----------------
@@ -685,10 +814,26 @@ def generate_html(manifest: RunManifest,
             rmse_text = _num(m5.get("rmse_units"), 4)
             if metric_ok and rmse_text != "N/A":   # 全表按 mm 排，本行须标注
                 rmse_text += " (模型单位)"
+        # 口径三态：只有"实测"才参与 5 mm 判门。其余情况在数值后打 †，
+        # 让读者不会只记住数字而漏掉"这个数字没被判过"（2026-10-26 真机）。
+        scope = m5.get("rmse_scope")
+        if not scope:
+            _plaus = _units_plausible(m5)
+            if not row_metric:
+                scope = "无量纲（SfM 任意单位）"
+            elif _plaus is False:
+                scope = "不判门（单位存疑）"
+            elif m5.get("rmse_reliable"):
+                scope = "实测（参与 5 mm 判门）"
+            else:
+                scope = "不判门（参考稀疏）"
+        if rmse_text != "N/A" and not str(scope).startswith("实测"):
+            rmse_text += " †"
         qc_rows.append({
             "item": item,
             "coverage": _pct(m5.get("coverage")),
             "rmse": rmse_text,
+            "rmse_scope": scope,
             "rmse_rel": _pct(m5.get("rmse_rel")),
             "mps": _num(m5.get("mps_m"), 4),
             "boundary": _pct(m5.get("boundary_ratio")),
@@ -711,13 +856,21 @@ def generate_html(manifest: RunManifest,
             fmt_done = m6.get("formats_delivered") or []
             fmt_missing = m6.get("formats_missing") or []
             carrier = m6.get("texture_carrier")
+            carrier_done = m6.get("texture_carrier_delivered")
+            if carrier_done is None and carrier:
+                # 老 manifest 没这个键：按「承载格式是否真的在交付集合里」现推。
+                # M4 因为要挂图像纹理会自动补导 OBJ，所以 carrier 恒为 obj；
+                # 但 M6 只复制用户请求的格式——只勾 ply 时 OBJ 根本不在交付包里。
+                carrier_done = carrier if carrier in fmt_done else None
+            carrier_text = carrier_done or ("无（图集孤立）" if m6.get("atlas")
+                                            else "无")
             publish_rows.append({
                 "item": item, "status": "已发布",
                 "n_models": _num(m6.get("n_models"), 0, default="?"),
                 "formats": "、".join(fmt_done) if fmt_done else "—",
                 "missing": "、".join(fmt_missing) if fmt_missing else "—",
                 "atlas": (m6.get("atlas") or "无"),
-                "carrier": (carrier or "无"),
+                "carrier": carrier_text,
             })
 
     # ---------------- 六、X1 多时相 ----------------

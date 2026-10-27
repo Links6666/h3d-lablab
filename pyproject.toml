@@ -10,7 +10,7 @@ norecursedirs = ["py4dgeo-1.2.0", "output", "docs", "examples", "notebooks", "*.
 
 [project]
 name = "h3d"
-version = "1.1.11"
+version = "1.1.12"
 description = "中小型文物三维建模自动化系统(路线E)"
 requires-python = ">=3.10"
 dependencies = [

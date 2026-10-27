@@ -242,10 +242,33 @@ def _stage_preprocess(task: Task, cfg) -> StageResult:
     })
     if normal_info:
         metrics["normal_orientation"] = normal_info
+    # 双源同源检测（2026-10-26 真机：把照片重建的 PLY 塞进 00_raw 冒充激光件）。
+    #
+    # ``00_raw`` 有文件就被当作"有激光锚点"（M5 据此打 metric_units=True、
+    # 报表据此印「激光扫描 / 米制（激光锚定）」）。但用户完全可能把**本系统自己
+    # 照片重建的模型**放进 00_raw 做调试——此时 raw 与 S1 稠密模型同源，
+    # novel 必然趋近 0，M2 也必然「无需配准」。于是配准、精度、覆盖率三项
+    # 全部变成**自证**：拿自己的产物当标准答案，误差恒等于 0 或只剩重采样损失。
+    #
+    # 判据直接复用既有的双源融合阈值：novel 低于阈值 = 两源没有增量信息 =
+    # 大概率同源。命中即落盘标记 + WARNING，供报表降级表述（不改数值，只改口径）。
+    _novel = metrics.get("dense_novel_ratio")
+    if task.raw_paths and isinstance(_novel, (int, float)) \
+            and _novel < _DENSE_MERGE_MIN_NOVEL:
+        metrics["dual_source_duplicate"] = True
+        log.warning(
+            "M1 双源几何近乎重合：%s 的 00_raw 与 SfM 稠密模型新信息仅 %.1f%%"
+            "（阈值 %.0f%%）——00_raw 很可能本身就是照片重建产物。本件的"
+            "配准/精度/覆盖率属「自证」，不能作为路线一（激光几何）的验证依据。",
+            task.item_id, _novel * 100, _DENSE_MERGE_MIN_NOVEL * 100)
     # 几何来源口径：场景② 没有激光基线，novel 无从计算（恒 None），
     # 报表里必须写清"这是唯一几何源"而不是留一个空指标。
     if not task.raw_paths:
         metrics["dense_source"] = "sfm_only"
+    elif metrics.get("dual_source_duplicate"):
+        # 有 00_raw 但与 SfM 同源：既不是纯激光，也不是"激光+SfM 融合"。
+        # 单列一个取值，报表才不会把自证件写成「激光扫描」。
+        metrics["dense_source"] = "raw_looks_like_sfm"
     elif metrics.get("dense_merged"):
         metrics["dense_source"] = "laser+sfm"
     else:
@@ -287,12 +310,18 @@ def _stage_register(task: Task, cfg) -> StageResult:
             outputs = []
         log.info("M2 完成：%s（单站，无需配准，跳过 M2 直接进入 M3）",
                  task.item_id)
+        # ``registered=False`` 在报表里只表现为「完成 0.02 s」，读不出"这一步
+        # 其实什么都没算"。显式落 ``identity`` / ``identity_reason``，报表据此
+        # 提示「未发生配准变换」，避免把恒等结果当成配准精度。
         return StageResult("M2", TaskStatus.DONE, outputs,
-                           {"n_scans": len(cleaned), "registered": False})
+                           {"n_scans": len(cleaned), "registered": False,
+                            "identity": True,
+                            "identity_reason": "single_scan"})
 
     ref = load_point_cloud(cleaned[0])
     outputs: list[str] = []
-    metrics: dict = {"n_scans": len(cleaned), "registered": True}
+    metrics: dict = {"n_scans": len(cleaned), "registered": True,
+                     "identity": False}
     # 参考站（s01）也以恒等变换落盘，保证 20_registered 是完整的多站配准结果
     # （M3 稠密重建将合并 20_registered 下全部站点）
     ref_out = os.path.join(out_dir, f"{task.item_id}_s01.ply")
@@ -598,6 +627,14 @@ def _stage_quality(task: Task, cfg) -> StageResult:
         # 结果 HTML/CSV 一律按 mm 展示，纯照片项目的精度数字全是假的。
         "model_bbox_diag": metrics.get("model_bbox_diag"),
         "metric_units": metrics.get("metric_units"),
+        # 口径标记必须跟着走（2026-10-26 真机）。这里是**手写白名单**，
+        # quality.run 算出来的键不会自动进来——上一轮就是这么丢的：
+        # rmse_reliable 从 r13 就一直在算，却从没进过 manifest，于是
+        # HTML / accuracy.csv / 论文表全都只能印出「38.26 mm + pass」，
+        # 没人看得出这个毫米数根本没参与判门。
+        "rmse_reliable": bool(metrics.get("rmse_reliable")),
+        "units_plausible": bool(metrics.get("units_plausible", True)),
+        "rmse_scope": metrics.get("rmse_scope"),
     }
     return StageResult("M5", TaskStatus.DONE, reports, manifest_metrics)
 
@@ -713,6 +750,20 @@ def _stage_publish(task: Task, cfg) -> StageResult:
 
     outputs = (models + [meta_path, delivery_manifest]
                + ([atlas] if atlas else []) + ([qc_report] if qc_report else []))
+    # 贴图「有没有真的跟着走」（2026-10-26 真机）：M4 因为要承载图像纹理会自动
+    # 补导 OBJ，于是 ``texture_carrier`` 恒为 obj；但 M6 只复制用户请求的格式。
+    # 用户只勾 ply 时，交付目录里既没有 OBJ 也没有 MTL，那枚图集 PNG 谁都不引用
+    # ——报表却显示「纹理承载：obj」，与「实际格式：ply」自相矛盾。
+    # 这里按**实际交付集合**重新判定承载，并把孤立状态落盘。
+    _carrier = stage_metrics.get("M4", {}).get("texture_carrier")
+    _carrier_delivered = (_carrier if (_carrier and _carrier in delivered)
+                          else None)
+    if atlas and _carrier and not _carrier_delivered:
+        log.warning(
+            "M6 图集孤立：%s 的贴图由 %s 承载，但本次只交付 %s——交付包里的 "
+            "%s 不会被任何模型引用（PLY 只能存顶点色）。要「打开就带颜色」"
+            "请在约束里勾选 %s。", task.item_id, _carrier,
+            delivered or "无格式", os.path.basename(atlas), _carrier)
     metrics = {
         # formats 保留旧键（兼容报表/测试），语义收敛为「配置请求的格式」
         "formats": requested,
@@ -722,7 +773,9 @@ def _stage_publish(task: Task, cfg) -> StageResult:
         "n_models": len(models),
         "atlas": os.path.basename(atlas) if atlas else None,
         "atlas_delivered": bool(atlas),
-        "texture_carrier": stage_metrics.get("M4", {}).get("texture_carrier"),
+        "texture_carrier": _carrier,
+        "texture_carrier_delivered": _carrier_delivered,
+        "texture_orphan": bool(atlas and _carrier and not _carrier_delivered),
         "meta": os.path.basename(meta_path),
         "delivery_manifest": os.path.basename(delivery_manifest),
     }

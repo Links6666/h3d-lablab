@@ -35,6 +35,11 @@ from .gate import ACCURACY_HEADERS, build_report, check_quality
 
 log = get_logger("quality")
 
+#: 「米制」口径的合理量级（米）。本项目定义为**中小型文物**：5~30 cm，
+#: 包围盒对角线通常 0.1~0.6 m；放宽到 0.02~3.0 m 是为了容下大型造像与
+#: 带底座的整件，同时把「把 SfM 任意单位当米」的 6 米、60 米一类挡在外面。
+_PLAUSIBLE_DIAG_M = (0.02, 3.0)
+
 
 def run(mesh, ref_pcd, cfg: QualityConfig,
         metric_units: bool = True) -> dict[str, Any]:
@@ -84,6 +89,34 @@ def run(mesh, ref_pcd, cfg: QualityConfig,
     has_rmse = rmse_units == rmse_units  # not NaN
     rmse_rel = (rmse_units / diag) if (has_rmse and diag > 0) else float("nan")
 
+    # 单位口径的**自洽性**检查（2026-10-26 真机）：第三个前提，前面两个都覆盖不到。
+    #
+    # 实机把一个照片重建的 PLY 放进 00_raw，于是 ``task.raw_paths`` 非空、
+    # ``metric_units=True``，报表印出「激光扫描 / 米制（激光锚定）/ 中误差
+    # 38.26 mm」。但这个"文物"的包围盒对角线是 **6.09 米**——本项目定义为
+    # 中小型文物（5~30 cm），差了两个数量级。单位换算必然错了，38.26 mm
+    # 只是一串自洽的假数字。
+    #
+    # 判据用**量级**而非溯源自证：声称米制却算出 0.02~3.0 m 之外的对角线，
+    # 就意味着「1 单位 = 1 米」这个假设不成立。不改数值、不翻 metric_units，
+    # 只落一个标记让报表降级表述 + 拦住毫米门。
+    units_plausible = (not metric_units) or (_PLAUSIBLE_DIAG_M[0] <= diag
+                                             <= _PLAUSIBLE_DIAG_M[1])
+    if metric_units and not units_plausible:
+        log.warning("单位口径存疑：包围盒对角线 %.3f m 超出中小型文物合理范围"
+                    "（%.2f~%.1f m），但坐标被当作米制使用——请核对 "
+                    "scale.reference_diag 与输入点云的真实单位；本次中误差"
+                    "不参与毫米门判定", diag, *_PLAUSIBLE_DIAG_M)
+    #: 中误差口径的**单一**文字结论（报表 / CSV / 论文表共用同一判据）。
+    if not metric_units:
+        rmse_scope = "无量纲（SfM 任意单位）"
+    elif not units_plausible:
+        rmse_scope = "不判门（单位存疑）"
+    elif not rmse_reliable:
+        rmse_scope = "不判门（参考稀疏）"
+    else:
+        rmse_scope = "实测（参与 5 mm 判门）"
+
     metrics: dict[str, Any] = {
         "coverage": coverage,
         "rmse_mm": rmse_units * 1000.0,
@@ -93,13 +126,16 @@ def run(mesh, ref_pcd, cfg: QualityConfig,
         "metric_units": bool(metric_units),
         "model_bbox_diag": round(diag, 6),
         "rmse_reliable": rmse_reliable,
+        "units_plausible": bool(units_plausible),
+        "rmse_scope": rmse_scope,
         "boundary_ratio": boundary_ratio(mesh),
         "mps_m": mps,
         "overlap": None,  # 多视角纹理重叠（M4 未实现，N/A）
         "max_distance_m": max_dist,
         "ok": check_quality(
             {"coverage": coverage, "rmse_mm": rmse_units * 1000.0,
-             "rmse_reliable": rmse_reliable}, cfg),
+             "rmse_reliable": rmse_reliable,
+             "units_plausible": units_plausible}, cfg),
     }
     if not metric_units and has_rmse:
         warn = float(getattr(cfg, "rmse_rel_warn", 0.02) or 0.0)
