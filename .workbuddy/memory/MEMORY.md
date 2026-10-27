@@ -128,6 +128,20 @@
 - **git push 需沙箱外 + 清代理**：`dangerouslyDisableSandbox` 下加 `-c http.proxy= -c https.proxy=`；
   凭据靠 Windows 凭据管理器。`git fetch` 的 `A..B` 只是 ref 变化，判分叉看 `rev-list --count` 双向。
 
+## 报表口径（「数字能不能引用」，r16 起为硬约束）
+- **中误差三态**：`rmse_scope` = 实测判门 / 不判门（参考稀疏）/ 不判门（单位存疑）/ 无量纲。
+  只在 `metric_units && rmse_reliable && units_plausible` 时才参与 5 mm 门；其余在 CSV/HTML/
+  论文表**行内标注**（HTML 数值后打 `†`）。判据 `rmse_reliable = mps*1000 <= 5.0`。
+- **`units_plausible`**：声称米制却算出 0.02~3.0 m 之外的对角线 → 自相矛盾（实测 6.086 m 的
+  「中小型文物」）。不改数值、不翻 `metric_units`，只降级表述 + 退出毫米门。
+- **`metric_units = bool(task.raw_paths)` 是脆假设**：把 SfM 产物放进 00_raw 就变成「激光锚定」。
+- **自证闭环判据**：`dense_novel_ratio < 0.15` 且有 00_raw → `dual_source_duplicate=True`，
+  `dense_source=raw_looks_like_sfm`；此时配准/精度/覆盖率三项都不可引用。
+- **`texture_carrier` ≠ `texture_carrier_delivered`**：M4 为挂图像纹理自动补导 OBJ（carrier 恒 obj），
+  M6 只复制 `publish.formats`。只勾 ply 时图集 PNG 孤立（报表须显示「无（图集孤立）」）。
+- **诊断文本走 `|safe`**：`autoescape=True` 配 `{{ f.text }}` 会把 `<b>` 印成 `&lt;b&gt;`；
+  外部字符串（件号/文件名）必须过 `_esc`，文本里禁出现裸 `<`（会被当标签吞掉）。
+
 ## 真机实测（1.1.10，`E:\兵马俑照片\1.1.10`，1 件 30 张 4.5MP，总 91 s）
 - S1 0.156（**跨项目复用**）/ M1 7.37 / M2 0.029 / M3 2.55 / M4 70.79 / M5 0.66 / M6 0.22 s。
 - M1：622164 → 41486 点，bg_kept 0.9186；**M2 registered=否、icp_align 跳过「同坐标系」**
@@ -138,7 +152,10 @@
 
 ## 待办
 - **配准从无端到端证据**：对 PLY 施加已知刚体变换再让 M2 恢复（残差 <2 cm 判通过）——论文最易被追问处；
-  真实扫描件仍缺（双源融合与毫米级精度都需它背书）。
+  真实扫描件仍缺（双源融合与毫米级精度都需它背书）。1.1.11 真机已确认：把 SfM 产物塞进 00_raw
+  会形成自证闭环（S1 跨项目复用 0.14 s + M2 恒等 16 ms + novel 7.7%），**不能当路线一验证**。
+- **约束面板加「数据来源」选项**（激光件 / 照片重建件）：勾后者即不把坐标当米制、不自称激光锚定，
+  从源头避免自证闭环（r16 只在报表侧兜底，没做入口拦截）。
 - **X3（病害语义分割+图斑量化）未开工**：H3D-Lab 掩膜 → 复用 M4 位姿/pixel_scale/Z-buffer 可见性加权
   票决 → UV 类别图 → 面积积分（每纹素 3D 面积）。坑：单视图硬投影=整件都有病害。
 - **X4（病害语义时序追踪）**：图斑关联（IoU+质心+面积比→匈牙利）、状态机五态；UV 对齐优先、几何 ICP
