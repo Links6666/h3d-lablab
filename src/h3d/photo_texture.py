@@ -820,6 +820,28 @@ def texture_mesh_from_photos(mesh, task_root: str, item_id: str, cfg,
     t_exp = _time.time()
     attach_texture(new_mesh, uv, faces, image)
     os.makedirs(out_dir, exist_ok=True)
+    # ---- UV 布局落盘（B1 图集继承的唯一权威载体）-------------------------
+    # 在此之前 UV 只活在内存里：跑完即丢，第二次烘焙只能重新展开，而「重展开
+    # 是否与上次逐 texel 对齐」没有任何保证。图集继承要的正是「同一套 UV」，
+    # 所以必须落成一个可复算指纹的文件，并由 archive 的 atlas 记录冻结版本。
+    # 幂等：内容没变时不重写（mtime 是「图集被重算过」的证据）。
+    try:
+        from h3d.archive.atlas import save_uv_layout
+        # 必须连**展开后拓扑的顶点与法线**一起存：uv/faces 的索引属于 new_mesh
+        # （接缝处顶点被拆分，顶点数 ≥ 原始 PLY），只存 uv/faces 的话继承端拿
+        # 原始网格承接会面索引越界。
+        metrics["uv_layout"] = save_uv_layout(
+            os.path.join(out_dir, f"{item_id}_uv.npz"), uv, faces,
+            verts=np.asarray(new_mesh.vertices),
+            normals=np.asarray(new_mesh.vertex_normals))
+        log.info("UV 布局：%s（%d 顶点 / %d 面，指纹 %s%s）",
+                 os.path.basename(metrics["uv_layout"]["path"]),
+                 metrics["uv_layout"]["vertices"], metrics["uv_layout"]["faces"],
+                 metrics["uv_layout"]["digest"][:12],
+                 "" if metrics["uv_layout"]["written"] else "，内容未变未重写")
+    except Exception as exc:  # noqa: BLE001 - 布局落盘失败不阻断贴图交付
+        metrics["uv_layout_error"] = str(exc)[:200]
+        log.warning("UV 布局落盘失败（图集将无法继承）：%s", exc)
     # 着色掩膜落盘：M5 以它判填充率（比亮度阈值可靠），同时也是排障依据
     mask_path = os.path.join(out_dir, f"{item_id}_L1.0_mask.png")
     try:

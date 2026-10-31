@@ -23,14 +23,14 @@ from __future__ import annotations
 import logging
 import os
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QAbstractItemView, QHBoxLayout, QHeaderView,
-                               QPushButton, QTableWidget, QTableWidgetItem,
-                               QVBoxLayout, QWidget)
+from PySide6.QtCore import QThread, Qt, Signal
+from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QHBoxLayout,
+                               QHeaderView, QPushButton, QTableWidget,
+                               QTableWidgetItem, QVBoxLayout, QWidget)
 
 from h3d.gui.widgets import ElidedLabel
 
-__all__ = ["ArchivePanel"]
+__all__ = ["ArchivePanel", "InheritWorker"]
 
 log = logging.getLogger(__name__)
 
@@ -42,12 +42,45 @@ _COLUMNS: tuple[str, ...] = ("时相", "采集日期", "路线", "基准期",
 _CENTER_COLS = (3, 4, 5, 6)
 
 
+class InheritWorker(QThread):
+    """后台跑图集继承。
+
+    为什么必须开线程：一次 2048² 的逐纹素重投影实测 50 s 量级，跑在主线程
+    等于界面假死，而用户的第一反应是再点一次（于是排两个烘焙任务抢 GPU）。
+    参照 ``BatchRunner`` 的纪律：新建前查 ``isRunning()``，旧对象 ``deleteLater()``。
+    """
+
+    done = Signal(bool, str, dict)
+
+    def __init__(self, base: str, source: str, parent=None):
+        super().__init__(parent)
+        self._base = base
+        self._source = source
+
+    def run(self):  # noqa: D401 - QThread 入口
+        try:
+            from h3d.archive.inherit_epoch import inherit_epoch
+
+            res = inherit_epoch(self._base, self._source)
+            self.done.emit(res.ok, res.message,
+                           {"atlas_ref": res.atlas_ref,
+                            "texture_path": res.texture_path,
+                            "base_epoch": res.base_epoch})
+        except Exception as exc:  # noqa: BLE001 - 线程里异常不外传
+            log.warning("图集继承失败：%s", exc)
+            self.done.emit(False, f"继承失败：{exc}", {})
+
+
 class ArchivePanel(QWidget):
     """文物档案页：顶部摘要 + 按钮，下面一张时相表。"""
+
+    #: 档案内容变化（继承出新版本）——主窗口据此刷新其它视图
+    archive_changed = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._status = None
+        self._worker = None
         self._build()
 
     # ---------------------------------------------------------- UI
@@ -62,6 +95,13 @@ class ArchivePanel(QWidget):
         self.lbl_title.setStyleSheet(
             "QLabel{font-weight:bold;font-size:13px;}")
         head.addWidget(self.lbl_title, 1)
+        self.btn_inherit = QPushButton("继承基准图集…")
+        self.btn_inherit.setEnabled(False)
+        self.btn_inherit.setToolTip(
+            "把本项目的影像重投影到另一个项目（基准期）定义的 UV 图集上，"
+            "使两期纹理可以逐 texel 比色。不会重新展开 UV。")
+        self.btn_inherit.clicked.connect(self._inherit)
+        head.addWidget(self.btn_inherit)
         self.btn_open = QPushButton("打开档案目录")
         self.btn_open.setEnabled(False)
         self.btn_open.clicked.connect(self._open_dir)
@@ -100,6 +140,7 @@ class ArchivePanel(QWidget):
                 self.lbl_note.setText("")
                 self.table.setRowCount(0)
                 self.btn_open.setEnabled(False)
+                self.btn_inherit.setEnabled(False)
                 return True
 
             title = status.artifact_id or "（未识别件号）"
@@ -124,6 +165,7 @@ class ArchivePanel(QWidget):
                         item.setTextAlignment(Qt.AlignCenter)
                     self.table.setItem(r, c, item)
             self.btn_open.setEnabled(os.path.isdir(status.archive_dir))
+            self.btn_inherit.setEnabled(status.is_open())
             return True
         except Exception as exc:  # noqa: BLE001 - 面板失败不能影响建模
             log.warning("档案面板刷新失败：%s", exc)
@@ -131,6 +173,55 @@ class ArchivePanel(QWidget):
 
     def status(self):
         return self._status
+
+    # ---------------------------------------------------------- 继承
+    def _inherit(self) -> None:
+        """选一个基准项目，把本期影像烘到它的图集上。
+
+        入口自己的判定顺序（照 ``BatchRunner`` 的纪律）：
+        1. 本项目必须有档案（没有基准期就没有「本期」可登记）；
+        2. 已有任务在跑 → 直接返回，不排队；
+        3. 用户取消选目录 → 什么都不做。
+        """
+        try:
+            st = self._status
+            if st is None or not st.is_open():
+                return
+            if self._worker is not None and self._worker.isRunning():
+                return
+            base = QFileDialog.getExistingDirectory(
+                self, "选择基准项目（定义图集的那一个）")
+            if not base:
+                return
+            if self._worker is not None:
+                self._worker.deleteLater()
+            worker = InheritWorker(base, st.root)
+            worker.done.connect(self._on_inherit_done)
+            self._worker = worker
+            self.btn_inherit.setEnabled(False)
+            self.lbl_note.setText(
+                "正在继承基准图集…（首次烘焙需数十秒；期间可继续其它操作）")
+            worker.start()
+        except Exception as exc:  # noqa: BLE001 - 槽内异常不外传
+            log.warning("启动图集继承失败：%s", exc)
+            self.lbl_note.setText(f"启动失败：{exc}")
+
+    def _on_inherit_done(self, ok: bool, message: str, info) -> None:
+        """先刷新、再写结论。
+
+        顺序不能反：``archive_changed`` 会触发主窗口 ``_refresh_archive``，
+        而刷新会 ``apply()`` 一次状态、把说明行改回「档案已存在」——
+        于是「已继承：…」这句话一闪即失（实测被覆盖，用户读不到结果）。
+        """
+        try:
+            self._worker = None
+            st = self._status
+            self.btn_inherit.setEnabled(bool(st is not None and st.is_open()))
+            if ok:
+                self.archive_changed.emit()
+            self.lbl_note.setText(message)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("继承结果展示失败：%s", exc)
 
     # ---------------------------------------------------------- 动作
     def _open_dir(self) -> None:

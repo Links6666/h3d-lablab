@@ -416,6 +416,8 @@ class MainWindow(QMainWindow):
         from h3d.gui.archive_view import ArchivePanel
 
         self.archive_panel = ArchivePanel()
+        # 继承出新版本后刷新档案页（只读），让用户立刻看到版本数变化
+        self.archive_panel.archive_changed.connect(self._refresh_archive)
         tabs.addTab(self.archive_panel, "文物档案")
         self.tabs = tabs
         return tabs

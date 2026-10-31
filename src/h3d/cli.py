@@ -73,6 +73,21 @@ def _build_parser() -> argparse.ArgumentParser:
     p_arch_status.add_argument("-p", "--path", default=".", help="项目根目录")
     p_arch_status.add_argument("--json", action="store_true", help="以 JSON 输出")
 
+    p_arch_inh = arch_sub.add_parser(
+        "inherit", help="把复测项目烘到基准项目的图集上（跨时相纹理继承）")
+    p_arch_inh.add_argument("--base", required=True,
+                            help="基准项目根（图集由它定义）")
+    # dest 必须显式写成 source：argparse 默认会用 --from → 属性名 from
+    p_arch_inh.add_argument("--from", dest="source", required=True,
+                            help="复测项目根（要继承图集的那一件）")
+    p_arch_inh.add_argument(
+        "--matrix", default="",
+        help="显式 4×4 相似变换（JSON 文件，形如 [[...],[...]]），"
+             "不给则自动配准（质量闸门拒绝时不会烘图）")
+    p_arch_inh.add_argument("--size", type=int, default=0,
+                            help="图集边长；默认沿用基准图集记录的尺寸")
+    p_arch_inh.add_argument("--json", action="store_true", help="以 JSON 输出")
+
     return parser
 
 
@@ -280,6 +295,48 @@ def _cmd_doctor(cfg_path: Optional[str], fix: bool, as_json: bool,
 # ---------------------------------------------------------------------------
 # 入口
 # ---------------------------------------------------------------------------
+def _cmd_archive_inherit(args) -> int:
+    """``h3d archive inherit``：把复测项目烘到基准图集上（B1）。
+
+    只做一件事：调编排层并把结果翻译成退出码。所有判定（有没有图集、
+    配准是否可信）都在 :func:`inherit_epoch` 里，命令行不重复实现 ——
+    两处判据必然漂移，而这类漂移的后果是「命令行说成功、GUI 说失败」。
+    """
+    import json as _json
+
+    from h3d.archive.inherit_epoch import inherit_epoch
+
+    transform = None
+    if args.matrix:
+        try:
+            with open(args.matrix, encoding="utf-8-sig") as fh:
+                data = _json.load(fh)
+        except (OSError, ValueError) as exc:
+            print(f"变换矩阵读取失败：{exc}", file=sys.stderr)
+            return 1
+        if isinstance(data, dict):
+            data = data.get("matrix", data)
+        transform = data
+
+    res = inherit_epoch(args.base, args.source, transform=transform,
+                        size=args.size or None)
+    if args.json:
+        print(_json.dumps({
+            "ok": res.ok, "state": res.state, "message": res.message,
+            "texture_path": res.texture_path, "atlas_version": res.atlas_version,
+            "atlas_ref": res.atlas_ref, "base_epoch": res.base_epoch,
+            "source_epoch": res.source_epoch,
+            "metrics": {k: v for k, v in res.metrics.items()
+                        if isinstance(v, (int, float, str, bool))},
+        }, ensure_ascii=False, indent=2))
+    else:
+        print(res.message) if res.ok else print(res.message, file=sys.stderr)
+    if res.ok and not args.json:
+        print(f"  纹理：{res.texture_path}")
+        print(f"  图集：{res.atlas_ref}（基准期 {res.base_epoch}）")
+    return 0 if res.ok else 1
+
+
 def _cmd_archive(args) -> int:
     """文物档案：迁移（存量项目 → 时相）与状态查看。
 
@@ -309,6 +366,9 @@ def _cmd_archive(args) -> int:
             if res["missing"]:
                 print(f"  缺失产物：{'、'.join(res['missing'])}（报表会显示 N/A）")
         return 0
+
+    if args.archive_cmd == "inherit":
+        return _cmd_archive_inherit(args)
 
     # status
     try:

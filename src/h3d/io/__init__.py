@@ -29,6 +29,7 @@ from .mesh_io import (
     MESH_READ_EXT,
     MESH_WRITE_EXT,
     load_mesh,
+    make_mesh,
     save_mesh,
 )
 
@@ -44,4 +45,5 @@ __all__ = [
     "MESH_WRITE_EXT",
     "load_mesh",
     "save_mesh",
+    "make_mesh",
 ]

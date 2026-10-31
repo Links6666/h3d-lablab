@@ -156,3 +156,132 @@ class TestArchiveTab:
             assert w.archive_panel.table.rowCount() == 1
         finally:
             w.close()
+
+
+from PySide6.QtCore import QObject, Signal
+
+
+class FakeWorker(QObject):
+    """替身：记录构造参数，不真跑烘焙（2048² 一次要几十秒）。"""
+
+    done = Signal(bool, str, dict)
+    instances: list = []
+
+    def __init__(self, base, source, parent=None):
+        super().__init__(parent)
+        self.base, self.source = base, source
+        self.started = False
+        self.running = False
+        FakeWorker.instances.append(self)
+
+    def isRunning(self):  # noqa: N802 - 模仿 QThread
+        return self.running
+
+    def start(self):
+        self.started = True
+        self.running = True
+
+    def deleteLater(self):  # noqa: N802
+        self.running = False
+
+
+class TestInheritButton:
+    def test_button_present(self, tmp_path, _qapp_session):
+        w = _win(_proj(tmp_path))
+        try:
+            assert "继承" in w.archive_panel.btn_inherit.text()
+        finally:
+            w.close()
+
+    def test_disabled_without_archive(self, tmp_path, _qapp_session):
+        """普通目录没档案 → 没有基准可继承，按钮必须灰着。"""
+        d = tmp_path / "plain"
+        d.mkdir()
+        w = _win(d)
+        try:
+            assert w.archive_panel.btn_inherit.isEnabled() is False
+        finally:
+            w.close()
+
+    def test_enabled_with_archive(self, tmp_path, _qapp_session):
+        w = _win(_proj(tmp_path))
+        try:
+            assert w.archive_panel.btn_inherit.isEnabled() is True
+        finally:
+            w.close()
+
+    def test_cancel_dialog_starts_nothing(self, tmp_path, _qapp_session,
+                                          monkeypatch):
+        from PySide6.QtWidgets import QFileDialog
+
+        FakeWorker.instances.clear()
+        monkeypatch.setattr("h3d.gui.archive_view.InheritWorker", FakeWorker)
+        monkeypatch.setattr(QFileDialog, "getExistingDirectory",
+                            staticmethod(lambda *a, **k: ""))
+        w = _win(_proj(tmp_path))
+        try:
+            w.archive_panel._inherit()
+            assert FakeWorker.instances == []
+        finally:
+            w.close()
+
+    def test_starts_worker_with_selected_base(self, tmp_path, _qapp_session,
+                                              monkeypatch):
+        from PySide6.QtWidgets import QFileDialog
+
+        FakeWorker.instances.clear()
+        monkeypatch.setattr("h3d.gui.archive_view.InheritWorker", FakeWorker)
+        base = str(tmp_path / "another_project")
+        monkeypatch.setattr(QFileDialog, "getExistingDirectory",
+                            staticmethod(lambda *a, **k: base))
+        w = _win(_proj(tmp_path))
+        try:
+            w.archive_panel._inherit()
+            assert len(FakeWorker.instances) == 1
+            worker = FakeWorker.instances[0]
+            assert worker.base == base
+            assert worker.source == str(tmp_path)
+            assert worker.started is True
+            # 跑起来就锁住按钮，避免连点堆多个烘焙任务
+            assert w.archive_panel.btn_inherit.isEnabled() is False
+        finally:
+            w.close()
+
+    def test_second_click_ignored_while_running(self, tmp_path, _qapp_session,
+                                                monkeypatch):
+        from PySide6.QtWidgets import QFileDialog
+
+        FakeWorker.instances.clear()
+        monkeypatch.setattr("h3d.gui.archive_view.InheritWorker", FakeWorker)
+        base = str(tmp_path / "another")
+        monkeypatch.setattr(QFileDialog, "getExistingDirectory",
+                            staticmethod(lambda *a, **k: base))
+        w = _win(_proj(tmp_path))
+        try:
+            w.archive_panel._inherit()
+            w.archive_panel._inherit()
+            assert len(FakeWorker.instances) == 1, "运行中不得再起第二个任务"
+        finally:
+            w.close()
+
+    def test_done_reports_and_refreshes(self, tmp_path, _qapp_session):
+        """完成后必须刷新（新版本可见），并把结论写进说明行。"""
+        w = _win(_proj(tmp_path))
+        try:
+            refreshed = []
+            w.archive_panel.archive_changed.connect(lambda: refreshed.append(1))
+            w.archive_panel._on_inherit_done(True, "已继承：relic_001@atlas-v1", {})
+            assert "已继承" in w.archive_panel.lbl_note.text()
+            assert refreshed == [1]
+            assert w.archive_panel.btn_inherit.isEnabled() is True
+        finally:
+            w.close()
+
+    def test_failure_keeps_button_enabled(self, tmp_path, _qapp_session):
+        w = _win(_proj(tmp_path))
+        try:
+            w.archive_panel._on_inherit_done(False, "基准期没有图集记录", {})
+            assert "没有图集" in w.archive_panel.lbl_note.text()
+            assert w.archive_panel.btn_inherit.isEnabled() is True
+        finally:
+            w.close()

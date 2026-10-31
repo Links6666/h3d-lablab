@@ -108,9 +108,43 @@ def save_mesh(mesh, path: str) -> None:
              path, len(mesh.vertices), len(mesh.triangles))
 
 
+def make_mesh(vertices, triangles, normals=None):
+    """从数组构造网格（统一数据模型）。
+
+    为什么需要它：UV 布局里的 ``uv``/``faces`` 属于**展开后**的拓扑（接缝处
+    顶点被拆分，顶点数 ≥ 原始网格）。图集继承要用同一套拓扑重建几何，
+    直接读原始 PLY 会让面索引越界。由适配层提供构造函数，业务层就不必
+    import Open3D（分层纪律）。
+    """
+    import numpy as np
+
+    o3d = _o3d()
+    verts = np.asarray(vertices, dtype=np.float64).reshape(-1, 3)
+    tris = np.asarray(triangles, dtype=np.int32).reshape(-1, 3)
+    if not len(verts):
+        raise InputDataError("构造网格失败：顶点为空")
+    if not len(tris):
+        raise InputDataError("构造网格失败：三角面为空")
+    if int(tris.max()) >= len(verts):
+        raise InputDataError(
+            f"构造网格失败：面索引 {int(tris.max())} 越界（仅 {len(verts)} 顶点）")
+    mesh = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(verts),
+                                     o3d.utility.Vector3iVector(tris))
+    if normals is not None:
+        n = np.asarray(normals, dtype=np.float64).reshape(-1, 3)
+        if len(n) != len(verts):
+            raise InputDataError(
+                f"构造网格失败：法线数 {len(n)} 与顶点数 {len(verts)} 不符")
+        mesh.vertex_normals = o3d.utility.Vector3dVector(n)
+    else:
+        mesh.compute_vertex_normals()
+    return mesh
+
+
 __all__ = [
     "MESH_READ_EXT",
     "MESH_WRITE_EXT",
     "load_mesh",
     "save_mesh",
+    "make_mesh",
 ]
