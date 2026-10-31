@@ -18,7 +18,7 @@
   显著性用 M3C2 LoD95 + 最小图斑面积。
 - S1 写死 `single_camera 1`（多机位误合并）、相机模型写死 SIMPLE_RADIAL（换镜头失准）。
 - 质检判别力不足（`samples=4000`、`coverage_threshold=0.3` 实测 81.8% 形同虚设）。
-- 镂空与内侧缺覆盖 → 泊松留洞 + 22.3% 纹素靠反面填充，需补低机位/俯拍；稀疏特征偏弱（30 张只出
+- 镂空与内侧缺覆盖 → 泊松留洞 + 22.3% 纹素靠反面填充，需补低机位/俯拍；稀疏特征弱（30 张仅
   13,990 点、track 3.95）是采集问题 → 补侧向硬光/偏振。
 - `force_rerun` 是布尔整批，无法只重算某一件；窗口用例未覆盖「拉缩后再跑」/1366×768 /150% 缩放。
 
@@ -40,9 +40,9 @@
   个百分点 = 几何被搬错。`back_facing_filled`/`occlusion_rejected` 是「相机×纹素」事件数，去重看 `*_texels`。
 
 ## 报表口径（「数字能不能引用」，r16 起为硬约束）
-- **中误差三态**：`rmse_scope` = 实测判门 / 不判门（参考稀疏）/ 不判门（单位存疑）/ 无量纲。只在
-  `metric_units && rmse_reliable && units_plausible` 时参与 5 mm 门，判据 `rmse_reliable = mps*1000<=5.0`；
-  其余在 CSV/HTML/论文表**行内标注**（HTML 打 `†`）。
+- **中误差三态**：`rmse_scope` = 实测判门 / 不判门（参考稀疏）/ 不判门（单位存疑）/ 无量纲。
+  只在 `metric_units && rmse_reliable && units_plausible` 时参与 5 mm 门
+  （`rmse_reliable = mps*1000<=5.0`）；其余在 CSV/HTML/论文表**行内标注**（HTML 打 `†`）。
 - **`units_plausible`**：声称米制却算出 0.02~3.0 m 之外的对角线 → 自相矛盾（实测 6.086 m 的「中小型
   文物」）。不改数值、不翻 `metric_units`，只降级表述 + 退出毫米门。
 - **`metric_units = bool(task.raw_paths)` 是脆假设**：SfM 产物放进 00_raw 就变成「激光锚定」（r17 补
@@ -58,13 +58,13 @@
 ## 跨层契约
 - **终态五态**：done / fail / skipped(+`skip_kind`) / disabled / 键不存在=未执行。分母=件数×阶段数−
   未启用。全跳过 `done=0 skipped=N` 是**正确终态**，判据 `failed==0 and rc==0 and done+skipped>0`。
-- **件级终态必须收敛、RUNNING 绝不外泄**：可选阶段先 `begin_stage` 后判 disabled，`mark_disabled` 不动
-  任务级状态 → 停 RUNNING → 误判失败。修法：`begin_stage` 记 `_status_before` + `mark_disabled` 回退，
-  `_finalize_task_status()` 逆推（主流程与 worker 都调）。
+- **件级终态必须收敛、RUNNING 绝不外泄**：可选阶段先 `begin_stage` 后判 disabled，`mark_disabled` 曾不动
+  任务级状态 → 停在 RUNNING → 误判失败。修法：`begin_stage` 记 `_status_before` + `mark_disabled` 回退
+  + `_finalize_task_status()` 逆推。
 - **完成行 ≠ 进程结束**：CLI 打完「批量处理完成」还要写 3 个报表；GUI 必须读完 stdout 并 `wait()`。
   **QThread 覆盖即崩**：新建前查 `isRunning()` + 旧对象 `deleteLater()`；入口自判（`_busy()`+`_starting`）。
-- **配置必须「读改写」**：`from_root()` 留原文件作底稿只覆盖控件字段，无控件参数 `setdefault`；
-  `apply()` 不写的控件就是假控件。改界面自查：值进配置了吗？终态认全了吗？连点两次会怎样？
+- **配置必须「读改写」**：`from_root()` 留原文件只覆盖控件字段，无控件参数 `setdefault`；`apply()` 不写
+  的控件就是假控件。改界面自查：值进配置了吗？终态认全了吗？连点两次会怎样？
 - **产物路径的键是 `item_id`（00_raw 子目录名），不是项目名**（用项目名拼 → 示例项目全绿、真实项目空）。
 - **断点续跑跳过 ≠ 无产物**：`is_done()` 命中须 `restore_stage()` 恢复 outputs/metrics。
 - **同照片多件**：按「名+大小+SHA-1」比对，命中复制 `fused_dense.ply`+`capture_meta.json`（S1→0.2s），
@@ -99,78 +99,91 @@
   复用 vmap/uvs+贴图+掩膜+**首件 metrics**（漏了报 0 覆盖率）；导出不缓存；损坏改名 `.corrupt-<ts>`。
 
 ## GUI 工程
-- **读模型必须容错**：Open3D 0.19 的 OBJ/GLB 走 **ASSIMP**，路径按 ANSI(GBK) 传入 → **中文路径必抛
-  `UnicodeDecodeError`**（0xb1=「兵」）；PLY 走原生 reader 不受影响。统一走 `gui/meshload`（直读失败且
-  非 ASCII 时复制模型+mtl+贴图到 ASCII 临时目录重读，缓存，贴图按字节复制，失败返 None）。
+- **读模型必须容错**：Open3D 0.19 的 OBJ/GLB 走 ASSIMP，路径按 ANSI(GBK) 传入 → **中文路径必抛
+  `UnicodeDecodeError`**（0xb1=「兵」）；PLY 走原生 reader 不受影响。统一走 `gui/meshload`（非 ASCII
+  时复制模型+mtl+贴图到 ASCII 临时目录重读，缓存，贴图按字节复制，失败返 None）。
 - **Qt 槽里异常不外传**（windowed 版 stderr=None 全静默）：槽内关键路径必须 try/except + 可见日志。
   踩过：预览抛错 → 槽内后续全不执行 =「跑完了但界面空」。`QThread.run()` 同理。
 - **窗口跳变 = 布局最小尺寸随文字变**：`QLabel.minimumSizeHint()`=整段文字宽，`QProgressBar.setFormat`
   格式串**也计入 sizeHint**。可变文字用 `ElidedLabel`（最小宽 0 / tooltip / 中间省略）；进度条只写
   `%p%`；配置区进 `QScrollArea`；按 `availableGeometry()` 94%/92% 定型且最小尺寸封顶。
-- **PySide6 6.11：窗口无 windowHandle 时调 `QWidget.screen()` 破坏堆**（`0xc0000374`，全量测试第 188 例
-  无声 rc=127）→ 有 windowHandle 才问它，否则 `primaryScreen()`。诊断序：faulthandler 抓原生栈 → RSS
-  探针排 OOM → 组合二分；「单文件绿/两两绿/三文件一起崩」= 越界写在别处。
+- **PySide6 6.11：无 windowHandle 时调 `QWidget.screen()` 破坏堆**（`0xc0000374`，全量第 188 例无声
+  rc=127）→ 有 windowHandle 才问它，否则 `primaryScreen()`。诊断序：faulthandler 抓原生栈 → RSS 探针
+  排 OOM → 组合二分；「单文件绿/两两绿/三文件一起崩」= 越界写在别处。
 - **约束先确认后运行**：`_confirm_constraints()` 是 `_start_run_inner()` 第 0 步，取消=不建目录不写 yaml
   不起子进程；落 `runner.constraints`+`constraints_confirmed`；运行期输入区隐藏。
 - **交付格式 ⊂ M4 产出格式**：`publish.formats` 必须跟 `texture.export_formats` 同步（M6 只从 50_tex
   复制，请求 M4 没产的格式 → `formats_missing` 假告警）。
 - **阶段耗时双源**：运行中「▲ 开始 / √ 完成」计墙钟，结束用 manifest `elapsed_s` 覆盖；多件**求和**并与
   墙钟分开标注；`runner.py` 阶段事件**不能去重**（否则只记第 1 件）。
-- **进度分母是工作量不是种类**：`ProgressModel` 每件独立计分、整批平均、阶段按耗时加权（S1 .90/M4 .06）；
+- **进度分母是工作量不是种类**：`ProgressModel` 每件独立计分、整批平均、按耗时加权（S1 .90/M4 .06）；
   S1 跳过换 `W_SCAN` 归一；显示「第 k/N 件」。四层：子步骤+文件名 / n/N / 已运行 / 心跳(>30s)。
 - 预览候选 **PLY 优先**；>6 万面先体素聚类简化；**打开项目即 `_refresh_preview()`**。
 
 ## 档案层（B0–B1，r18）
 - **代号唯一权威是 `GLOSSARY.md`**：代码冻结 → 指南 S0/S1/S2 记 `A0/A1/A2`、指南 X2（异常检测）记 `X3`、
   指南里程碑 P0–P6 记 `B0–B6`（代码 `P1` 已是照片纹理、`S1` 已是 COLMAP、`X2` 已是色差）。
-- 布局 `<项目>/archive/{artifact.json, epochs/<id>.json, assets/<id>__v<N>.json}`；**包裹不改** `阶段成果/`，
-  `CanonicalAsset` 只存相对路径 + 哈希（换盘符/换机器不断）。
+- 布局 `<项目>/archive/{artifact.json, epochs/<id>.json, assets/<id>__v<N>.json, atlas/<ver>.json}`；
+  **包裹不改** `阶段成果/`，`CanonicalAsset` 只存相对路径 + 哈希（换盘符/换机器不断）。
 - **`looks_like_project()` 只认旧布局**（标记在项目根），新布局产物在 `阶段成果/` 下会被判否 → 档案迁移
   与 GUI 建档用 `looks_like_h3d_project()`（两者都认，仍排除 `output`/`report`）。
-- `content_key` 必须嵌套结构 + `sort_keys`，禁止拼字符串（`{a:1,b:23}` 与 `{a:12,b:3}` 会撞车，缓存返回
+- `content_key` 必须嵌套结构 + `sort_keys`，禁止拼字符串（`{a:1,b:23}` 与 `{a:12,b:3}` 撞车，缓存返回
   错误产物且不报错）；`KEY_SCHEMA` 进 payload 防换算法后新旧键混用。
 - 基准期：首个时相自动为基准期；显式改换允许但**必须 WARNING**（图集/尺度要重定）。
 - **只读靠代码强制**：`mount()` 返回句柄，`open(mode)` 含 `w/a/x/+` 抛 `ReadOnlyViolation`；相对路径解析
   锁在项目根内（`../../x` 要报错）。
-- **迁移的 `route` 只是布局推断**（`00_raw` 有 .ply 就是 A），不是来源验证 —— 1.1.12 就发生过 SfM 冒充
+- **迁移的 `route` 只是布局推断**（`00_raw` 有 .ply 就是 A），不是来源验证——1.1.12 就发生过 SfM 冒充
   激光件。B3 前置校验须补真实核验（复用 `dual_source_duplicate`/`laser_unverified`）。
 - runner **只在已建档项目**登记产物（不自动建 `archive/`）；全跳过时 task=SKIPPED 故不重复登记。
-- **建档入口在 GUI「打开项目」**（`archive/workspace.ensure_archive`，四态 created/existing/skipped/
-  failed），并在 `_start_run_inner` 的 `_stage_inputs()` **之后**再补一次（**那一步才把数据复制进
-  00_raw/00_photo**，向导能建出「只有 config.yaml 没数据」的项目）。`read_status()` 只读刷新，绝不建档。
-- **空时相必须允许**（`migrate(allow_no_asset=True)`，CLI 默认仍拒绝）：`_register_archive`
-  要求 `baseline()` 非空，新建项目首跑前若无时相 → 登记永远不发生，**跑一百次也补不上**。
-- `migrate._first_item` 必须探 `00_photo`：**纯照片项目根里没有 00_raw**，漏了就判「没有文物
-  目录」，路线 B 项目永远建不了档。
-- **续跑判据是「输入内容指纹」不只是状态**（`runner/fingerprint.py` → manifest `input_key`）：旧判据
-  「done + 产物在」会让「换照片/改参数」静默跳过；键 = 外部输入摘要 + 上游阶段键（逐级累积）+ 参数
-  快照，**配置用减法**（只剔 `project`/`runner` 两个执行控制段，其余全参与——白名单式漏一段就是「改
-  了参数不重跑」）。旧记录无 key → 按旧规则跳过（存量 30 件重算要 40 分钟）。
-- **并行模式 `workers>1` 不做续跑判定**（worker 不共享 manifest），已补 WARNING 未修行为。日志里只有
-  done/fail/running 打 `↻ 重跑`，disabled/skipped 走 debug。
-- 测试坑：`pytest --basetemp=<项目内路径>` 会让 36 项 runner/texture 测试互相污染失败（单文件带 basetemp
-  是绿的）；用默认 `%TEMP%`，**exit=1 多为沙箱 safe-delete 拦截**，summary 行被
-  `SAFE_DELETE_BULK_CONFIRM_REQUIRED` 盖掉 → 拿失败清单唯一稳手段是 `--junitxml`。
+- **建档入口在 GUI「打开项目」**（`ensure_archive` 四态），并在 `_start_run_inner` 的 `_stage_inputs()`
+  **之后**再补一次（**那一步才把数据复制进 00_raw/00_photo**）。`read_status()` 只读刷新，绝不建档。
+- **空时相必须允许**（`migrate(allow_no_asset=True)`，CLI 默认仍拒绝）：`_register_archive` 要求
+  `baseline()` 非空，新建项目首跑前没时相 → 登记永远不发生，**跑一百次也补不上**。
+- `migrate._first_item` 必须探 `00_photo`：**纯照片项目根里没有 00_raw**，漏了就判「没有文物目录」。
+- **续跑判据是「输入内容指纹」不只是状态**（`runner/fingerprint.py` → manifest `input_key`）：键 = 外部
+  输入摘要 + 上游阶段键（逐级累积）+ 参数快照，**配置用减法**（只剔 `project`/`runner`，其余全参与——
+  白名单式漏一段就是「改了参数不重跑」）。旧记录无 key → 按旧规则跳过（存量 30 件重算 40 分钟）。
+- **并行 `workers>1` 不做续跑判定**（worker 不共享 manifest），已补 WARNING 未修行为。日志里只有
+  done/fail/running 打 `↻ 重跑`。
+- 测试坑：`pytest --basetemp=<项目内路径>` 会让 36 项 runner/texture 测试互相污染；用默认 `%TEMP%`，
+  **exit=1 多为沙箱 safe-delete 拦截**，拿失败清单唯一稳手段是 `--junitxml`。
 
 ## 图集继承（B1，r18）
 - **继承不重展开 UV**：`project_photos_to_texture` 吃外部 uv/faces → 用基准 mesh/uv/faces + 复测相机/
-  照片调同一采样器。前提是基准期把 UV 布局**落盘**（M4 现在无条件写 `50_tex/<item>/<item>_uv.npz`）。
+  照片调同一采样器。前提是基准期把 UV 布局**落盘**（M4 无条件写 `50_tex/<item>/<item>_uv.npz`）。
 - **uv/faces 属「展开后」拓扑**（xatlas 接缝拆点，顶点数 ≥ 原始 PLY）→ npz 必须连 `verts/normals` 一起存，
-  否则继承端拿 PLY 承接必越界（实测 index 880 vs size 762）。旧布局回退 PLY 时必须校验面索引范围
-  （换模型可能不越界 → 错得更隐蔽）。io 层加了 `make_mesh()`。
+  否则继承端拿 PLY 承接必越界（实测 index 880 vs size 762）。旧布局回退 PLY 时须校验面索引范围
+  （换模型可能不越界 → 错得更隐蔽）。io 层有 `make_mesh()`。
 - **相机变换**：`C'=s·R·C+t`、`R'=R_cam·Rᵀ/s`。`R'` 含 1/s **不是正交阵**（投影只看 x/z、y/z 比值；
   去掉 1/s = 视野缩放 1/s 倍）。判据用**投影恒等式**，不用覆盖率（球各向同性：反向变换 in_frame
-  0.799→0.717，纹素中位差个位数→30+）。
-- **图集版本冻结**：`archive/atlas/<ver>.json`，同版本同 `uv_digest` 幂等、不同则抛 `AtlasFrozen`。
-  `uv_digest` 先降 float32 再序列化（否则 npz 往返判成「图集变了」，版本号一路涨）。跨项目引用写
-  **限定名** `relic_001@atlas-v1`（`atlas-v1` 是项目内命名空间）。
+  0.799→0.717，而纹素中位差个位数→30+）。
+- **版本冻结**：同版本同 `uv_digest` 幂等、不同则 `AtlasFrozen`。`uv_digest` 先降 float32 再序列化
+  （否则 npz 往返判成「图集变了」，版本号一路涨）。跨项目引用写**限定名** `relic_001@atlas-v1`。
 - **五条失败必须显式**（不烘图）：无图集记录 / UV 布局缺失损坏 / 布局与网格拓扑不符 / 自动配准被质量
-  闸门拒 / 复测项目未建档。实测存量项目（1.1.12 迁移档）走第一条 —— 跑通真机继承前置是让基准项目重跑
-  一次 M4（≈90 s）产生图集记录。
-- 真机构建图的坑：GUI 回调里「先写结论再 emit 刷新」会被 `apply()` 覆盖 → **先 emit 再落结论**。
-  测试素材别用纯噪声照片（2 px 错位就跳几百灰度，轻微抖动与完全弄反无法区分）→ 用渐变+棋盘。
-- **未决**：`atlas_stale` 自动标记（基准图集换版后标记引用旧版资产）；真实双期位姿误差未验；2048²/
-  8 万面耗时未测。
+  闸门拒 / 复测项目未建档。
+- GUI 回调「先写结论再 emit 刷新」会被 `apply()` 覆盖 → **先 emit 再落结论**。测试素材别用纯噪声照片
+  （2 px 错位就跳几百灰度，抖动与弄反无法区分）→ 用渐变+棋盘。
+- **未决**：`atlas_stale` 自动标记；存量假引用残留需一次修复；真实双期位姿误差；2048²/8 万面耗时。
+
+### 图集登记（B1 切片 7，真机 2026-10-31 补）
+- **「机制写好了但没人调用」是 B1 最大的坑**：`AtlasRegistry.register` 在生产代码里
+  零调用，冻结判定与继承读取都写了，**没人写 `archive/atlas/atlas-vN.json`**。于是
+  重跑 M4 也补不上（落 `uv.npz` 与登记是两件事），inherit 永远报「没有图集记录」。
+  查这类问题先 grep 写入口：`grep -rn "\.register(" src/`。
+- **编造引用三处同构**（r16 手写白名单家族）：runner `uv_atlas_ref="atlas-v1"` 写死、
+  `migrate._INITIAL_ATLAS` 写死、`note` 塞件号。判据：ref 必须在档案里有实体。已改：
+  ref 取 `register_layout()` 返回值，迁移写空。
+- `register_layout(arch, uv_path, item_id=…, size_px=…)`：幂等（digest 相同返回原
+  记录）、变了自动建 `atlas-vN+1` + WARNING（旧版不覆盖）、缺/坏文件返回 `None`
+  不建目录。**图集是件级**：`AtlasRecord.item_id` 决定幂等比对范围，否则多件项目
+  第二件会被判成「同一件换版」，第一件的引用被悄悄改写。
+- 登记位在 **runner `_register_archive`（已 staticmethod）**，**先图集后资产**；
+  `size_px` 读 `task.results["M4"].metrics["atlas_size_px"]`。
+- 只重跑 M4：删 `run_manifest.json` 里 `M4/M5/M6` 三条记录（先备份）。**S1 无
+  `input_key` → `RESUME_LEGACY` 跳过**，不会触发 COLMAP 重算。
+- **判据必须带反向对照**：真机继承 vs 基准图集，岛内逐 texel 中位 |Δ| 正确 6.33 /
+  上下翻转 29.0 / 左右翻转 31.7 / 旋转 180° 31.7 / 平移 16 px 10.0 / 纯灰 62.7；
+  ±4 px 平移搜索无更优偏移 = 无系统错位。只有「错的时候明显变大」才算有分辨力。
 
 ## 双场景 / 尺度
 - ①（带扫描件）≠②（纯照片）：S1/P1/X1/X2 在①失败只降级，在② S1 是唯一几何源、失败即整件失败。判据
