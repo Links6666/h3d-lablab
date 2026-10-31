@@ -36,8 +36,8 @@
   真变小。**自报 rmse 不可信**（1.1.12 实测 `rmse_after=0.0968` 而几何搬错 50 倍：算的是变换**前**
   距离 + 只统计 p90×2 内对应 + 仅采 3000 点）。
 - **尺度初始化禁用 min/max 包围盒**（COLMAP 飞点把 6.19 撑到 47.83）；用 **99% 分位**。
-- **「合格」的对齐也可能不如「不做」**：先问 `already_aligned`（中位距离 <1% 对角线即跳过）。
-  被拒 → **回退恒等**，且**不得**从失败对齐里导出控制点。
+- **「合格」的对齐也可能不如「不做」**：先问 `already_aligned`（中位距离 <1% 对角线跳过）。
+  被拒 → **回退恒等**，不得从失败对齐导出控制点。
 - **ICP 单初值在轴对称物上解出翻转解**（30°→166.58°，fitness 0.336 还越过 0.2 失败门）→ 多初值
   （RANSAC+绕两主轴 180°）取 fitness 最高；`fitness<0.55` 落 `low_confidence`（不判失败但必须
   可见）。修复后 7/30/90/120/180° ≤0.02°。
@@ -51,7 +51,7 @@
   `metric_units && rmse_reliable && units_plausible` 时参与 5 mm 门（`rmse_reliable=mps*1000<=5`），
   其余在 CSV/HTML/论文表**行内标注**（HTML 打 `†`）。
 - **`units_plausible`**：声称米制却算出 0.02~3.0 m 之外的对角线 → 自相矛盾。不改数值、不翻
-  `metric_units`，只降级表述 + 退出毫米门。
+  `metric_units`，只降级表述+退出毫米门。
 - **`metric_units=bool(task.raw_paths)` 是脆假设**：SfM 产物放进 00_raw 就成「激光锚定」（r17 补
   `laser_unverified`）。**自证闭环**：`dense_novel_ratio<0.15` 且有 00_raw →
   `dual_source_duplicate=True`、`dense_source=raw_looks_like_sfm`，配准/精度/覆盖率三项都不可引用。
@@ -71,13 +71,13 @@
 - **完成行 ≠ 进程结束**：CLI 打完「批量处理完成」还要写 3 个报表；GUI 须读完 stdout 并 `wait()`。
   **QThread 覆盖即崩**：新建前查 `isRunning()`+`deleteLater()`。
 - **配置必须「读改写」**：`from_root()` 留原文件作底稿只覆盖控件字段，无控件参数 `setdefault`；
-  `apply()` 不写的控件就是假控件。改界面自查：值进配置了吗？终态认全了吗？连点两次会怎样？
+  `apply()` 不写的控件就是假控件。自查：值进配置了吗？终态认全了吗？连点两次会怎样？
 - **产物路径的键是 `item_id`（00_raw 子目录名）不是项目名**（用项目名拼 → 示例项目全绿、真实空）。
 - **断点续跑跳过 ≠ 无产物**：`is_done()` 命中须 `restore_stage()` 恢复 outputs/metrics。
 - **续跑判据是输入指纹不只是状态**（`runner/fingerprint.py`→manifest `input_key`）=外部输入摘要+
   上游阶段键+参数快照，**配置用减法**（只剔 `project`/`runner`；白名单漏一段就是「改参数不重跑」）。
   **并行 `workers>1` 不做续跑判定**（已补 WARNING 未修）。
-- **同照片多件**按「名+大小+SHA-1」比对，命中复制 `fused_dense.ply`+`capture_meta.json`（S1→0.2s）；
+- **同照片多件**按「名+大小+SHA-1」比对，命中复制 `fused_dense.ply`+`capture_meta.json`（0.2s）；
   开关 `sfm_solve.reuse_identical_photos`。
 - **禁静默降级/`except: pass`**：兜底须同时写 metrics+WARNING（novel 曾被吞数周）。配置读
   `utf-8-sig`（→`[E001]`）；`validate` 0 件 rc=1；子进程走 `proc.run_external`；派生状态原子写；
@@ -103,12 +103,12 @@
   metallic 0、roughness 1、doubleSided；trimesh 要**逐顶点** UV，Open3D 逐角）。带纹理 OBJ 慢
   25 倍 → 手写 `_write_obj_textured`（vt 逐顶点、**V 不翻转**）。本机无 EGL 离屏。
 - **M4 图集复用**两级键（UV 级=几何指纹；纹理级=+法线+位姿+照片 SHA-1+参数+`CACHE_VERSION`）；
-  命中复用 vmap/uvs+贴图+掩膜+**首件 metrics**。
+  命中复用 vmap/uvs+贴图+掩膜+**首件 metrics**（漏它会报 0 覆盖率）。
 
 ## GUI 工程
 - **读模型必须容错**：Open3D 0.19 的 OBJ/GLB 走 ASSIMP，路径按 ANSI(GBK) → **中文路径必抛
-  `UnicodeDecodeError`**；PLY 走原生 reader 无碍。统一走 `gui/meshload`（非 ASCII 复制模型+mtl+
-  贴图到临时目录重读，缓存，贴图按字节复制，失败返 None）。
+  `UnicodeDecodeError`**；PLY 无碍。统一走 `gui/meshload`（非 ASCII 复制到临时目录重读，缓存，
+  失败返 None）。
 - **Qt 槽里异常不外传**（windowed 版 stderr=None 全静默）→ 槽内关键路径必须 try/except+可见日志。
   踩过：预览抛错 → 槽内后续全不执行 =「跑完了但界面空」。`QThread.run()` 同理。
 - **窗口跳变 = 最小尺寸随文字变**：`QLabel.minimumSizeHint()`=整段文字宽，`QProgressBar.setFormat`
@@ -123,45 +123,12 @@
 - **阶段耗时双源**：运行中「▲开始/√完成」计墙钟，结束用 manifest `elapsed_s` 覆盖；多件**求和**
   并与墙钟分开标注；`runner.py` 阶段事件**不能去重**。
 - **进度分母是工作量不是种类**：每件独立计分、整批平均、按耗时加权（S1 .90/M4 .06）；S1 跳过换
-  `W_SCAN` 归一；显示「第 k/N 件」。预览 **PLY 优先**；>6 万面先体素简化；打开项目即刷新。
+  `W_SCAN` 归一。预览 **PLY 优先**；>6 万面先体素简化；打开项目即刷新。
 
-## 档案层与图集（B0–B1，r18）
-- 布局 `archive/{artifact.json, epochs/<id>.json, assets/<id>__v<N>.json, atlas/<ver>.json}`；
-  **包裹不改** `阶段成果/`；`CanonicalAsset` 只存相对路径+哈希（换盘符不断）。**只读靠代码强制**
-  （`open(mode)` 含 `w/a/x/+` 抛 `ReadOnlyViolation`，相对路径锁在项目根内）。
-- **`looks_like_project()` 只认旧布局**（新布局在 `阶段成果/` 下判否）→ 建档/迁移用
-  `looks_like_h3d_project()`（仍排除 `output`/`report`）。
-- `content_key` 必须嵌套+`sort_keys`，禁止拼字符串（`{a:1,b:23}` 与 `{a:12,b:3}` 撞车 → 缓存返回
-  错误产物且不报错）；`KEY_SCHEMA` 进 payload。基准期首个时相自动，显式改换必须 WARNING。
-- **迁移的 `route` 只是布局推断**（00_raw 有 .ply 就是 A），不是来源验证（1.1.12 有 SfM 冒充
-  激光件）；B3 须补真实核验。runner **只在已建档项目**登记产物。
-- **建档入口在 GUI「打开项目」**（`ensure_archive` 四态），并在 `_stage_inputs()` **之后**再补一次
-  （那步才把数据复制进 00_raw）；`read_status()` 只读刷新绝不建档。
-- **空时相必须允许**（`migrate(allow_no_asset=True)`，CLI 默认仍拒）：`_register_archive` 要求
-  `baseline()` 非空 → 新建项目首跑前登记永远不发生。`migrate._first_item` 必须探 `00_photo`。
-- **「机制写好了但没人调用」**是 B1 最大坑（`AtlasRegistry.register` 曾零调用 → inherit 永远报
-  「没有图集记录」）。查这类先 `grep -rn "\.register(" src/`。
-- `register_layout(arch, uv_path, item_id=…)`：幂等、变了自动 `atlas-vN+1`+WARNING、坏文件返
-  `None`。**图集是件级**（`item_id` 决定幂等范围，否则多件项目第二件判成换版、第一件引用被改写）；
-  登记位在 runner `_register_archive`，**先图集后资产**，`size_px` 取 `results["M4"].metrics`。
-- **引用必须来自登记者，不能编造**（r16 同类）：曾写死 `uv_atlas_ref="atlas-v1"`。改写入端只对
-  新建档生效 → 存量靠 `h3d archive refs` 体检（五态 ok/empty/external/unverified/dangling，判据是
-  **档案里的实体**）：`dangling` 置空+原值写 `params.ref_repair`，`unverified`（记录晚于资产）只
-  报不修；退出码当门且要重算**盘上现在**的结论。**修复不能走 `register()`**（命中缓存返回旧记录）
-  → 走 `Archive.rewrite_asset()`，只许改 `uv_atlas_ref`/`params`。
-- 只重跑 M4：删 manifest 里 `M4/M5/M6` 三条（先备份）；**S1 无 `input_key`→`RESUME_LEGACY` 跳过**。
-- **继承不重展开 UV**：用基准 mesh/uv/faces + 复测相机调同一采样器；前提 M4 无条件写
-  `50_tex/<item>/<item>_uv.npz`。**uv/faces 属「展开后」拓扑**（xatlas 拆点，顶点数 ≥ 原始 PLY）
-  → npz 必须连 `verts/normals` 存，否则越界（index 880 vs size 762）。
-- **相机变换** `C'=s·R·C+t`、`R'=R_cam·Rᵀ/s`；`R'` 含 1/s **不是正交阵**（去掉=视野缩放 1/s）。
-  判据用**投影恒等式**，不用覆盖率（球各向同性：反向变换 in_frame 0.799→0.717 而纹素差个位数→30+）。
-- **版本冻结**：同版同 `uv_digest` 幂等、不同则 `AtlasFrozen`；`uv_digest` 先降 float32 再序列化
-  （否则 npz 往返判成「图集变了」）。跨项目引用写**限定名** `relic_001@atlas-v1`。
-- **五条失败必须显式**（不烘图）：无图集记录/布局缺失损坏/布局与拓扑不符/自动配准被闸门拒/未建档。
-  GUI 回调「先写结论再 emit」会被 `apply()` 覆盖 → **先 emit 再落结论**；测试素材别用纯噪声照片
-  （2 px 错位就跳几百灰度）→ 渐变+棋盘。
-- **判据要带反向对照**：岛内逐 texel 中位|Δ| 正确 6.33 / 上下翻转 29.0 / 左右 31.7 / 旋转 180°
-  31.7 / 平移 16 px 10.0 / 纯灰 62.7 → 只有「错时明显变大」才算有分辨力。
+## 拆分出去的细节
+- **B1 档案层与图集**（布局 / 只读强制 / 空时相 / 图集件级幂等 / 引用体检 / 继承不重展开 UV /
+  相机变换 / 版本冻结）与 **S1 双场景、COLMAP 稠密**的具体判据 → `.workbuddy/memory/MEMORY_S1_B1.md`。
+  动那两块之前先读它。
 
 ## 单期异常检测（B2/X3，r19）
 - **背景必须是局部中位数**（`cv2.medianBlur`，8 位量化 O(1)/纹素，核 201 仅 99 ms；**上限 255**）。
@@ -177,10 +144,9 @@
 - **注入方法会骗人**：`255-pixel` 在中间调 ΔE 只有 14 → 用「L 推离中间调 + a/b 取反」并打印 ΔE。
 - 真机注入（ΔE=120）：24/40 texel 全覆盖、增量 IoU ≥0.87；80 texel 2/3。**增量 IoU**（扣掉既有
   报警）才是边界精度。
-- **80 texel 漏检是 σ 不是信号**（回路 `diag_x3_bigpatch.py`：三处残差都 97~113，σ_L
-  30.3/53.2/15.7 → z 3.21/1.82/**6.37**，只最后那处中）。低信噪比不是估计器缺陷，
-  别用「按面积累加证据」硬拉（σ=53 的根源就是材质交界，一拉就炸假阳性）。改为报下限：
-  `anomaly_sigma_median`（最粗尺度岛内 σ_L 中位，**只取 L 通道**，取错通道恒为地板 2.0）。
+- **80 texel 漏检是 σ 不是信号**（`scripts/verify_x3_bigpatch.py`：三处残差都 97~113，σ_L
+  30.3/53.2/15.7 → z 3.21/1.82/6.37）。低信噪比不是估计器缺陷，别用「按面积累加证据」硬拉
+  （σ=53 的根源就是材质交界）。改为报下限 `anomaly_sigma_median`（**只取 L 通道**，取错恒为地板 2.0）。
 - **图集是 3690 个 UV 岛拼的马赛克**（中位 69 texel、离边界中位 5、最大 75.3）→ 201 窗口能
   整窗落在同一岛内的纹素 **0.0%**：局部空间背景处处不成立。**按岛归一化**（逐岛中位归零 + σ 取本岛离散度 `q75(|L−岛中位|)/1.1503`）
   已实装：真机 **2.18%/35 处 → 0.24%/7 处**、3.5 s→2.9 s、注入仍 9/11。**先归零再填充**
@@ -190,34 +156,19 @@
   但 80 texel 注入覆盖 0.92→0；按岛自适应 `clip(岛内 z 的 p99, k, 6)` 图斑 7→2 但召回
   9/11→4/11（自我指涉：缺陷就是那条尾巴）。自适应已实现、**默认关**，报表渲染 k 区间。
   要真提升得用与 z 无关的第二类证据（形状/连续性/跨期 X4）。
-- 合成 12 项：6~120 texel 边界 IoU 全 1.00；纯净渐变/σ=1.5 噪声 0.000%；竖条纹贴横条纹关纹理
-  不命中、开则 IoU≥0.7。
-- **已接进编排层**（切片 5）：阶段 `X3` 在 `M4→P1→`**`X3`**`→M5`，顺序只在
-  `_reorder_ext_stages` 一处钉（报表在 M5 里生成，排后面指标永远进不了报表）。默认开
-  （`runner.x3_enabled=True`）但归 `OPTIONAL_STAGES`（坏图只降级）；**不进质量门**——「病害多」
-  ≠「建模失败」。指标三个出口都要同步：`manifest_metrics` → `accuracy.csv` →
-  HTML/论文表，少一个就是 r16 那个坑。结论绑 `anomaly_atlas_digest`（图集内容摘要前 12 位，
-  因为 `atlas-vN` 只有档案继承时才有）。
-
-## 双场景 / 尺度
-- ①（带扫描件）≠②（纯照片）：S1/P1/X1/X2/X3 在①失败只降级，在② S1 是唯一几何源、失败即整件
-  失败；判据 `stage in OPTIONAL_STAGES and bool(task.raw_paths)`。双源几何只 `novel≥0.15` 并入
-  （novel=0 照合 → 面数+70%、rmse+34%、覆盖−60%）。
-- **无度量基准不得缩放**：`_has_metric_anchor()=bool(task.raw_paths)`，无锚点 factor=1.0 +
-  `reason=uncalibrated_sfm_units`；**SfM 的 PLY 塞进 00_raw 会被当锚点 → 假毫米数**。
-- 照片目录须同源：优先 `task.root/00_photo` 再回退上级（多写一层 `dirname` → 色卡不生效）。
-
-## COLMAP / 稠密
-1. mapper 多子重建，`sparse/0` 未必最大（取图像最多者，图像数读 `images.bin` 头 8B uint64）；
-   `--output_path` 有 ExistsDir 校验，目录须先建。
-2. 可复现靠 `num_threads 1`；两遍稠密序号各 1..N，判据 grep=2N，进度须识别遍数。
-3. `tvec`≠相机中心：`C=-R_co^T@tvec`、`R=-R_co`（前 −Z）；错用致 `projected_cameras=0`、纹理全空。
-4. `patch_match_stereo` 跳过已有 photometric.bin（位姿变→点云错乱但 rc=0）；全量重建须清 `<ws>/dense`。
-5. 同根两批互毁（`is_open` 失败、GPU 争抢）；`core/lockfile.py` 接管残留锁。
-6. 超时覆盖两遍（30 张 3.84MP 实测 6815 s，`views×MP×45×passes` 下限 1800）；续算靠 `_pose_fp`；
-   **超时也必须落盘**（否则残留上轮日志 → 误写「需 CUDA」）；取消须杀进程树。
-7. `dense_max_image_size` 默认 1600；关 geom_consistency 后 fusion 须 `--input_type photometric`。
+- 合成 12 项：6~120 texel 边界 IoU 全 1.00；纯净/σ=1.5 噪声 0.000%；条纹旋转关纹理不命中、开 ≥0.7。
+- **已接进编排层**：阶段 `X3` 在 `M4→P1→X3→M5`，顺序只在 `_reorder_ext_stages` 一处钉（报表在
+  M5 里生成，排后面指标永远进不了报表）。默认开（`runner.x3_enabled=True`）但归
+  `OPTIONAL_STAGES`（坏图只降级）；**不进质量门**（「病害多」≠「建模失败」）。指标三出口同步：
+  `manifest_metrics` → `accuracy.csv` → HTML/论文表，少一个就是 r16 那个坑。结论绑
+  `anomaly_atlas_digest`（`atlas-vN` 只有档案继承时才有）。
+- **GUI「异常筛查」页（切片 12）**：读模型 `h3d/anomaly/summary.py`（无 Qt，三态
+  ok/missing/corrupt）+ 面板薄装配。`missing` 必须印「未筛查」**绝不说成 0 处**。并排
+  「原图｜热力图」（热力图说哪里、原图说是什么）；裁剪边距按 `max(w,h)` 给（长条裂隙
+  否则被裁成横线）。**验收看截图不看测试**：坐标列默认 100 px 会折三行、占比两位小数
+  把 7 处压成同一格——都是测试全绿而截图不可读。已知：**同一岛内彩绘边界也会被报**
+  （局部中位数把深褐当背景），单期分不出「掉彩」与「图案边缘」。
 
 ## 测试坑
-- `--basetemp=<项目内路径>` 会让 36 项 runner/texture 测试互相污染 → 用默认 `%TEMP%`；**exit=1
-  多为沙箱 safe-delete 拦截**，拿失败清单唯一稳手段是 `--junitxml`。全量 1103 项 ≈2.3 min。
+- `--basetemp=<项目内路径>` 会让 runner/texture 测试互相污染 → 用默认 `%TEMP%`；**exit=1 多为
+  沙箱 safe-delete 拦截**，拿失败清单唯一稳手段是 `--junitxml`。全量 1169 项 ≈2.2 min。

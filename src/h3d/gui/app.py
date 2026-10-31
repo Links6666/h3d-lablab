@@ -78,6 +78,7 @@ class MainWindow(QMainWindow):
         # 打开项目 = 建档（幂等）。放在布局迁移之后：迁移会改目录形态，
         # 先迁再建档才能判断出正确的项目根。
         self._ensure_archive()
+        self._refresh_anomaly()
         self._fit_to_screen()
         # 打开已有项目时立刻显示上次的成果（旧实现只在运行结束后才载入，
         # 打开一个跑完的项目预览永远空白）。
@@ -160,6 +161,31 @@ class MainWindow(QMainWindow):
             self.archive_panel.apply(read_status(root))
         except Exception as exc:  # noqa: BLE001 - 展示性功能
             self._log(f"[WARNING] 档案页刷新失败：{exc}")
+
+    def _refresh_anomaly(self) -> None:
+        """只读刷新「异常筛查」页（打开项目 / 跑完一批后调用）。
+
+        失败只记日志：这是展示性功能，不能让主界面因为一张坏 PNG 停摆。
+        件号为空时取**第一件有产物的**——多件项目里用户还没选件时，
+        显示「一件都没有」是错的。
+        """
+        root = getattr(self.cfg, "root_dir", "") or ""
+        panel = getattr(self, "anomaly_panel", None)
+        if panel is None or not root:
+            return
+        try:
+            from h3d.anomaly.summary import list_screened_items
+            from h3d.core import paths as _paths
+            from h3d.gui.anomaly_view import load_panel_summary
+
+            stage = _paths.stage_root(root)
+            item = getattr(self.cfg, "item_id", "") or ""
+            if not item:
+                found = list_screened_items(stage)
+                item = found[0] if found else ""
+            panel.apply(load_panel_summary(stage, item))
+        except Exception as exc:  # noqa: BLE001 - 展示性功能
+            self._log(f"[WARNING] 异常筛查页刷新失败：{exc}")
 
     # ------------------------------------------------------------ 窗口尺寸
     def _fit_to_screen(self):
@@ -419,6 +445,12 @@ class MainWindow(QMainWindow):
         # 继承出新版本后刷新档案页（只读），让用户立刻看到版本数变化
         self.archive_panel.archive_changed.connect(self._refresh_archive)
         tabs.addTab(self.archive_panel, "文物档案")
+        # 异常筛查页（B2 切片 12）：X3 的结论在这里才「看得见位置」——
+        # 报表给数字、regions.csv 给坐标，但要看「第 3 处到底在哪」得有图。
+        from h3d.gui.anomaly_view import AnomalyPanel
+
+        self.anomaly_panel = AnomalyPanel()
+        tabs.addTab(self.anomaly_panel, "异常筛查")
         self.tabs = tabs
         return tabs
 
@@ -1218,6 +1250,7 @@ class MainWindow(QMainWindow):
         # 跑完刷新档案页的版本数（只读，不建档）。放在这里是因为登记发生在
         # runner 里，界面只有等到结束才知道有没有新版本。
         self._refresh_archive()
+        self._refresh_anomaly()
         # 强制重算是一次性意图：跑完立刻把勾选与 yaml 里的标记清零。
         # 不清的话，用户下次打开项目点一次生成又会重跑全链（而且要 30 分钟）。
         if getattr(self.cfg, "force_rerun", False):
