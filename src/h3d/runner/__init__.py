@@ -567,6 +567,11 @@ def _stage_anomaly_qc(task: Task, cfg) -> StageResult:
         "anomaly_area_units": m.get("area_units") or "texel_ratio",
         "anomaly_atlas": os.path.relpath(atlas, task.root).replace(os.sep, "/"),
         "anomaly_atlas_digest": digest,
+        # 可检下限的可读形式：本件在最粗尺度上的纹理尺度 σ_L（Lab 单位）。
+        # 同一个 ΔE，σ_L=15 是 6σ 异常，σ_L=53 只有 2σ —— 报它才能让「没检出」
+        # 与「看不出来」分开。
+        "anomaly_sigma_median": (None if m.get("sigma_median") is None
+                                 else round(float(m["sigma_median"]), 3)),
         "island_ratio": round(float(m.get("island_ratio") or 0.0), 4),
     }
     outputs = [os.path.join(out_dir, n) for n in
@@ -704,6 +709,7 @@ def _stage_quality(task: Task, cfg) -> StageResult:
         metrics["anomaly_area_units"] = x3.get("anomaly_area_units")
         metrics["anomaly_atlas"] = x3.get("anomaly_atlas")
         metrics["anomaly_atlas_digest"] = x3.get("anomaly_atlas_digest")
+        metrics["anomaly_sigma_median"] = x3.get("anomaly_sigma_median")
 
     # 先落盘报告（失败也有据可查），再判定
     qc_dir = os.path.join(task.root, "60_qc", task.item_id)
@@ -777,6 +783,7 @@ def _stage_quality(task: Task, cfg) -> StageResult:
         "anomaly_area_units": metrics.get("anomaly_area_units"),
         "anomaly_atlas": metrics.get("anomaly_atlas"),
         "anomaly_atlas_digest": metrics.get("anomaly_atlas_digest"),
+        "anomaly_sigma_median": metrics.get("anomaly_sigma_median"),
     }
     return StageResult("M5", TaskStatus.DONE, reports, manifest_metrics)
 

@@ -111,6 +111,8 @@ class TestStageContract:
         for key in ("anomaly_ratio", "anomaly_regions", "anomaly_k"):
             assert key in res.metrics, key
         assert res.metrics["anomaly_area_units"] == "texel_ratio"
+        # 可检下限的可读形式：本件的纹理尺度 σ_L（Lab 单位）
+        assert res.metrics["anomaly_sigma_median"] > 0
 
     def test_broken_atlas_degrades_instead_of_failing_the_item(self, tmp_path):
         """图集是坏 PNG → 仍然 SKIPPED（不抛异常）。
@@ -294,6 +296,7 @@ def _m5_project(tmp_path) -> object:
         "anomaly_area_units": "texel_ratio",
         "anomaly_atlas": "50_tex/r1/r1_L1.0_diffuse.png",
         "anomaly_atlas_digest": "0123456789ab",
+        "anomaly_sigma_median": 30.3,
     })
     return task, cfg
 
@@ -318,6 +321,8 @@ class TestMetricsReachTheReport:
         # 结论要能对上是「基于哪一版图集」
         assert m5["anomaly_atlas"].endswith("_L1.0_diffuse.png")
         assert m5["anomaly_atlas_digest"] == "0123456789ab"
+        # 「可检下限」必须跟着走：没有它，漏检只能被读成「没有病害」
+        assert m5["anomaly_sigma_median"] == pytest.approx(30.3)
 
     def test_anomaly_does_not_touch_the_quality_gate(self, tmp_path):
         """异常面积是参考信息，**不得**参与达标判定。
@@ -352,7 +357,8 @@ class TestMetricsReachTheReport:
                  anomaly_regions=35, anomaly_area_units="texel_ratio",
                  anomaly_atlas_digest="0123456789ab")
         m.record("r1/M5", "done", [], 1.0, coverage=0.9, rmse_mm=2.0,
-                 mps_m=0.001, anomaly_ratio=0.0218, anomaly_regions=35)
+                 mps_m=0.001, anomaly_ratio=0.0218, anomaly_regions=35,
+                 anomaly_sigma_median=30.3)
         m.save(cfg.runner.manifest)
 
         out = os.path.join(str(tmp_path), "report.html")
@@ -365,6 +371,8 @@ class TestMetricsReachTheReport:
         assert "2.18%" in html, "异常面积没渲染出来"
         assert "35" in html
         assert "岛边缘" in html, "缺少「岛边缘 1~2 纹素不可靠」的口径说明"
+        # 纹理尺度要能在同一格里读出来（不加列，避免 16 列的表再变宽）
+        assert "σ_L" in html, "报出了异常面积却没给「这件的纹理尺度有多大」"
 
     def test_accuracy_csv_has_anomaly_columns(self, tmp_path):
         """``accuracy.csv``（论文表的取数口）要带异常两列。
@@ -385,6 +393,7 @@ class TestMetricsReachTheReport:
         assert "图斑数" in header
         assert row[header.index("异常面积(岛内)")] == "2.18%"
         assert row[header.index("图斑数")] == "35"
+        assert row[header.index("纹理尺度σ_L(Lab)")] == "30.3"
 
         # 再来一遍但不带 X3 结果：同一列必须写「未筛查」
         task2, cfg2 = _m5_project(tmp_path / "no_x3")

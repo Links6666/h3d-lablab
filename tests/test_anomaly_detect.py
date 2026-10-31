@@ -229,3 +229,31 @@ class TestRegionList:
         assert len(loose.regions) == 2
         assert len(strict.regions) == 1
         assert strict.regions[0].texels > 2000
+
+
+class TestDetectionFloorIsReported:
+    """「灵敏度不足」要变成一个可读的数字，而不是一句免责声明。
+
+    真机诊断（2026-10-31，1.1.12）：80 texel / ΔE≈120 的斑块在三个位置只中一个，
+    漏掉的两处 W=201 尺度上局部纹理尺度 σ_L 分别是 30.3 与 53.2，而中的那处只有
+    15.7 —— 斑块残差都是 97~113，z 全被 σ 吃掉。这不是估计器坏了，是那两处的
+    局部纹理本来就有那么大。
+
+    所以指标里必须带「本件在这个尺度上的纹理尺度有多大」：同一个 ΔE，在 σ_L=15
+    的地方是 6σ 异常，在 σ_L=53 的地方只有 2σ。不报这个数，用户只能看到「没检出」
+    却不知道是「没有」还是「看不出来」。
+    """
+
+    def test_sigma_median_follows_texture_strength(self):
+        from h3d.anomaly import detect_atlas_anomalies
+
+        smooth = detect_atlas_anomalies(_gradient(512), _round_island(512))
+        noisy = detect_atlas_anomalies(_stripes(512, amp=10), _round_island(512))
+
+        s_smooth = smooth.metrics["sigma_median"]
+        s_noisy = noisy.metrics["sigma_median"]
+        assert s_smooth is not None and s_noisy is not None
+        # 平滑底落在地板上（ΔE≈2 是刚可辨差异）
+        assert s_smooth == pytest.approx(2.0, abs=0.5), s_smooth
+        # 条纹底的纹理尺度必须显著更大 —— 这是「同一个 ΔE 更难检出」的度量
+        assert s_noisy > 3.0, f"条纹底的纹理尺度只有 {s_noisy}，指标没反映真实噪声"

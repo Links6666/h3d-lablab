@@ -454,6 +454,7 @@ _TEMPLATE = """<!DOCTYPE html>
             color: #555; max-width: 320px; }
   td.mono { font-family: Consolas, "Courier New", monospace; font-size: 12px;
             color: #555; }
+  .mono-note { font-size: 11px; color: #777; }
   .hint { color: #8a6d3b; background: #fcf8e3; padding: 10px 14px; border-radius: 4px;
           font-size: 13px; }
   ul.findings { padding-left: 20px; font-size: 13px; }
@@ -565,7 +566,8 @@ _TEMPLATE = """<!DOCTYPE html>
     <td class="num">{{ row.luma }}</td>
     <td class="num">{{ row.consistency }}</td><td>{{ row.flipped }}</td>
     <td class="num">{{ row.pixel_scale }}</td>
-    <td class="num">{{ row.anomaly_ratio }}</td>
+    <td class="num">{{ row.anomaly_ratio }}<br>
+        <span class="mono-note">σ_L≈{{ row.anomaly_sigma }}</span></td>
     <td class="num">{{ row.anomaly_regions }}</td>
     <td class="mono">{{ row.anomaly_digest }}</td>
     <td class="{{ row.cls }}">{{ row.verdict }}</td>
@@ -587,6 +589,9 @@ _TEMPLATE = """<!DOCTYPE html>
   在平滑区域与在粗糙纹理区域给出的分数不同——<b>检出能力随局部信噪比变化</b>，
   不能只报「可检出 ΔE≥X」。另外图集是若干 UV 岛拼成的，<b>岛边缘 1~2 纹素内的
   结论不可靠</b>（背景必须跨岛估计，存在固有偏差），那一条边上的报警请人工复核。
+  异常面积格内的 <code>σ_L≈N</code> 是<b>本件</b>典型位置的局部纹理跨度（Lab 单位）——
+  <b>同一个 ΔE，在这个数越大的地方越难检出</b>；比它小一个量级的差异不要指望
+  能被查出来，那不等于「没有病害」。
   <code>图集摘要</code>是当次被检图集文件的内容摘要前 12 位——换一版图集重烘焙后
   这个值会变，结论才能对得上「基于哪一版」。
 </p>
@@ -889,6 +894,10 @@ def generate_html(manifest: RunManifest,
             # 两位小数：异常占比的值域通常 0~5%，一位小数会把 2.18 与 2.24
             # 抹成同一格，而「这版图集比上版多了一处」正是要看这个差。
             "anomaly_ratio": _pct(get(item, "M5").get("anomaly_ratio"), 2),
+            # 「这件的纹理尺度有多大」：同一个 ΔE 在 σ_L=15 是 6σ 异常、
+            # 在 σ_L=53 只有 2σ。跟异常面积同格显示（图上不加列，避免表变宽）。
+            "anomaly_sigma": _num(get(item, "M5").get("anomaly_sigma_median"),
+                                  1, default="—"),
             "anomaly_regions": _num(get(item, "M5").get("anomaly_regions"), 0,
                                     default="未筛查"),
             "anomaly_digest": (get(item, "M5").get("anomaly_atlas_digest")

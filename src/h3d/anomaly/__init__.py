@@ -263,7 +263,8 @@ def _median_background(ch: np.ndarray, size: int) -> np.ndarray:
 
 
 def _robust_z(arr: np.ndarray, size: int, floor: float,
-              block: int | None = None, cap: float = 2.0) -> np.ndarray:
+              block: int | None = None, cap: float = 2.0,
+              with_sigma: bool = False):
     """单通道 ``|残差| / 稳健尺度``：局部中位数背景 + 块级中位数尺度。
 
     两个估计器都取 50% 击穿点，但职责不同：
@@ -280,7 +281,10 @@ def _robust_z(arr: np.ndarray, size: int, floor: float,
     resid = np.abs(arr - bg)
     q75 = _block_median(resid, block or max(16, int(size) // 4), cap=cap)
     sig = q75 / 1.1503            # q75(|r|) = 1.1503σ（高斯口径）
-    return resid / np.maximum(sig, floor)
+    lifted = np.maximum(sig, floor)
+    if with_sigma:
+        return resid / lifted, lifted
+    return resid / lifted
 
 
 def _grid_z(feats: np.ndarray, size: int, floor: float) -> np.ndarray:
@@ -301,25 +305,43 @@ def _grid_z(feats: np.ndarray, size: int, floor: float) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # 内部：颜色与纹理两路证据
 # ---------------------------------------------------------------------------
-def _colour_score(lab: np.ndarray, cfg: AnomalyConfig) -> np.ndarray:
-    """逐纹素颜色异常分（各尺度取最大）。
+def _colour_score(lab: np.ndarray, cfg: AnomalyConfig,
+                  island: np.ndarray | None = None
+                  ) -> tuple[np.ndarray, float | None]:
+    """逐纹素颜色异常分（各尺度取最大）+ **本件的纹理尺度中位数**。
 
     三个 Lab 通道各自标准化后取均方根——单一通道的异常（比如只有 b 通道偏移
     的泛碱）不会被另外两个正常通道稀释。
+
+    第二个返回值是最粗尺度上、岛内 ``σ_L`` 的中位数（Lab 单位）。它是**可检
+    下限的可读形式**：同一个 ΔE，在 σ_L=15 的平滑区是 6σ 异常，在 σ_L=53 的
+    粗糙区只有 2σ。真机 1.1.12 的 80 texel 注入正是这样：三处斑块残差都是
+    97~113，中的那处 σ_L=15.7，漏掉的两处 30.3 / 53.2。不报这个数，用户看到
+    「没检出」分不清是「没有」还是「看不出来」。
     """
     h, w = lab.shape[:2]
     best = np.zeros((h, w), np.float32)
+    sigma_median: float | None = None
     for size in cfg.scales:
         s = int(size) | 1                        # 窗口取奇数
         s = min(s, max(3, min(h, w) | 1))        # 窗口不得大于图像
         total = np.zeros((h, w), np.float32)
+        sig_l = None
         for c in range(lab.shape[2]):
-            z = _robust_z(lab[..., c], s, cfg.min_scale, cfg.scale_block,
-                          cfg.scale_cap)
+            z, sig = _robust_z(lab[..., c], s, cfg.min_scale, cfg.scale_block,
+                               cfg.scale_cap, with_sigma=True)
             total += z * z
+            if c == 0:
+                # 只取 **L 通道**：它是纹理所栖身的那一路，a/b 在多数图集上
+                # 本来就平（实测条纹图 L 的 σ 是 13.3，b 只有地板 2.0）。
+                # 取「最后一个通道」会让这个指标永远等于地板。
+                sig_l = sig
         score = np.sqrt(total / float(lab.shape[2]))
         best = np.maximum(best, score.astype(np.float32))
-    return best
+        # 只在最后（最粗）一个尺度上取，作为本件的「纹理尺度」代表值
+        if sig_l is not None and island is not None and island.any():
+            sigma_median = float(np.median(sig_l[island]))
+    return best, sigma_median
 
 
 def _block_lum(lab: np.ndarray, block: int, grid: tuple[int, int]) -> np.ndarray:
@@ -544,7 +566,7 @@ def detect_atlas_anomalies(image: np.ndarray, island: np.ndarray, *,
                          "（通常是 UV 展开或掩膜生成失败，不是检测问题）")
 
     lab = _fill_outside(_to_lab(rgb), island)
-    colour_score = _colour_score(lab, cfg)
+    colour_score, sigma_median = _colour_score(lab, cfg, island)
     score = colour_score
     mask_tex = np.zeros_like(island)
 
@@ -588,6 +610,10 @@ def detect_atlas_anomalies(image: np.ndarray, island: np.ndarray, *,
         "use_texture": bool(cfg.use_texture),
         "score_max": float(score.max()) if score.size else 0.0,
         "score_p99": float(np.percentile(score[island], 99)) if n_island else 0.0,
+        # 可检下限的可读形式：本件在最粗尺度上的纹理尺度中位（Lab 单位）。
+        # 同一个 ΔE，σ 越大越难检出 —— 报它比写一句「灵敏度随信噪比变化」有用。
+        "sigma_median": (None if sigma_median is None
+                         else round(float(sigma_median), 3)),
         "n_regions": len(regions),
         "largest_ratio": regions[0].area_ratio if regions else 0.0,
         # 面积单位：**这里只给纹素占比**。换算成 cm² 需要「每纹素对应多少 mm²」，

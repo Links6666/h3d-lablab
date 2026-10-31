@@ -52,6 +52,7 @@ ACCURACY_HEADERS = [
     ("texture_ok", "纹理达标"),
     ("anomaly_ratio", "异常面积(岛内)"),
     ("anomaly_regions", "图斑数"),
+    ("anomaly_sigma_median", "纹理尺度σ_L(Lab)"),
     ("status", "判定"),
 ]
 
@@ -157,6 +158,7 @@ def build_report(
         # X3 单期异常筛查（参考信息；缺键时保持 None，报表印 N/A——不能印 0）
         "anomaly_ratio": metrics.get("anomaly_ratio"),
         "anomaly_regions": metrics.get("anomaly_regions"),
+        "anomaly_sigma_median": metrics.get("anomaly_sigma_median"),
         "thresholds": {
             "coverage_threshold": cfg.coverage_threshold,
             "rmse_threshold_mm": cfg.rmse_threshold_mm,
@@ -207,6 +209,8 @@ def _write_accuracy_csv(path: str, record: dict[str, Any]) -> None:
          if isinstance(record.get("anomaly_ratio"), (int, float)) else "未筛查"),
         record.get("anomaly_regions") if record.get("anomaly_regions") is not None
         else "未筛查",
+        (record["anomaly_sigma_median"]
+         if record.get("anomaly_sigma_median") is not None else "未筛查"),
         record["status"],
     ]
     with open(path, "w", newline="", encoding="utf-8-sig") as fh:
