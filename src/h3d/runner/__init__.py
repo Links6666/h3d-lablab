@@ -509,6 +509,91 @@ def _locate_texture_atlas(tex_dir: str, item_id: str,
     return os.path.join(tex_dir, cands[0]) if cands else None
 
 
+@register_stage("X3")
+def _stage_anomaly_qc(task: Task, cfg) -> StageResult:
+    """X3 单期纹理异常筛查：在 M4 图集上做无监督离群，结论进质检报表。
+
+    为什么排在 M4 之后、**M5 之前**：它只读 ``50_tex/<件>/<件>_L1.0_diffuse.png``
+    （M4 产物），而报表是 **M5** 生成的 —— 排在 M5 之后，指标永远进不了报表。
+    两头夹死，位置只有这一个（顺序由 ``_reorder_ext_stages`` 统一钉住）。
+
+    三件必须说清的事：
+
+    * **默认启用**（``runner.x3_enabled=True``，与其他可选阶段相反）：只读已有
+      图集、2048² 实测 3.3 s/件，而它是唯一会主动指出「这版图集哪里可疑」的
+      环节。
+    * **失败只降级**：可选 QC 读的是上游产物，可能因坏文件/占用/半写而失败。
+      为一份附加筛查否定已经建好的模型，代价与收益不成比例 → 内部兜住所有异常，
+      退成 SKIPPED 并把原因写进 ``skip_reason``。
+    * **不进质量门**：判据仍是 M5 的覆盖率/中误差。异常面积是**参考信息**，
+      不参与 ``metrics["ok"]``——否则一件有好几处真实病害的文物会因为「病害多」
+      被判成「建模失败」，这是两件事。
+    """
+    if not getattr(cfg.runner, "x3_enabled", True):
+        return StageResult("X3", TaskStatus.SKIPPED, [],
+                           {"skip_reason": "runner.x3_enabled=false"}, 0.0)
+
+    tex_dir = os.path.join(task.root, "50_tex", task.item_id)
+    atlas = os.path.join(tex_dir, f"{task.item_id}_L1.0_diffuse.png")
+    mask = os.path.join(tex_dir, f"{task.item_id}_L1.0_mask.png")
+    if not (os.path.isfile(atlas) and os.path.isfile(mask)):
+        return StageResult("X3", TaskStatus.SKIPPED, [], {
+            "skip_reason": (f"缺图集 50_tex/{task.item_id}/"
+                            f"{task.item_id}_L1.0_diffuse.png（M4 未产出或未启用）")
+        }, 0.0)
+
+    t0 = time.time()
+    try:
+        from h3d.anomaly.atlas_io import run_item
+
+        summary = run_item(task.root, task.item_id, write=True)
+    except Exception as exc:  # noqa: BLE001 - 可选 QC 绝不让整件失败
+        log.warning("X3 单期异常筛查跳过（不影响主线）：item=%s -> %s",
+                    task.item_id, str(exc)[:200])
+        return StageResult("X3", TaskStatus.SKIPPED, [], {
+            "skip_reason": f"X3 读图集失败（坏文件/占用/尺寸不符）：{str(exc)[:160]}"
+        }, time.time() - t0)
+
+    m = summary.get("metrics") or {}
+    # 图集摘要：结论必须能对上「基于哪一版图集」。版本号（atlas-vN）只有走档案
+    # 继承时才有，直接改图集重跑不会变号 —— 摘要对的是**这一张图**，永远成立。
+    digest = _sha256_prefix(atlas)
+    out_dir = os.path.join(task.root, "60_qc", task.item_id, "anomaly")
+    metrics = {
+        "anomaly_ratio": round(float(m.get("anomalous_ratio") or 0.0), 6),
+        "anomaly_regions": int(m.get("n_regions") or 0),
+        "anomaly_largest_ratio": round(float(m.get("largest_ratio") or 0.0), 6),
+        "anomaly_k": float(m.get("k") or 0.0),
+        "anomaly_area_units": m.get("area_units") or "texel_ratio",
+        "anomaly_atlas": os.path.relpath(atlas, task.root).replace(os.sep, "/"),
+        "anomaly_atlas_digest": digest,
+        "island_ratio": round(float(m.get("island_ratio") or 0.0), 4),
+    }
+    outputs = [os.path.join(out_dir, n) for n in
+               ("anomaly_heat.png", "anomaly_mask.png", "regions.csv",
+                "metrics.json")
+               if os.path.isfile(os.path.join(out_dir, n))]
+    log.info("X3 完成：%s（异常 %.2f%% 岛内面积，%d 处，k=%.2f）",
+             task.item_id, metrics["anomaly_ratio"] * 100,
+             metrics["anomaly_regions"], metrics["anomaly_k"])
+    return StageResult("X3", TaskStatus.DONE, outputs, metrics,
+                       round(time.time() - t0, 4))
+
+
+def _sha256_prefix(path: str, n: int = 12) -> str:
+    """文件内容摘要前 n 位（用于把结论绑到具体那一版产物上）。"""
+    import hashlib
+
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()[:n]
+    except OSError:
+        return ""
+
+
 @register_stage("M5")
 def _stage_quality(task: Task, cfg) -> StageResult:
     """M5 质检质量门：对照标准阈值给出达标判定并生成报告（几何质量可报告）。
@@ -606,6 +691,20 @@ def _stage_quality(task: Task, cfg) -> StageResult:
                         ("N/A" if tq.get("texture_fill_ratio") is None
                          else f"{tq['texture_fill_ratio'] * 100:.1f}%"))
 
+    # X3 单期异常筛查的结论（可选阶段，可能在 skipped 状态或根本没跑）
+    # 它属于**参考信息**：进报表、进 manifest，但**不进** ``metrics["ok"]``。
+    # 一件有好几处真实病害的文物，建模本身可以完全合格——把病害多算成
+    # 「建模失败」，等于让质检反过来惩罚被查的对象。
+    x3 = task.metrics_of("X3") if hasattr(task, "metrics_of") else {}
+    if x3:
+        metrics["anomaly_ratio"] = x3.get("anomaly_ratio")
+        metrics["anomaly_regions"] = x3.get("anomaly_regions")
+        metrics["anomaly_largest_ratio"] = x3.get("anomaly_largest_ratio")
+        metrics["anomaly_k"] = x3.get("anomaly_k")
+        metrics["anomaly_area_units"] = x3.get("anomaly_area_units")
+        metrics["anomaly_atlas"] = x3.get("anomaly_atlas")
+        metrics["anomaly_atlas_digest"] = x3.get("anomaly_atlas_digest")
+
     # 先落盘报告（失败也有据可查），再判定
     qc_dir = os.path.join(task.root, "60_qc", task.item_id)
     rpt_dir = os.path.join(task.root, "70_report", task.item_id)
@@ -668,6 +767,16 @@ def _stage_quality(task: Task, cfg) -> StageResult:
         "rmse_reliable": bool(metrics.get("rmse_reliable")),
         "units_plausible": bool(metrics.get("units_plausible", True)),
         "rmse_scope": metrics.get("rmse_scope"),
+        # X3 单期异常筛查（参考信息，不参与上面任何判门）。``anomaly_atlas`` +
+        # ``anomaly_atlas_digest`` 是「这条结论基于哪一版图集」的唯一凭据——
+        # 版本号只有走档案继承时才有，直接重跑 M4 换掉图集并不会改号。
+        "anomaly_ratio": metrics.get("anomaly_ratio"),
+        "anomaly_regions": metrics.get("anomaly_regions"),
+        "anomaly_largest_ratio": metrics.get("anomaly_largest_ratio"),
+        "anomaly_k": metrics.get("anomaly_k"),
+        "anomaly_area_units": metrics.get("anomaly_area_units"),
+        "anomaly_atlas": metrics.get("anomaly_atlas"),
+        "anomaly_atlas_digest": metrics.get("anomaly_atlas_digest"),
     }
     return StageResult("M5", TaskStatus.DONE, reports, manifest_metrics)
 
@@ -1013,7 +1122,8 @@ def _append_x1_to_accuracy(acc_csv: str, item_id: str, metrics: dict) -> None:
 
 
 def _reorder_ext_stages() -> None:
-    for stage_id in ("S1", "M1", "M2", "M3", "M4", "P1", "M5", "M6",
+    # X3 必须在 M5 之前：报表在 M5 里生成，排在后面等于报表永远读不到异常指标。
+    for stage_id in ("S1", "M1", "M2", "M3", "M4", "P1", "X3", "M5", "M6",
                      "X1", "X2"):
         if stage_id in STAGE_REGISTRY:
             STAGE_REGISTRY.move_to_end(stage_id, last=True)

@@ -323,6 +323,10 @@ class RunnerConfig(_ConfigBase):
     workers: int = Field(dtype=int, default=1, low=1)
     x1_enabled: bool = Field(dtype=bool, default=False)
     x2_enabled: bool = Field(dtype=bool, default=False)
+    #: X3 单期纹理异常筛查（B2）。**默认开**，与其他可选阶段相反 —— 它只读
+    #: M4 已经产出的图集、2048² 实测 3.3 s/件，而结论直接进质检报表；失败降级
+    #: 为「跳过」不连坐整件（见 batch_processor.OPTIONAL_STAGES）。
+    x3_enabled: bool = Field(dtype=bool, default=True)
     #: 生成约束快照（2026-10-26）：GUI「确认本次生成约束」的结果，仅供溯源
     #: 与报表展示，管线本身不读它（真正的取值早已落到各段字段上）。
     #: 存它是因为验收要回答「这次是按什么约束跑出来的」，而 90_meta 只知道

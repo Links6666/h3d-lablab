@@ -47,7 +47,7 @@ log = get_logger("runner.batch_processor")
 #       否则 M1 无输入、后续阶段全错。
 #
 # 因此「失败是否连累主线」按 (stage, 是否有激光几何) 联合判定。
-OPTIONAL_STAGES = frozenset({"S1", "P1", "X1", "X2"})
+OPTIONAL_STAGES = frozenset({"S1", "P1", "X1", "X2", "X3"})
 
 
 def _degrades_on_failure(stage_id: str, task: Task) -> bool:
@@ -502,6 +502,10 @@ def _stage_enabled(stage_id: str, cfg) -> bool:
         return bool(getattr(cfg.runner, "x1_enabled", False))
     if stage_id == "X2":
         return bool(getattr(cfg.runner, "x2_enabled", False))
+    if stage_id == "X3":
+        # 默认开：只读 M4 已有图集，3.3 s/件，且是唯一会主动指出「这版图集
+        # 哪里可疑」的环节。缺图集另有「条件不满足」的跳过路径。
+        return bool(getattr(cfg.runner, "x3_enabled", True))
     return True     # 主线阶段恒执行
 
 
@@ -524,6 +528,8 @@ def _disabled_reason(stage_id: str, cfg) -> str:
         return "配置关闭：runner.x1_enabled=false（未启用多时相形变检测）"
     if stage_id == "X2":
         return "配置关闭：runner.x2_enabled=false（未启用色差评估）"
+    if stage_id == "X3":
+        return ("配置关闭：runner.x3_enabled=false（未启用单期纹理异常筛查）")
     return "配置关闭：该阶段本次未启用"
 
 

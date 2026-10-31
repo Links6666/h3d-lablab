@@ -77,11 +77,15 @@ class TestRunnerParsing:
         assert done_summary(line) == (1, 1, 0)
 
     def test_parse_progress_percent(self):
-        """阶段顺序含 S1~X2。"""
+        """阶段灯与内核注册表**逐一对齐**（不是「恰好 N 个」）。"""
         from h3d.gui.logparse import STAGE_ORDER
+        from h3d.runner import STAGE_REGISTRY
         # 2026-10-18：内核注册表含 P1（S1/P1/X1/X2 四个可选阶段），
         # 界面灯必须与之一致，否则 P1 执行时 KeyError 被 Qt 吞掉。
-        assert len(STAGE_ORDER) == 10
+        # 2026-10-31：改成比对注册表而不是写死 10 —— 每加一个阶段都要回来改
+        # 数字的断言，测的其实是「有没有人记得改测试」。
+        assert len(STAGE_ORDER) == len(STAGE_REGISTRY), (STAGE_ORDER,
+                                                        list(STAGE_REGISTRY))
         assert STAGE_ORDER[0] == "S1" and STAGE_ORDER[-1] == "X2"
 
 

@@ -452,6 +452,8 @@ _TEMPLATE = """<!DOCTYPE html>
            font-family: Consolas, "Courier New", monospace; max-width: 720px; }
   td.note { white-space: pre-wrap; word-break: break-word; font-size: 12px;
             color: #555; max-width: 320px; }
+  td.mono { font-family: Consolas, "Courier New", monospace; font-size: 12px;
+            color: #555; }
   .hint { color: #8a6d3b; background: #fcf8e3; padding: 10px 14px; border-radius: 4px;
           font-size: 13px; }
   ul.findings { padding-left: 20px; font-size: 13px; }
@@ -551,7 +553,8 @@ _TEMPLATE = """<!DOCTYPE html>
   <tr><th>文物编号</th><th>图集</th><th>参与相机</th><th>图集像素利用率</th>
       <th>UV 岛占比</th><th>岛内填充率</th><th>画幅内可见</th><th>几何-位姿对齐</th>
       <th>平均亮度</th><th>多视角色差</th>
-      <th>法线校正</th><th>像素换算</th><th>判定</th></tr>
+      <th>法线校正</th><th>像素换算</th>
+      <th>异常面积（岛内）</th><th>图斑数</th><th>图集摘要</th><th>判定</th></tr>
   {% for row in tex_rows %}
   <tr>
     <td>{{ row.item }}</td><td>{{ row.size }}</td><td class="num">{{ row.cameras }}</td>
@@ -562,10 +565,13 @@ _TEMPLATE = """<!DOCTYPE html>
     <td class="num">{{ row.luma }}</td>
     <td class="num">{{ row.consistency }}</td><td>{{ row.flipped }}</td>
     <td class="num">{{ row.pixel_scale }}</td>
+    <td class="num">{{ row.anomaly_ratio }}</td>
+    <td class="num">{{ row.anomaly_regions }}</td>
+    <td class="mono">{{ row.anomaly_digest }}</td>
     <td class="{{ row.cls }}">{{ row.verdict }}</td>
   </tr>
   {% else %}
-  <tr><td colspan="13">无贴图数据（M4 未执行）</td></tr>
+  <tr><td colspan="16">无贴图数据（M4 未执行）</td></tr>
   {% endfor %}
 </table>
 <p class="footnote">
@@ -574,6 +580,15 @@ _TEMPLATE = """<!DOCTYPE html>
   <code>UV 岛占比</code> = UV 岛覆盖面积 / 图集面积（由网格三角面积与 UV 展开决定）；
   <code>岛内填充率</code> = 图集像素利用率 / UV 岛占比，<b>这才是"贴图有没有贴上"的真口径</b>，
   低于 85% 说明岛内大量纹素没采到颜色（法线朝向 / 遮挡 / 位姿问题）。
+</p>
+<p class="footnote">
+  <b>异常面积 / 图斑数（X3 单期筛查）的读法</b>：它是<b>相对量</b>，不是病害面积。
+  每个纹素与**局部中位数背景**比，超过 k≈3.5 倍稳健尺度就算异常；所以同一处斑块
+  在平滑区域与在粗糙纹理区域给出的分数不同——<b>检出能力随局部信噪比变化</b>，
+  不能只报「可检出 ΔE≥X」。另外图集是若干 UV 岛拼成的，<b>岛边缘 1~2 纹素内的
+  结论不可靠</b>（背景必须跨岛估计，存在固有偏差），那一条边上的报警请人工复核。
+  <code>图集摘要</code>是当次被检图集文件的内容摘要前 12 位——换一版图集重烘焙后
+  这个值会变，结论才能对得上「基于哪一版」。
 </p>
 
 <h2>四、质检指标（M5）</h2>
@@ -868,6 +883,16 @@ def generate_html(manifest: RunManifest,
             "consistency": _num(m4.get("multiview_color_std"), 2),
             "flipped": _yes(m4.get("normal_flipped")),
             "pixel_scale": _num((m4.get("pixel_scale") or [None])[0], 4),
+            # X3 单期异常筛查的结论挂在 M5 的 metrics 上（X3 在 M5 之前跑，
+            # 由 M5 汇总）。没有就是「未筛查」，不能印成 0%——0% 会被读成
+            # 「查过了、很干净」。
+            # 两位小数：异常占比的值域通常 0~5%，一位小数会把 2.18 与 2.24
+            # 抹成同一格，而「这版图集比上版多了一处」正是要看这个差。
+            "anomaly_ratio": _pct(get(item, "M5").get("anomaly_ratio"), 2),
+            "anomaly_regions": _num(get(item, "M5").get("anomaly_regions"), 0,
+                                    default="未筛查"),
+            "anomaly_digest": (get(item, "M5").get("anomaly_atlas_digest")
+                               or "—"),
             "verdict": verdict, "cls": cls,
         })
 

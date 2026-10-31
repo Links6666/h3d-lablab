@@ -23,16 +23,18 @@ import re
 #: 可选阶段），P1 一旦执行，界面既没有灯、正则也不解析，
 #: 而 _on_stage 会因 self.lamps["P1"] KeyError（Qt 吞掉异常）→
 #: 状态行与灯全部停在上一阶段，看着像卡死。
-STAGE_ORDER = ["S1", "M1", "M2", "M3", "M4", "P1", "M5", "M6",
+#: 2026-10-31：加 X3（单期异常筛查）。位置必须与内核 ``_reorder_ext_stages``
+#: 完全一致——它排在 M5 之前，因为报表在 M5 里生成。
+STAGE_ORDER = ["S1", "M1", "M2", "M3", "M4", "P1", "X3", "M5", "M6",
                "X1", "X2"]
 
 _STAGE_DONE = re.compile(
     r"\[(INFO|WARNING|ERROR)\].*\[h3d\.(?:runner|sfm_solve|quality|"
-    r"photo_texture|dense_gate)\] (S1|M[1-6]|P1|X1|X2) (完成|质检报告)")
-_STAGE_START = re.compile(r"▶\s*(S1|M[1-6]|P1|X1|X2)\s*开始")
+    r"photo_texture|dense_gate)\] (S1|M[1-6]|P1|X1|X2|X3) (完成|质检报告)")
+_STAGE_START = re.compile(r"▶\s*(S1|M[1-6]|P1|X1|X2|X3)\s*开始")
 #: 阶段开始行携带文物编号：``▶ S1 开始：relic_001BMYyyyy``
-_STAGE_START_ITEM = re.compile(r"▶\s*(?:S1|M[1-6]|P1|X1|X2)\s*开始[：:]\s*(\S+)")
-_STAGE_FAIL = re.compile(r"失败隔离：item=\S+ stage=(S1|M[1-6]|P1|X1|X2)")
+_STAGE_START_ITEM = re.compile(r"▶\s*(?:S1|M[1-6]|P1|X1|X2|X3)\s*开始[：:]\s*(\S+)")
+_STAGE_FAIL = re.compile(r"失败隔离：item=\S+ stage=(S1|M[1-6]|P1|X1|X2|X3)")
 _DONE_TOTAL = re.compile(r"批量处理完成：total=(\d+) done=(\d+) failed=(\d+)")
 #: 同行的 skipped 字段（1.1.5 起才有；缺失时按 total-done-failed 兜底）
 _DONE_SKIPPED = re.compile(r"skipped=(\d+)")
@@ -40,7 +42,7 @@ _DONE_SKIPPED = re.compile(r"skipped=(\d+)")
 #: ``○ X1 跳过：relic_001（缺参考期 00_ref/.../*.ply）``
 #: 2026-10-18：内核此前只在 debug 级留痕，界面等不到完成行 → 该灯橙色卡死、
 #: 进度条少一格。现在跳过必须是**可见状态**（灰灯 + 计入进度）。
-_STAGE_SKIP = re.compile(r"○\s*(S1|M[1-6]|P1|X1|X2)\s*跳过")
+_STAGE_SKIP = re.compile(r"○\s*(S1|M[1-6]|P1|X1|X2|X3)\s*跳过")
 #: 阶段完成/跳过行携带文物编号：``S1 完成：relic_666（...）`` / ``○ M1 跳过：relic_666（...）``
 _STAGE_ITEM = re.compile(r"(?:完成|跳过)[：:]\s*([^\s（(]+)")
 #: 任务发现总数：``任务发现完成：5 件文物（其中纯照片 5 件）``
@@ -210,15 +212,16 @@ def items_total_of(line: str) -> int | None:
 
 
 #: 每件都会跑的**核心**阶段（P1/X1/X2 是可选项，本项目默认不启用）
-CORE_STAGES = ["S1", "M1", "M2", "M3", "M4", "M5", "M6"]
+CORE_STAGES = ["S1", "M1", "M2", "M3", "M4", "X3", "M5", "M6"]
 
 #: 单件内部的阶段权重（按实测耗时标定，和为 1）。
 #: 30 张 4496×3000 照片：S1 ≈ 30 min（其中稠密占 76%）、M4 ≈ 90 s、其余秒级。
+#: X3 从 M4 的时间里切一块：2048² 图集实测 3.3 s vs M4 ≈ 70 s，约 5%。
 W_PHOTO = {"S1": 0.900, "M1": 0.020, "M2": 0.003, "M3": 0.007,
-           "M4": 0.060, "M5": 0.005, "M6": 0.005}
+           "M4": 0.057, "X3": 0.003, "M5": 0.005, "M6": 0.005}
 #: S1 被跳过时（纯扫描件场景①）按剩余阶段重新归一 —— 否则一件没有 S1 的
 #: 文物会在开跑瞬间拿到 90%，随后 M1~M4 的真实工作只推动 10%。
-W_SCAN = {"M1": 0.20, "M2": 0.03, "M3": 0.07, "M4": 0.60,
+W_SCAN = {"M1": 0.20, "M2": 0.03, "M3": 0.07, "M4": 0.585, "X3": 0.015,
           "M5": 0.05, "M6": 0.05}
 
 

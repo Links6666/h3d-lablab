@@ -20,7 +20,8 @@ log = get_logger("thesis_tables")
 THESIS_HEADERS = [
     "文物编号", "S1注册率", "M5覆盖率", "M5中误差(mm)", "M5中误差口径",
     "M5相对中误差(%对角线)", "纹理清晰度",
-    "纹理接缝", "X1最大形变(mm)", "X1变化占比", "X2平均ΔE", "判定",
+    "纹理接缝", "异常面积(岛内)", "图斑数",
+    "X1最大形变(mm)", "X1变化占比", "X2平均ΔE", "判定",
 ]
 
 
@@ -28,13 +29,18 @@ def _locate_manifest(task_root: str) -> Optional[str]:
     """在项目根下定位 run_manifest.json（兼容 GUI 与 CLI 两种落盘位置）。
 
     - GUI 生成的配置把 manifest 放在 ``<root>/output/run_manifest.json``；
-    - CLI ``h3d init`` 的规范布局放在 ``<root>/90_meta/run_manifest.json``。
+    - CLI ``h3d init`` 的规范布局放在 ``<root>/90_meta/run_manifest.json``；
+    - **v1.1.10 起两棵子树整体下沉到 ``阶段成果/``** —— 传项目根进来时必须
+      再往下探一层，否则这个公开函数会「只打一行 warning 就返回空串」，
+      而调用方（M6）因为传的本来就是阶段成果根，问题一直没暴露。
 
     历史上这里只认 ``90_meta``，导致 GUI 项目在 M6 阶段总是打印
     「无 manifest，无法导出论文表格」。现在按优先级依次探测。
     """
     for rel in (os.path.join("output", "run_manifest.json"),
                 os.path.join("90_meta", "run_manifest.json"),
+                os.path.join("阶段成果", "output", "run_manifest.json"),
+                os.path.join("阶段成果", "90_meta", "run_manifest.json"),
                 "run_manifest.json"):
         cand = os.path.join(task_root, rel)
         if os.path.exists(cand):
@@ -63,6 +69,26 @@ def export_thesis_table(task_root: str, item_ids: Optional[List[str]] = None,
         m5 = stages.get(f"{item}/M5", {})
         x1 = stages.get(f"{item}/X1", {})
         x2 = stages.get(f"{item}/X2", {})
+        x3 = stages.get(f"{item}/X3", {})
+        # 异常指标正常由 M5 汇总（X3 在 M5 之前跑），但**从 X3 记录兜底**：
+        # 旧 manifest 里 M5 可能是在 X3 之前生成的，或者只重跑了报表。
+        # 两个来源都读，报表才能从任一历史形态重建。
+        a_ratio = m5.get("anomaly_ratio")
+        if a_ratio is None:
+            a_ratio = x3.get("anomaly_ratio")
+        a_regions = m5.get("anomaly_regions")
+        if a_regions is None:
+            a_regions = x3.get("anomaly_regions")
+        x3 = stages.get(f"{item}/X3", {})
+        # 异常指标正常由 M5 汇总（X3 在 M5 之前跑），但**从 X3 记录兜底**：
+        # 旧 manifest 里 M5 可能是在 X3 之前生成的，或者只重跑了报表。
+        # 两个来源都读，报表才能从任一历史形态重建。
+        a_ratio = m5.get("anomaly_ratio")
+        if a_ratio is None:
+            a_ratio = x3.get("anomaly_ratio")
+        a_regions = m5.get("anomaly_regions")
+        if a_regions is None:
+            a_regions = x3.get("anomaly_regions")
         reg = s1.get("n_registered", 0)
         nph = s1.get("n_photos", 0)
         # 中误差口径（2026-10-26）：无激光锚点时 rmse_mm 是「模型单位×1000」，
@@ -78,6 +104,10 @@ def export_thesis_table(task_root: str, item_ids: Optional[List[str]] = None,
             _fmt_pct(m5.get("rmse_rel")),
             _fmt(m5.get("texture_sharpness")),
             _fmt(m5.get("texture_seam")),
+            # X3 单期异常（参考量）。缺键写「未筛查」而不是 0.00%——论文表里
+            # 一个 0.00% 会被当成"查过了、很干净"，与"没查"是两回事。
+            _fmt_pct(a_ratio) if a_ratio is not None else "未筛查",
+            str(a_regions) if a_regions is not None else "未筛查",
             _fmt_x1(x1.get("max_change_mm")),
             f"{x1.get('changed_ratio', 0.0) * 100:.1f}%" if x1 else "N/A",
             _fmt(x2.get("mean_de")),

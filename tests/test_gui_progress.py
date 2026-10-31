@@ -527,7 +527,10 @@ class TestProgressModelPerItem:
         from h3d.gui.logparse import ProgressModel
         m = ProgressModel()
         m.feed("任务发现完成：2 件文物")
-        for s in ("S1", "M1", "M2", "M3", "M4", "M5", "M6"):
+        # 遍历 CORE_STAGES 而不是写死一份清单：写死的那份加一个阶段就会让
+        # 「全跳过 ≈ 100%」不成立（2026-10-31 加 X3 时正是这么红的）。
+        from h3d.gui.logparse import CORE_STAGES
+        for s in CORE_STAGES:
             m.feed(f"○ {s} 跳过：item_b（断点续跑）")
         assert m.value() > 0
         assert m.item_fraction("item_b") > 0.99

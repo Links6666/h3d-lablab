@@ -157,9 +157,17 @@ class TestEndToEndPipeline:
         # 五态终态（2026-10-26）：配置关闭的可选阶段**也要写 manifest**，
         # 只是记成 disabled 而不是"没有记录"。旧实现不写，报表只能把它
         # 归进「未执行」，与「上游失败导致从未到达」混为一谈。
+        # X3 默认**开**，所以它在这一件上是 skipped（缺图集，条件不满足）而不是
+        # disabled —— 这个差别正是「配置关了」与「上游没产物」的分界线。
         for sid in ("S1", "P1", "X1", "X2"):
             assert m.stages[f"rock001/{sid}"]["status"] == "disabled"
-        assert len(m.stages) == 10
+        assert m.stages["rock001/X3"]["status"] == "skipped"
+        # skip_kind 是 manifest 记录的**顶层**字段（不是塞进 metrics 里）
+        assert m.stages["rock001/X3"]["skip_kind"] == "condition"
+        # 阶段数跟着注册表走，别写死数字（每加一个阶段就要回来改 10 → 11 → …）
+        from h3d.runner import STAGE_REGISTRY
+        assert len(m.stages) == len(STAGE_REGISTRY), (len(m.stages),
+                                                      list(STAGE_REGISTRY))
 
     def test_multiple_items_with_one_failing(self, tmp_path):
         """两件文物：rock001 正常；rock002 故意构造为单点云（只 1 站）+M2 应跳过。"""

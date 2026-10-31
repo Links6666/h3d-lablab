@@ -362,3 +362,73 @@ def test_align_text_variants(align, expect):
     from h3d.report.html_export import _align_text
 
     assert expect in _align_text(align)
+
+
+# ------------------------------------------------ ④ 论文表格必须带异常两列 --
+class TestThesisTableAnomaly:
+    """X3 的结论要出现在**论文表**里 —— 那是硕论直接引用的那张。
+
+    漏了它，同一个数字会有三种命运：manifest 有、HTML 有、论文表没有。r16 的
+    七处缺陷全是这个形状（上游算了、白名单没写、报表读不到）。所以这里逐面
+    各锁一条。
+    """
+
+    def _export(self, tmp_path, x3: dict | None):
+        (tmp_path / "output").mkdir()
+        stages = {"relic_001/M5": dict(_m5(), status="done")}
+        if x3 is not None:
+            stages["relic_001/X3"] = dict(x3, status="done")
+        (tmp_path / "output" / "run_manifest.json").write_text(
+            json.dumps({"stages": stages}), encoding="utf-8")
+        path = export_thesis_table(str(tmp_path))
+        with open(path, encoding="utf-8-sig") as fh:
+            rows = list(csv.reader(fh))
+        return rows[0], rows[1]
+
+    def test_columns_present_with_values(self, tmp_path):
+        head, row = self._export(tmp_path, {"anomaly_ratio": 0.0218,
+                                            "anomaly_regions": 35})
+        assert "异常面积(岛内)" in head and "图斑数" in head
+        assert row[head.index("异常面积(岛内)")] == "2.18%"
+        assert row[head.index("图斑数")] == "35"
+
+    def test_missing_x3_reads_not_screened(self, tmp_path):
+        """没跑 X3 → 「未筛查」，不能是 0.00%（那会被读成"查过了很干净"）。"""
+        head, row = self._export(tmp_path, None)
+        assert row[head.index("异常面积(岛内)")] == "未筛查"
+        assert row[head.index("图斑数")] == "未筛查"
+
+
+# ------------------------------------------------ ④ 论文表格必须带异常两列 --
+class TestThesisTableAnomaly:
+    """X3 的结论要出现在**论文表**里 —— 那是硕论直接引用的那张。
+
+    漏了它，同一个数字会有三种命运：manifest 有、HTML 有、论文表没有。r16 的
+    七处缺陷全是这个形状（上游算了、白名单没写、报表读不到）。所以这里逐面
+    各锁一条。
+    """
+
+    def _export(self, tmp_path, x3: dict | None):
+        (tmp_path / "output").mkdir()
+        stages = {"relic_001/M5": dict(_m5(), status="done")}
+        if x3 is not None:
+            stages["relic_001/X3"] = dict(x3, status="done")
+        (tmp_path / "output" / "run_manifest.json").write_text(
+            json.dumps({"stages": stages}), encoding="utf-8")
+        path = export_thesis_table(str(tmp_path))
+        with open(path, encoding="utf-8-sig") as fh:
+            rows = list(csv.reader(fh))
+        return rows[0], rows[1]
+
+    def test_columns_present_with_values(self, tmp_path):
+        head, row = self._export(tmp_path, {"anomaly_ratio": 0.0218,
+                                            "anomaly_regions": 35})
+        assert "异常面积(岛内)" in head and "图斑数" in head
+        assert row[head.index("异常面积(岛内)")] == "2.18%"
+        assert row[head.index("图斑数")] == "35"
+
+    def test_missing_x3_reads_not_screened(self, tmp_path):
+        """没跑 X3 → 「未筛查」，不能是 0.00%（那会被读成"查过了很干净"）。"""
+        head, row = self._export(tmp_path, None)
+        assert row[head.index("异常面积(岛内)")] == "未筛查"
+        assert row[head.index("图斑数")] == "未筛查"

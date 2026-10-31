@@ -104,7 +104,9 @@ class TestDegradeDecision:
         assert _degrades_on_failure(stage, _laser_item(tmp_path)) is True
 
     def test_optional_set_is_exactly_the_enhancements(self):
-        assert OPTIONAL_STAGES == frozenset({"S1", "P1", "X1", "X2"})
+        """可降级的只能是「增强」：S1 位姿 / P1 照片纹理 / X1 形变 / X2 色差 /
+        X3 单期异常。主线阶段失败必须整件失败——那是几何本身没做出来。"""
+        assert OPTIONAL_STAGES == frozenset({"S1", "P1", "X1", "X2", "X3"})
 
 
 # ---------------------------------------------------------------------------
