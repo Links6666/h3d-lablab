@@ -125,6 +125,25 @@
   M4 .06）；S1 跳过换 `W_SCAN` 归一；显示「第 k/N 件」。四层：子步骤+文件名 / n/N / 已运行 / 心跳(>30s)。
 - 预览候选 **PLY 优先**；>6 万面先体素聚类简化；**打开项目即 `_refresh_preview()`**。
 
+## 档案层（B0 起，r18）
+- **代号唯一权威是 `GLOSSARY.md`**：代码冻结 → 指南 S0/S1/S2 记 `A0/A1/A2`、指南 X2
+  （异常检测）记 `X3`、指南里程碑 P0–P6 记 `B0–B6`（代码 `P1` 已是照片纹理、`S1` 已是
+  COLMAP、`X2` 已是色差）。
+- 布局：`<项目>/archive/{artifact.json, epochs/<id>.json, assets/<id>__v<N>.json}`。
+  **包裹不改** `阶段成果/`，`CanonicalAsset` 只存相对路径 + 哈希；换盘符/换机器不断。
+- **`looks_like_project()` 只认旧布局**（标记在项目根），新布局产物在 `阶段成果/` 下会被
+  判否 → 档案迁移用 `looks_like_h3d_project()`（两者都认，仍排除 `output`/`report`）。
+- `content_key` 必须嵌套结构 + `sort_keys`，禁止拼字符串：`{a:1,b:23}` 与 `{a:12,b:3}`
+  会撞车，缓存返回错误产物且不报错。`KEY_SCHEMA` 进 payload 防换算法后新旧键混用。
+- 基准期：首个时相自动为基准期；显式改换允许但**必须 WARNING**（图集/尺度要重定）。
+- **只读靠代码强制**：`mount()` 返回句柄，`open(mode)` 含 `w/a/x/+` 抛 `ReadOnlyViolation`；
+  相对路径解析锁在项目根内（`../../x` 要报错）。
+- **迁移的 `route` 只是布局推断**（`00_raw` 有 .ply 就是 A），不是来源验证 —— 1.1.12 就
+  发生过把 SfM 产物塞进 00_raw 冒充激光件。B3 前置校验须补真实核验。
+- 测试坑：`pytest --basetemp=<项目内路径>` 会让 36 项 runner/texture 测试互相污染而失败
+  （单文件带 basetemp 是绿的）；用默认 `%TEMP%`，exit=0 即全绿，summary 行可能被沙箱
+  safe-delete 提示盖掉。
+
 ## 双场景 / 尺度
 - ①（带扫描件）≠②（纯照片）：S1/P1/X1/X2 在①失败只降级；在② S1 是唯一几何源、失败即整件失败。
   判据 `stage in {S1,P1,X1,X2} and bool(task.raw_paths)`。
