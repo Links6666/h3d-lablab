@@ -103,6 +103,37 @@ key = sha256({
 那需要「产物定位 + 复制策略 + 图集路径重写」一整块，且当前 `archive/` 只在项目内，
 没有跨项目索引。留作 ADR-0002。
 
+### D6 建档入口在 GUI「打开项目」，且允许空时相（切片 6）
+
+切片 1–5 让档案层能读、能写、能迁移、能让 runner 登记产物，但**建档只有
+`h3d archive migrate` 一条路**。GUI 用户打开项目、跑完一批，`archive/` 从不出现 ——
+D5 末段写的「跑完登记进已建档的档案」在界面上等于不存在。
+
+三个刻意的取舍：
+
+1. **入口放 GUI，不放 runner**。`ensure_archive` 在 `MainWindow.__init__` 末尾调一次，
+   另在 `_start_run_inner` 里「数据落位之后、自检之前」再调一次。
+
+   后一处不是重复：向导可以建出「只有 config.yaml、还没有数据」的项目，那时
+   `_first_item` 判不出件号，建档只能跳过；用户随后拷数据、直接点生成 —— 只有
+   在运行前补一次，这类项目才会被建上档，否则永久没有档案。放在 `_stage_inputs`
+   之后是因为**它才是把数据复制进 `00_raw`/`00_photo` 的那一步**。
+
+2. **允许空时相**（`migrate(..., allow_no_asset=True)`）。命令行迁移刻意不允许：
+   给空目录建一个永远命中不了的时相，档案里就多一条分不清「没跑」和「跑失败」的记录。
+
+   但 GUI 必须允许。原因是一条硬约束：`batch_processor._register_archive` 要求
+   `arch.baseline()` 非空，否则直接跳过。若新建项目在第一次运行前不建时相，跑完
+   依然没有基准期 → 登记永远不发生 → **跑一百次也补不上**。所以对有采集数据的
+   新项目，建档时就落下 `E1`（0 版本），跑完由 runner 登记 `v1`。
+
+3. **幂等**是硬要求：GUI 每次打开项目都会调。已有 `artifact.json` → 一律
+   `existing`，一个字节都不重写（真机核对见下）。闸门沿用
+   `looks_like_h3d_project`，普通目录**不会**冒出 `archive/`。
+
+时相列表放在预览区旁的「文物档案」页（而不是配置区）：它是「看结果」的一类。
+表格只展示 `EpochRow`（纯 dataclass），Qt 侧只做渲染，所以展示逻辑能脱离 GUI 单测。
+
 ## 后果
 
 **正面**
@@ -147,7 +178,7 @@ key = sha256({
 | 3 | `Archive` 读写 / 基准期规则 / 版本自增 / 只读挂载 | ✅ | 同文件 18 项 |
 | 4 | 存量迁移 `h3d.archive.migrate` + CLI `archive migrate/status` | ✅ | `tests/test_archive_migrate.py` 11 项 |
 | 5 | 内容指纹接入 runner（`h3d.runner.fingerprint` + `input_key` 落 manifest + 档案登记） | ✅ | `tests/test_runner/test_fingerprint.py` 29 项 + `test_resume_fingerprint.py` 12 项 |
-| 6 | GUI 打开项目时自动建档 / 时相列表 | ⬜ 待做 | — |
+| 6 | GUI 打开项目时自动建档 / 时相列表（`archive/workspace.py` + `gui/archive_view.py`） | ✅ | `tests/test_archive_workspace.py` 13 项 + `test_gui_archive_panel.py` 8 项 |
 
 真机冒烟（2026-10-31，`E:\兵马俑照片\1.1.12`）：建档成功（`relic_001` / `E1` / 路线 A /
 基准期），`30_dense/relic_001.ply` 的哈希 + mtime + size 前后完全一致，只读挂载可读、
@@ -162,3 +193,15 @@ key = sha256({
 | 紧接着再跑一次 | 3.3 s，M1–M6 全部 `○ 跳过（输入未变化）` |
 | 改 `mesh.poisson_depth` | 同一件上重算键：M1/M3/M4 键全部变化 |
 | 改 `runner.workers` + `project.name` | 三个阶段的键**均不变**（执行控制不进指纹） |
+
+切片 6 真机验证（同日，两个真实项目）：
+
+| 项目 | 状态 | 结果 |
+|---|---|---|
+| `E:\兵马俑照片\1.1.12`（切片 4 已建档） | `existing` | `artifact.json` 的 sha256 与 mtime 前后**完全一致**；表格显示 `E1 / 2026-10-31 / A 扫描件锚定 / 基准期 / 2 版（最新 v2）/ 尺度未记录` |
+| `E:\兵马俑照片\1.1.11`（未建档） | `created` → 再调 `existing` | 建出 `relic_001 / E1`、路线 A、登记 `v1`；第二次调用不重复建时相 |
+| 普通目录（无项目痕迹） | `skipped` | **不创建** `archive/`，面板显示「这不是一个 H3D 项目…」 |
+
+离屏 GUI 冒烟（`QT_QPA_PLATFORM=offscreen`）：两个项目都能打开「文物档案」页，
+表格 1 行、内容与 CLI `archive status` 一致；面板 `sizeHint` 宽 272 px、
+`minimumSizeHint` 宽 110 px，远小于窗口宽，不会把主窗口顶宽（2026-10-26 那类跳变）。

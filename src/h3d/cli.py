@@ -314,7 +314,9 @@ def _cmd_archive(args) -> int:
     try:
         arch = Archive.open(args.path)
     except FileNotFoundError:
-        print(f"该目录还没有文物档案：{args.path}", file=sys.stderr)
+        print(f"该目录还没有文物档案：{args.path}\n"
+              f"  建档：h3d archive migrate <项目目录>"
+              f"（GUI 打开项目时会自动建档）", file=sys.stderr)
         return 1
     art = arch.artifact()
     rows = []

@@ -44,8 +44,11 @@ def _first_item(stage: str) -> str | None:
 
     产物路径的键一直是 ``item_id``（``00_raw`` 的子目录名），不是项目名 ——
     用项目名拼会让示例项目全绿、真实项目全空。
+
+    ``00_photo`` 也要探：纯照片路线（B）的项目根里没有 ``00_raw``，
+    只按前四个目录找会判「没有文物目录」，于是这类项目永远建不了档。
     """
-    for sub in ("00_raw", "30_dense", "10_dense", "50_tex"):
+    for sub in ("00_raw", "00_photo", "30_dense", "10_dense", "50_tex"):
         base = os.path.join(stage, sub)
         if not os.path.isdir(base):
             continue
@@ -80,7 +83,8 @@ def _date_of(path: str) -> str:
 
 
 def migrate(root: str, *, epoch_id: str = "E1", title: str = "",
-            force_new_epoch: bool = False) -> dict:
+            force_new_epoch: bool = False,
+            allow_no_asset: bool = False) -> dict:
     """把存量项目迁移进档案层。
 
     参数
@@ -90,11 +94,20 @@ def migrate(root: str, *, epoch_id: str = "E1", title: str = "",
     title: 文物名称（默认取件号）。
     force_new_epoch: 已有档案时是否**再追加**一个时相。用于「同一份数据重跑后
         登记新版本」之外的场景（例如把复测期单独登记）。
+    allow_no_asset: 允许「有时相、无产物」的档案。
+
+        命令行迁移刻意**不**允许：给一个空目录建一个永远命中不了的时相，
+        档案里就多了一条没有任何产物的记录，事后无法分辨「没跑」和「跑失败」。
+
+        但 GUI「打开项目」必须允许 —— 新建项目在第一次运行之前只有采集数据，
+        若此时不建时相，runner 的档案登记会因为「无基准期」永久跳过（见
+        ``batch_processor._register_archive``），跑完一次也补不上。
 
     返回
     ----
     ``{"status": "created"|"already", "artifact_id", "epoch_id", "version",
-    "content_key", "missing": [...]}``
+    "content_key", "missing": [...]}``；``allow_no_asset`` 且无产物时
+    ``version`` 与 ``content_key`` 为 ``None``。
     """
     proj = _paths.project_root_of(os.path.abspath(root))
     if not _paths.looks_like_h3d_project(proj):
@@ -159,12 +172,13 @@ def migrate(root: str, *, epoch_id: str = "E1", title: str = "",
     for kind, path in (("mesh", mesh), ("texture", tex), ("cameras", meta)):
         if path and os.path.isfile(path):
             inputs[kind] = file_digest(path)
-    if not inputs:
+    if not inputs and not allow_no_asset:
         # 一件产物都没有：不该建一个永远命中不了的时相
         raise ValueError(
             f"{item} 没有任何可登记产物（30_dense / 50_tex / 90_meta 全空），"
             "先跑建模再迁移。")
-    key = _content_key_fn(inputs, {"migrator": 1, "initial_atlas": _INITIAL_ATLAS})
+    key = (_content_key_fn(inputs, {"migrator": 1, "initial_atlas": _INITIAL_ATLAS})
+           if inputs else None)
 
     # -- 建档 ---------------------------------------------------------------
     if arch is None:
@@ -176,11 +190,18 @@ def migrate(root: str, *, epoch_id: str = "E1", title: str = "",
             f"但本次探测到 {item}；多文物项目需逐件建档，暂不支持自动合并")
 
     route = "A" if raw_files else "B"
+    # 采集日期：优先原始几何目录的 mtime；纯照片项目退到 00_photo；都没有就取今天。
+    # 不能让 mesh 缺失时崩在 ``os.path.dirname(None)`` 上（新建项目就是这种情况）。
+    anchor = None
+    for cand in (raw_dir, os.path.join(stage, "00_photo", item),
+                 os.path.dirname(mesh) if mesh else None):
+        if cand and os.path.isdir(cand):
+            anchor = cand
+            break
     epoch = Epoch(
         epoch_id=epoch_id,
         artifact_id=item,
-        captured_on=_date_of(raw_dir if os.path.isdir(raw_dir)
-                             else os.path.dirname(mesh)),
+        captured_on=_date_of(anchor or proj),
         route=route,
         device="",
         raw_paths=[rel(p) for p in raw_files],
@@ -196,17 +217,20 @@ def migrate(root: str, *, epoch_id: str = "E1", title: str = "",
             raise
         log.warning("时相 %s 已存在，改用追加模式", epoch_id)
 
-    asset = CanonicalAsset(
-        epoch_id=epoch_id, version=1, content_key=key,
-        mesh_path=rel(mesh), cloud_path=None, texture_path=rel(tex),
-        uv_atlas_ref=_INITIAL_ATLAS, cameras_path=rel(meta),
-        params={"migrated_from": "legacy_layout"},
-        created_at=_dt.datetime.now().isoformat(timespec="seconds"),
-    )
-    saved = arch.register(asset)
-    if missing:
+    saved: CanonicalAsset | None = None
+    if inputs:
+        asset = CanonicalAsset(
+            epoch_id=epoch_id, version=1, content_key=key,
+            mesh_path=rel(mesh), cloud_path=None, texture_path=rel(tex),
+            uv_atlas_ref=_INITIAL_ATLAS, cameras_path=rel(meta),
+            params={"migrated_from": "legacy_layout"},
+            created_at=_dt.datetime.now().isoformat(timespec="seconds"),
+        )
+        saved = arch.register(asset)
+    if missing and not allow_no_asset:
         log.warning("迁移完成，但以下产物缺失（报表会显示 N/A）：%s",
                     "、".join(missing))
     return {"status": "created", "artifact_id": item, "epoch_id": epoch_id,
-            "version": saved.version, "content_key": saved.content_key,
+            "version": saved.version if saved else None,
+            "content_key": saved.content_key if saved else None,
             "missing": missing}

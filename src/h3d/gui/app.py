@@ -75,6 +75,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("H3D 中小型文物三维建模自动化系统")
         self._build()
         self._migrate_layout_if_needed()
+        # 打开项目 = 建档（幂等）。放在布局迁移之后：迁移会改目录形态，
+        # 先迁再建档才能判断出正确的项目根。
+        self._ensure_archive()
         self._fit_to_screen()
         # 打开已有项目时立刻显示上次的成果（旧实现只在运行结束后才载入，
         # 打开一个跑完的项目预览永远空白）。
@@ -115,6 +118,48 @@ class MainWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001 - 迁移失败按旧布局继续
             self._log(f"[WARNING] 目录迁移失败（沿用旧布局）：{exc}")
             return False
+
+    # ------------------------------------------------------------ 档案
+    def _ensure_archive(self) -> None:
+        """打开项目时建档，并把时相列表刷到「文物档案」页。
+
+        为什么接在这里而不是 runner 里：建档会往项目根写 ``archive/``，
+        改变存量项目的目录形态。runner 擅自做这件事等于「跑一次管线，
+        项目里多出一棵树」，而 CLI 用户可能用脚本按旧路径取产物。GUI 是
+        用户已经打开项目、正在「继续干活」的场所，建档在这里是显式意图。
+
+        失败只记日志：档案是增量能力，不能反过来让项目打不开。
+        """
+        root = getattr(self.cfg, "root_dir", "") or ""
+        if not root:
+            return
+        try:
+            from h3d.archive.workspace import ensure_archive
+
+            status = ensure_archive(root)
+        except Exception as exc:  # noqa: BLE001 - 建档失败不得影响界面
+            self._log(f"[WARNING] 文物档案建档失败（不影响建模）：{exc}")
+            return
+        try:
+            self.archive_panel.apply(status)
+        except Exception as exc:  # noqa: BLE001 - 面板失败不影响建档结果
+            self._log(f"[WARNING] 档案面板刷新失败：{exc}")
+        if status.is_open():
+            self._log(f"▶ {status.message}（{status.epoch_count()} 个时相）")
+        elif status.message:
+            self._log(f"· 档案：{status.message}")
+
+    def _refresh_archive(self) -> None:
+        """只读刷新档案页（跑完一批后调用）。不会建档。"""
+        root = getattr(self.cfg, "root_dir", "") or ""
+        if not root:
+            return
+        try:
+            from h3d.archive.workspace import read_status
+
+            self.archive_panel.apply(read_status(root))
+        except Exception as exc:  # noqa: BLE001 - 展示性功能
+            self._log(f"[WARNING] 档案页刷新失败：{exc}")
 
     # ------------------------------------------------------------ 窗口尺寸
     def _fit_to_screen(self):
@@ -366,6 +411,12 @@ class MainWindow(QMainWindow):
         wv.addLayout(bar)
         wv.addWidget(self.mesh_preview, 1)
         tabs.addTab(wrap, "3D 模型预览")
+        # 文物档案页（B0 切片 6）：时相 / 路线 / 基准期 / 产物版本。
+        # 放在预览旁边而不是配置区里——它是「看结果」的一类，不是输入。
+        from h3d.gui.archive_view import ArchivePanel
+
+        self.archive_panel = ArchivePanel()
+        tabs.addTab(self.archive_panel, "文物档案")
         self.tabs = tabs
         return tabs
 
@@ -745,6 +796,10 @@ class MainWindow(QMainWindow):
             self._log("─" * 24 + " 新一次运行 " + "─" * 24)
         self._log(f"▶ 项目：{self.cfg.name}　根目录：{self.cfg.root_dir}")
         self._log(f"▶ 配置已写入：{cfg_path}")
+        # 数据刚落位（``_stage_inputs`` 刚复制完），此时才可能识别出件号。
+        # 打开项目时若还没放数据，那一次建档会被跳过 —— 这里补一次，
+        # 否则这个项目永远没有档案，runner 的产物登记也永远不生效。
+        self._ensure_archive()
         # 开跑前自检（第一步，早于任何阶段）：拦不住的问题在这里拦下来
         if not self._preflight_before_run(cfg_path):
             self._log("▶ 已按用户选择中止（未启动管线）")
@@ -1158,6 +1213,9 @@ class MainWindow(QMainWindow):
             self.lbl_state.setStyleSheet(
                 "QLabel{color:#ff6b6b;font-weight:bold;font-size:13px;}")
         self._log(f"● {summary}")
+        # 跑完刷新档案页的版本数（只读，不建档）。放在这里是因为登记发生在
+        # runner 里，界面只有等到结束才知道有没有新版本。
+        self._refresh_archive()
         # 强制重算是一次性意图：跑完立刻把勾选与 yaml 里的标记清零。
         # 不清的话，用户下次打开项目点一次生成又会重跑全链（而且要 30 分钟）。
         if getattr(self.cfg, "force_rerun", False):
