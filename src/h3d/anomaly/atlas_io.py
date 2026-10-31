@@ -150,3 +150,66 @@ def write_outputs(out_dir: str, res, summary: dict) -> str:
               encoding="utf-8") as fh:
         json.dump(summary, fh, ensure_ascii=False, indent=2)
     return out_dir
+
+
+def track_item(stage_root: str, item_id: str, atlas_a: str, atlas_b: str, *,
+               config=None, temporal_config=None, write: bool = True) -> dict:
+    """两期比对（X4）：对两张图集各跑一次 X3，再关联图斑、判五态。
+
+    参数
+    ----
+    atlas_a, atlas_b : str
+        两期的扩散图集路径。**必须共用同一套 UV 布局**（B1 的图集继承保证了
+        这一点）；布局不一致时 ``track`` 会抛 ``ValueError``，不做任何兜底——
+        在错误的布局上比对，得到的五态表全是垃圾。
+    """
+    import csv
+    import json
+
+    from h3d.anomaly import AnomalyConfig, detect_atlas_anomalies
+    from h3d.anomaly.temporal import TemporalConfig, track
+
+    item_dir = os.path.join(stage_root, "50_tex", item_id)
+    mask_path = os.path.join(item_dir, f"{item_id}{_MASK_SUFFIX}")
+    for path in (atlas_a, atlas_b):
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"缺少图集纹理：{path}")
+    if not os.path.isfile(mask_path):
+        raise FileNotFoundError(f"缺少岛内掩膜：{mask_path}")
+
+    island = _read_png(mask_path, grey=True) > 127
+    cfg = config or AnomalyConfig()
+    img_a = _read_png(atlas_a)
+    img_b = _read_png(atlas_b)
+    res_a = detect_atlas_anomalies(img_a, island, config=cfg)
+    res_b = detect_atlas_anomalies(img_b, island, config=cfg)
+    rep = track(img_a, img_b, res_a, res_b,
+                config=temporal_config or TemporalConfig())
+
+    out_dir = os.path.join(stage_root, "60_qc", item_id, "temporal")
+    summary = {
+        "item_id": item_id,
+        "atlas_a": os.path.relpath(atlas_a, stage_root).replace(os.sep, "/"),
+        "atlas_b": os.path.relpath(atlas_b, stage_root).replace(os.sep, "/"),
+        "epoch_a": {"anomalous_ratio": round(res_a.metrics["anomalous_ratio"], 6),
+                    "regions": res_a.metrics["n_regions"]},
+        "epoch_b": {"anomalous_ratio": round(res_b.metrics["anomalous_ratio"], 6),
+                    "regions": res_b.metrics["n_regions"]},
+        "metrics": {k: (round(v, 6) if isinstance(v, float) else v)
+                    for k, v in rep.metrics.items()},
+        "changes": [c.as_row() for c in rep.changes],
+        "output_dir": os.path.relpath(out_dir, stage_root).replace(os.sep, "/"),
+    }
+    if write:
+        os.makedirs(out_dir, exist_ok=True)
+        with open(os.path.join(out_dir, "changes.csv"), "w", newline="",
+                  encoding="utf-8-sig") as fh:
+            rows = summary["changes"]
+            writer = csv.DictWriter(fh, fieldnames=list(rows[0].keys()) if rows
+                                    else ["state"])
+            writer.writeheader()
+            writer.writerows(rows)
+        with open(os.path.join(out_dir, "summary.json"), "w",
+                  encoding="utf-8") as fh:
+            json.dump(summary, fh, ensure_ascii=False, indent=2)
+    return summary

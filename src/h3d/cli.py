@@ -99,6 +99,20 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="只计算不落盘（不写 60_qc/<件>/anomaly）")
     p_anom.add_argument("--json", action="store_true", help="以 JSON 输出")
 
+    p_track = sub.add_parser(
+        "anomaly-track",
+        help="X4 病害时序追踪（两期图斑关联 + 五态判定）")
+    p_track.add_argument("-p", "--path", default=".",
+                         help="项目根或其「阶段成果」目录（默认当前目录）")
+    p_track.add_argument("--item", required=True, help="件号（掩膜从这里取）")
+    p_track.add_argument("--a", required=True, help="第一期扩散图集路径")
+    p_track.add_argument("--b", required=True, help="第二期扩散图集路径")
+    p_track.add_argument("--delta-e", type=float, default=0.0,
+                         help="可见性门限（CIE76，默认 5.0）")
+    p_track.add_argument("--no-write", action="store_true",
+                         help="只计算不落盘（不写 60_qc/<件>/temporal）")
+    p_track.add_argument("--json", action="store_true", help="以 JSON 输出")
+
     p_arch_refs = arch_sub.add_parser(
         "refs", help="体检资产里的图集引用（查无实体的可置空修复）")
     p_arch_refs.add_argument("-p", "--path", default=".", help="项目根目录")
@@ -442,6 +456,69 @@ def _cmd_archive_refs(args) -> int:
     return 0 if not dangling else 1
 
 
+def _cmd_anomaly_track(args) -> int:
+    """``h3d anomaly-track``：两期图斑关联与五态判定（X4）。
+
+    只做编排：解析路径、调一层、把结论翻成退出码。判据全在
+    :func:`h3d.anomaly.temporal.track` 里。
+
+    退出码：0 = 正常；1 = 输入问题（缺图集/缺掩膜/布局不一致）。
+    「有变化」本身**不是**错误——保护工作的常态就是有变化。
+    """
+    import json as _json
+    import os as _os
+
+    from h3d.anomaly.temporal import STATE_LABEL, TemporalConfig
+    from h3d.anomaly.atlas_io import track_item
+    from h3d.core import paths
+
+    project = paths.project_root_of(_os.path.abspath(args.path))
+    stage = paths.stage_root(project)
+    tcfg = TemporalConfig()
+    if args.delta_e > 0:
+        tcfg = TemporalConfig(delta_e_min=args.delta_e)
+    try:
+        summary = track_item(stage, args.item, _os.path.abspath(args.a),
+                             _os.path.abspath(args.b), temporal_config=tcfg,
+                             write=not args.no_write)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"[{args.item}] 无法比对：{exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(_json.dumps(summary, ensure_ascii=False, indent=2))
+        return 0
+
+    m = summary["metrics"]
+    print(f"病害时序追踪  {args.item}")
+    print(f"  第一期 {summary['epoch_a']['regions']} 处"
+          f"（异常 {summary['epoch_a']['anomalous_ratio'] * 100:.2f}%）"
+          f"  第二期 {summary['epoch_b']['regions']} 处"
+          f"（异常 {summary['epoch_b']['anomalous_ratio'] * 100:.2f}%）")
+    print(f"  布局 IoU {m['layout_iou']:.6f}  配对 {m['matched']} 对  "
+          f"ΔE 门限挡下 {m['filtered_by_delta_e']} 条")
+    print("  " + "  ".join(f"{STATE_LABEL[s]} {m[s]}"
+                           for s in ("appeared", "grown", "stable",
+                                     "shrank", "disappeared")))
+    if summary["changes"]:
+        print(f"  {'状态':6s} {'纹素A':>6s} {'纹素B':>6s} {'面积比':>7s} "
+              f"{'中位ΔE':>7s}  边界框")
+        for row in summary["changes"]:
+            ratio = ("—" if row["area_ratio"] is None
+                     else f"{row['area_ratio']:.2f}")
+            box = (row["x0_b"], row["y0_b"], row["x1_b"], row["y1_b"]) \
+                if row["x0_b"] is not None else \
+                (row["x0_a"], row["y0_a"], row["x1_a"], row["y1_a"])
+            print(f"  {row['label']:6s} {row['texels_a']:6d} {row['texels_b']:6d} "
+                  f"{ratio:>7s} {row['delta_e']:7.2f}  {box}")
+        print(f"  产物：{summary['output_dir']}/（changes.csv / summary.json）")
+    else:
+        print("  两期没有可比对的变化。")
+    print("  口径：五态是「两期之间变没变」，不是病害类别；ΔE 门限挡下的条目"
+          "不计入（它们落在「看不清」的灰区）。")
+    return 0
+
+
 def _cmd_anomaly(args) -> int:
     """``h3d anomaly``：对单期 UV 图集做无监督异常筛查（X3）。
 
@@ -594,6 +671,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return _cmd_archive(args)
         if args.command == "anomaly":
             return _cmd_anomaly(args)
+        if args.command == "anomaly-track":
+            return _cmd_anomaly_track(args)
         parser.print_help()
         return 2
     except ConfigError as exc:

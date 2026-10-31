@@ -113,3 +113,61 @@ class TestAnomalyCommand:
         assert rc == 1
         err = capsys.readouterr().err
         assert "尺寸" in err
+
+
+# ---------------------------------------------------------------------------
+# CLI ``h3d anomaly-track``（X4 两期追踪）
+# ---------------------------------------------------------------------------
+def _project_two_epochs(tmp_path):
+    """两期项目：A 期一处斑块，B 期把斑块放大（应判「扩大」）。"""
+    from h3d.cli import _cmd_anomaly_track  # noqa: F401  (确保模块可导入)
+
+    root = _project(tmp_path, with_blob=True)
+    tex = root / "阶段成果" / "50_tex" / ITEM
+    a = tex / f"{ITEM}_L1.0_diffuse.png"
+    img_b = _gradient(256)
+    img_b[108:148, 108:148] = np.array([238, 230, 196], np.uint8)
+    b = tex / f"{ITEM}_epoch2_L1.0_diffuse.png"
+    _write_png(str(b), img_b)
+    return root, a, b
+
+
+class TestAnomalyTrackCommand:
+    def test_grown_spot_is_reported_and_written(self, tmp_path, capsys):
+        from h3d.cli import main
+
+        root, a, b = _project_two_epochs(tmp_path)
+        rc = main(["anomaly-track", "-p", str(root), "--item", ITEM,
+                   "--a", str(a), "--b", str(b)])
+        out = capsys.readouterr().out
+
+        assert rc == 0, out
+        assert "扩大" in out, out
+        out_dir = root / "阶段成果" / "60_qc" / ITEM / "temporal"
+        assert (out_dir / "changes.csv").is_file()
+        assert (out_dir / "summary.json").is_file()
+        summary = json.loads((out_dir / "summary.json").read_text("utf-8"))
+        assert summary["metrics"]["grown"] >= 1
+        assert summary["metrics"]["layout_iou"] == 1.0
+
+    def test_missing_atlas_returns_1(self, tmp_path, capsys):
+        from h3d.cli import main
+
+        root, a, b = _project_two_epochs(tmp_path)
+        rc = main(["anomaly-track", "-p", str(root), "--item", ITEM,
+                   "--a", str(a), "--b", str(tmp_path / "nope.png")])
+        assert rc == 1
+        assert "无法比对" in capsys.readouterr().err
+
+    def test_json_shape(self, tmp_path, capsys):
+        from h3d.cli import main
+
+        root, a, b = _project_two_epochs(tmp_path)
+        rc = main(["anomaly-track", "-p", str(root), "--item", ITEM,
+                   "--a", str(a), "--b", str(b), "--json"])
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data["item_id"] == ITEM
+        for key in ("appeared", "grown", "stable", "shrank", "disappeared",
+                    "n_changes", "layout_iou"):
+            assert key in data["metrics"], key
