@@ -82,6 +82,8 @@ def main() -> int:
     ap.add_argument("--item", default=None)
     ap.add_argument("--inject", action="store_true",
                     help="另跑 24/40/80 texel 注入（约 2 min）")
+    ap.add_argument("--adaptive", action="store_true",
+                    help="量「阈值按岛自适应」的取舍（约 2 min）：图斑数 vs 注入召回")
     ap.add_argument("--k-sweep", action="store_true",
                     help="扫 k 与注入命中（约 8 min）——用来说明「提 k 换干净」能不能成立")
     args = ap.parse_args()
@@ -133,6 +135,28 @@ def main() -> int:
                     hits += cov >= 0.5
                     cells.append(f"{side}:{cov:.2f}")
             print(f"  {tag:14s} {hits}/{tot}   [{' '.join(cells)}]")
+
+    if args.adaptive:
+        from verify_x3_sensitivity import inject, pick_spots
+
+        print("\n按岛自适应阈值的取舍（k_i = clip(岛内 z 的 p99, k, k_max)）")
+        print(f"  {'上限':>5}  异常      图斑  注入召回")
+        spots2 = {sd: pick_spots(island, sd) for sd in (24, 40, 80)}
+        for kmax in (3.5, 4.0, 4.5, 5.0, 6.0):
+            cfg = AnomalyConfig(adaptive_k=kmax > 3.5, island_k_max=kmax)
+            base = detect_atlas_anomalies(rgb, island, config=cfg)
+            hit = tot = 0
+            for sd, pts in spots2.items():
+                for cx, cy in pts:
+                    img2, gt, _ = inject(rgb, cx, cy, sd, 120.0)
+                    gt = gt & island
+                    r = detect_atlas_anomalies(img2, island, config=cfg)
+                    cov = float(((r.mask & ~base.mask) & gt).sum()) / max(1, int(gt.sum()))
+                    tot += 1
+                    hit += cov >= 0.5
+            print(f"  {kmax:5.1f}  {base.metrics['anomalous_ratio']:7.3%}  "
+                  f"{base.metrics['n_regions']:4d}  {hit}/{tot}")
+        print("  注：每减一处待复核都要掉召回 —— 阈值取自岛内 z 的尾巴，而缺陷正是尾巴的一部分。")
 
     if args.k_sweep:
         from verify_x3_sensitivity import inject, pick_spots

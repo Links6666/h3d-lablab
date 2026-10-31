@@ -98,6 +98,17 @@ def _num(value: Any, digits: int = 1, scale: float = 1.0,
     return f"{num * scale:.{digits}f}{suffix}"
 
 
+def _k_range(m5: dict) -> str:
+    """阈值渲染：自适应关闭时 ``3.5``，打开时 ``3.5~4.0``。"""
+    lo = m5.get("anomaly_k")
+    hi = m5.get("anomaly_k_max")
+    if lo is None:
+        return "—"
+    if isinstance(hi, (int, float)) and abs(float(hi) - float(lo)) > 1e-6:
+        return f"{float(lo):g}~{float(hi):g}"
+    return f"{float(lo):g}"
+
+
 def _pct(value: Any, digits: int = 1, default: str = "N/A") -> str:
     """比例 -> 百分数文本。"""
     return _num(value, digits, 100.0, "%", default)
@@ -937,8 +948,9 @@ def generate_html(manifest: RunManifest,
             # 在 σ_L=53 只有 2σ。跟异常面积同格显示（图上不加列，避免表变宽）。
             "anomaly_sigma": _num(get(item, "M5").get("anomaly_sigma_median"),
                                   1, default="—"),
-            # 实际用的阈值。``--k`` 可改，脚注里写死一个数会在改过之后变成假话。
-            "anomaly_k": _num(get(item, "M5").get("anomaly_k"), 1, default="—"),
+            # 实际用的阈值。``--k`` 可改、按岛自适应会逐岛抬升（默认关），
+            # 两种情况下「k=3.5」都会变成半句真话，所以按实际范围渲染。
+            "anomaly_k": _k_range(get(item, "M5")),
             "anomaly_regions": _num(get(item, "M5").get("anomaly_regions"), 0,
                                     default="未筛查"),
             "anomaly_digest": (get(item, "M5").get("anomaly_atlas_digest")

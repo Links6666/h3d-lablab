@@ -120,6 +120,32 @@ class AnomalyConfig:
     #: 全图集没有一处纹素离岛边界超过 75 texel，201 窗口处处跨岛）。
     #: 关掉只为对照实验（``scripts/verify_x3_islands.py`` 用它出 A/B 数字）。
     per_island: bool = True
+    #: 阈值按岛自适应：``k_i = clip(岛内 z 的 p{quantile}, k, island_k_max)``。
+    #: **默认关闭**，因为它在这件文物上是零和的——实测（真机 1.1.12，11 处注入）：
+    #:
+    #: ==========  ======  ========  ======
+    #: 上限        图斑    异常      召回
+    #: ==========  ======  ========  ======
+    #: 关（3.5）   7       0.242%    9/11
+    #: 4.0         5       0.182%    8/11
+    #: 4.5         4       0.166%    8/11
+    #: 5.0         3       0.159%    7/11
+    #: 6.0         2       0.148%    4/11
+    #: ==========  ======  ========  ======
+    #:
+    #: 每减一处待复核都要掉召回：带缺陷的岛本身尾巴就重（尾巴里就有缺陷），把门槛
+    #: 抬到自己的尾巴上，等于让真信号自己盖住自己。这一条同时否掉了「提高全局 k」，
+    #: 两条路的取舍表见 ``docs/adr/0003-single-epoch-anomaly.md`` 的 D12/D13。
+    #: 留着这个开关是为了让后人能重新量一遍，不是为了打开它。
+    adaptive_k: bool = False
+    #: 自适应阈值取岛内 z 的哪个分位。99 = 「这块岛自己最极端的那 1%」。
+    island_k_quantile: float = 99.0
+    #: 自适应阈值的**上限**。这不是保险，是必要条件：不加上限时「取岛内 p99」
+    #: 等于「删掉这个岛最极端的 1%」，而占岛面积 10% 的真斑块正好在那 1% 里
+    #: ——实测 120 texel 注入的 IoU 从 1.00 掉到 0.13、60 texel 掉到 0.66。
+    island_k_max: float = 6.0
+    #: 岛内纹素少于此值时不参与自适应（分位数不可靠，直接用全局 k）。
+    island_k_min_texels: int = 256
 
 @dataclass(frozen=True)
 class AnomalyRegion:
@@ -362,6 +388,47 @@ def _robust_z(arr: np.ndarray, size: int, floor: float,
     if with_sigma:
         return resid / lifted, lifted
     return resid / lifted
+
+
+def _island_threshold(score: np.ndarray, labels: np.ndarray, n: int,
+                      cfg: AnomalyConfig) -> tuple[np.ndarray, float, float]:
+    """逐岛自适应阈值图。返回 ``(k_map, 实际最小值, 实际最大值)``。
+
+    规则：``k_i = clip(岛内 z 的 p{quantile}, k, island_k_max)``，只抬不降。
+
+    为什么「抬」有道理：``z = 残差 / 本岛尺度`` 已经把尺度归一化了，但**尾巴
+    长度没有归一化**——真机 1.1.12 上 7 处待复核所在岛，z 的 p99 分别是 4.06 /
+    5.66 / 6.96 / 10.22。尾巴重的岛，3.5σ 只是一次普通的起伏；尾巴薄的岛，
+    3.5σ 已经是真事件。把门槛抬到这块岛自己的尾巴上沿，语义才一致。
+
+    为什么必须有上限（``island_k_max``）：这条规则的极端形式是「删掉每个岛最
+    极端的 1%」，而**占岛面积 10% 的真斑块正好在那 1% 里**——实测无上限时
+    120 texel 注入的 IoU 从 1.00 掉到 0.13、60 texel 掉到 0.66。上限把「删除
+    尾巴」变回「只在尾巴明显异常时才抬」，代价是效果变小（真机 7 处 → 6 处）。
+
+    为什么只对小岛以外生效：几百个纹素的岛，99 分位只靠几个样本，抖动比信号大。
+    """
+    k0 = float(cfg.k)
+    k_map = np.full(np.asarray(labels).shape, k0, np.float32)
+    if not cfg.adaptive_k or n <= 0:
+        return k_map, k0, k0
+
+    flat = np.asarray(labels).ravel()
+    order = np.argsort(flat, kind="stable")
+    starts = np.searchsorted(flat[order], np.arange(0, n + 2))
+    vals = np.asarray(score, np.float32).reshape(-1)[order]
+    per = np.full(n + 1, k0, np.float32)
+    for k in range(1, n + 1):
+        a, b = starts[k], starts[k + 1]
+        if b - a >= int(cfg.island_k_min_texels):
+            per[k] = np.percentile(vals[a:b], float(cfg.island_k_quantile))
+    per = np.clip(np.maximum(per, k0), k0, float(cfg.island_k_max))
+    per[0] = k0
+    k_map = per[labels].astype(np.float32)
+    inside = labels > 0
+    if not inside.any():
+        return k_map, k0, k0
+    return k_map, float(k_map[inside].min()), float(k_map[inside].max())
 
 
 def _grid_z(feats: np.ndarray, size: int, floor: float) -> np.ndarray:
@@ -662,6 +729,9 @@ def detect_atlas_anomalies(image: np.ndarray, island: np.ndarray, *,
     else:
         lab = _fill_outside(raw, island)
         colour_score, sigma_median = _colour_score(lab, cfg, island)
+    # 阈值：按岛自适应（只抬不降）。用同一张 k_map 做掩膜与纹理补位的闸门，
+    # 否则「阈值」会在一处是 3.5、在另一处是 5.2，却只有一半的判定用了它。
+    k_map, k_lo, k_hi = _island_threshold(colour_score, labels, n_islands, cfg)
     score = colour_score
     mask_tex = np.zeros_like(island)
 
@@ -680,12 +750,12 @@ def detect_atlas_anomalies(image: np.ndarray, island: np.ndarray, *,
         # 叠加会在色斑外多出一圈 5~10 纹素的「方向变了」（一个 60 texel 的反色
         # 斑块实测 bbox 从 170 外扩到 160）。按「离颜色区超过一个块边长」筛选，
         # 是拿精度高的那一路当边界，而不是把两路的误差加起来。
-        if mask_tex.any() and (colour_score >= cfg.k).any():
-            dist = ndimage.distance_transform_edt(~(colour_score >= cfg.k))
+        if mask_tex.any() and (colour_score >= k_map).any():
+            dist = ndimage.distance_transform_edt(~(colour_score >= k_map))
             mask_tex &= dist > float(cfg.tex_block)
         score = np.maximum(score, np.where(driven, orient, 0.0))
 
-    mask = ((colour_score >= cfg.k) | mask_tex) & island
+    mask = ((colour_score >= k_map) | mask_tex) & island
     # 形态学清理：开运算剥掉孤立纹素，闭运算补回图斑内部的小孔
     mask = ndimage.binary_opening(mask, structure=np.ones((3, 3), bool))
     mask = ndimage.binary_closing(mask, structure=np.ones((3, 3), bool))
@@ -704,6 +774,11 @@ def detect_atlas_anomalies(image: np.ndarray, island: np.ndarray, *,
         "anomalous_ratio": float(mask.sum()) / float(n_island),
         "scales": [int(s) for s in cfg.scales],
         "k": float(cfg.k),
+        # 实际生效的阈值范围（自适应只抬不降，所以 k_min 恒等于 k）
+        "k_min": round(float(k_lo), 3),
+        "k_max": round(float(k_hi), 3),
+        "k_max_cap": float(cfg.island_k_max),
+        "adaptive_k": bool(cfg.adaptive_k),
         "min_scale": float(cfg.min_scale),
         "tex_scale": float(cfg.tex_scale) if cfg.use_texture else None,
         "use_texture": bool(cfg.use_texture),

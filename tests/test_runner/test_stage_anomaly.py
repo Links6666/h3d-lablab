@@ -421,6 +421,34 @@ class TestMetricsReachTheReport:
         # 实际用的 k 也要标出来：--k 可调，脚注里写死一个数会在改过之后变成假话
         assert "k=3.5" in html, "没标出实际使用的阈值 k"
 
+    def test_html_shows_k_as_a_range_when_adaptive(self, tmp_path):
+        """按岛自适应打开时，阈值必须渲染成区间——写 `k=3.5` 是半句真话。
+
+        自适应是逐岛抬到 ``[k, k_max]``，一件图集里不同岛的门槛不一样。报表
+        只印下界，读者会以为全图都按 3.5 判的，而实际有一半区域按 4.0 判。
+        """
+        from h3d.core import PipelineConfig, RunManifest
+        from h3d.report.html_export import generate_html
+
+        cfg = PipelineConfig()
+        cfg.runner.manifest = os.path.join(str(tmp_path), "90_meta", "m.json")
+        os.makedirs(os.path.dirname(cfg.runner.manifest), exist_ok=True)
+        m = RunManifest(config_sha256="abc123")
+        m.record("r1/M4", "done", [], 70.0, texture_size=2048,
+                 atlas_utilization=0.615, texture_coverage=0.55)
+        m.record("r1/M5", "done", [], 1.0, coverage=0.9, rmse_mm=2.0,
+                 mps_m=0.001, anomaly_ratio=0.0018, anomaly_regions=5,
+                 anomaly_sigma_median=12.2, anomaly_k=3.5, anomaly_k_max=4.0,
+                 anomaly_adaptive_k=True)
+        m.save(cfg.runner.manifest)
+
+        out = os.path.join(str(tmp_path), "report.html")
+        generate_html(RunManifest.load(cfg.runner.manifest), out_path=out,
+                      project="t")
+        with open(out, encoding="utf-8") as fh:
+            html = fh.read()
+        assert "k=3.5~4" in html, "自适应打开时没把阈值区间印出来"
+
     def test_html_lists_region_boxes(self, tmp_path):
         """报表要能直接指着看「第 1 处在哪」—— 而不是只给一个总数。
 

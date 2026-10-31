@@ -574,6 +574,10 @@ def _stage_anomaly_qc(task: Task, cfg) -> StageResult:
         "anomaly_regions": int(m.get("n_regions") or 0),
         "anomaly_largest_ratio": round(float(m.get("largest_ratio") or 0.0), 6),
         "anomaly_k": float(m.get("k") or 0.0),
+        # 实际生效的阈值上界。按岛自适应（默认关）打开时 k 会逐岛抬到
+        # [k, k_max]，报表要能露出这个区间，否则「k=3.5」是半句真话。
+        "anomaly_k_max": float(m.get("k_max") or m.get("k") or 0.0),
+        "anomaly_adaptive_k": bool(m.get("adaptive_k")),
         "anomaly_area_units": m.get("area_units") or "texel_ratio",
         "anomaly_atlas": os.path.relpath(atlas, task.root).replace(os.sep, "/"),
         "anomaly_atlas_digest": digest,
@@ -732,6 +736,8 @@ def _stage_quality(task: Task, cfg) -> StageResult:
         metrics["anomaly_atlas"] = x3.get("anomaly_atlas")
         metrics["anomaly_atlas_digest"] = x3.get("anomaly_atlas_digest")
         metrics["anomaly_sigma_median"] = x3.get("anomaly_sigma_median")
+        metrics["anomaly_k_max"] = x3.get("anomaly_k_max")
+        metrics["anomaly_adaptive_k"] = x3.get("anomaly_adaptive_k")
         metrics["anomaly_top_regions"] = x3.get("anomaly_top_regions") or []
         metrics["anomaly_island_count"] = x3.get("island_count")
         metrics["anomaly_per_island"] = x3.get("per_island")
@@ -809,6 +815,8 @@ def _stage_quality(task: Task, cfg) -> StageResult:
         "anomaly_atlas": metrics.get("anomaly_atlas"),
         "anomaly_atlas_digest": metrics.get("anomaly_atlas_digest"),
         "anomaly_sigma_median": metrics.get("anomaly_sigma_median"),
+        "anomaly_k_max": metrics.get("anomaly_k_max"),
+        "anomaly_adaptive_k": metrics.get("anomaly_adaptive_k"),
         # 前 N 处图斑的边界框（列表，可 JSON 化）。不带它，报表只能印「35 处」
         # 却指不出任何一处 —— 用户要复核还是得去翻 regions.csv。
         "anomaly_top_regions": metrics.get("anomaly_top_regions") or [],

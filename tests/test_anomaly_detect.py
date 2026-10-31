@@ -441,3 +441,98 @@ class TestIslandsAreNotComparedToEachOther:
         # 岛数由夹具布局决定，不写死数字：写死一个数就变成「测夹具」了，
         # 真正要锁的是「两种模式下都如实报出来，且报的是同一批岛」。
         assert off.metrics["island_count"] == on.metrics["island_count"] > 1
+
+
+def _two_islands_with_tails(size: int = 512) -> tuple[np.ndarray, np.ndarray]:
+    """两块岛：左岛平滑、右岛**岛内就有一处强异常区**（z 的尾巴很重）。
+
+    真机 1.1.12 上 7 处待复核所在的岛，z 的 p99 分别是 4.06 / 5.66 / 6.96 / 10.22
+    ——不是「有纹理」（周期纹会被本岛 σ 吸收，z 只有 1.3），而是岛内存在**局部
+    强差异区**。按岛自适应阈值只对后者起作用：把门槛抬到这块岛自己的尾巴上沿。
+    """
+    rng = np.random.default_rng(7)
+    img = np.zeros((size, size, 3), np.float32)
+    island = np.zeros((size, size), bool)
+    mid = size // 2
+    gap = 16
+    # 左岛：平滑底 + 一处强斑（σ≈2，斑块 z 会到 20 以上）
+    left = np.array([110, 105, 95], np.float32)
+    img[:, :mid - gap // 2] = left
+    img[:, :mid - gap // 2] += rng.normal(0, 1.5, (size, mid - gap // 2, 3))
+    img[240:290, 100:150] = np.array([190, 185, 175], np.float32)
+    island[:, :mid - gap // 2] = True
+    # 右岛：底色偏亮但本身起伏大（σ≈12），再叠一处 4~5σ 的局部差异
+    right = np.array([150, 145, 135], np.float32)
+    img[:, mid + gap // 2:] = right
+    img[:, mid + gap // 2:] += rng.normal(0, 12.0, (size, size - mid - gap // 2, 3))
+    img[240:290, 380:430] = np.array([205, 198, 188], np.float32)
+    island[:, mid + gap // 2:] = True
+    return np.clip(img, 0, 255).astype(np.uint8), island
+
+
+class TestIslandAdaptiveThreshold:
+    """阈值按岛自适应：``k_i = clip(岛的 z 的 p99, 全局 k, k_max)``。
+
+    动机是语义对齐——同一个 k 意味着「比本岛常见起伏猛 3.5 倍」，但岛内 z 的尾巴
+    长度千差万别（真机 p99 从 4.06 到 10.22）。只**抬不降**（低于全局 k 的一律用
+    全局 k），所以平坦岛上的灵敏度一点不损失。
+    """
+
+    def test_threshold_is_lifted_on_the_island_with_a_tail(self):
+        from h3d.anomaly import AnomalyConfig, detect_atlas_anomalies
+
+        img, island = _two_islands_with_tails()
+        off = detect_atlas_anomalies(img, island)          # 默认关闭
+        on = detect_atlas_anomalies(img, island,
+                                    config=AnomalyConfig(adaptive_k=True))
+
+        assert off.metrics["k_max"] == off.metrics["k"], "关掉时不该有抬升"
+        assert on.metrics["k_max"] > on.metrics["k"], (
+            f"尾巴重的岛没有抬升门槛（k_max={on.metrics['k_max']}）")
+        assert on.metrics["k_max"] <= on.metrics["k_max_cap"], "抬升越过了上限"
+
+    def test_flat_island_keeps_the_global_threshold(self):
+        """没有尾巴的岛必须原样用全局 k——否则等于偷偷降了灵敏度。"""
+        from h3d.anomaly import detect_atlas_anomalies
+
+        from h3d.anomaly import AnomalyConfig
+
+        res = detect_atlas_anomalies(_gradient(512), _round_island(512),
+                                     config=AnomalyConfig(adaptive_k=True))
+        assert res.metrics["k_max"] == pytest.approx(res.metrics["k"], abs=1e-6), (
+            f"平坦图集被抬到了 {res.metrics['k_max']}")
+
+    def test_large_blob_is_not_eaten_by_the_island_tail(self):
+        """**上限是必要条件，不是保险**：没有上限时「取岛内 p99」会吃掉大斑块。
+
+        实测（未加上限）：120 texel 注入的 IoU 从 1.00 掉到 0.13、60 texel 掉到
+        0.66——因为斑块占岛面积 10%，岛的 p99 就落在斑块自己的分数上，
+        阈值等于「删掉这个岛最极端的 1%」，而斑块正是那 1%。
+        """
+        from h3d.anomaly import AnomalyConfig, detect_atlas_anomalies
+
+        for half in (30, 60):
+            img = _gradient(512)
+            island = _round_island(512)
+            _inject(img, 300, 200, half)
+            truth = np.zeros_like(island)
+            truth[200 - half:200 + half, 300 - half:300 + half] = True
+            res = detect_atlas_anomalies(img, island,
+                                         config=AnomalyConfig(adaptive_k=True))
+            iou = (res.mask & truth).sum() / max((res.mask | truth).sum(), 1)
+            assert iou >= 0.7, (
+                f"{half * 2} texel 注入在自适应阈值下 IoU 只有 {iou:.2f} —— "
+                f"岛内尾巴把斑块吃掉了")
+            assert res.metrics["adaptive_k"] is True
+
+    def test_adaptive_is_off_by_default(self):
+        """默认关闭，且**不是因为没做完**，是因为它在这件文物上是零和的。
+
+        实测（真机 1.1.12，11 处 ΔE=120 注入）：上限取 4.0/4.5/5.0/6.0 时，图斑
+        7→5/4/3/2，召回 9/11→8/11、8/11、7/11、**4/11**。每减一处待复核都要掉
+        召回——带缺陷的岛本身尾巴就重，把门槛抬到自己的尾巴上等于让真信号自己
+        盖住自己。留着开关是为了让后人能重新量，不是为了打开它。
+        """
+        from h3d.anomaly import AnomalyConfig
+
+        assert AnomalyConfig().adaptive_k is False
