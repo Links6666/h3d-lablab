@@ -181,6 +181,13 @@
   `size_px` 读 `task.results["M4"].metrics["atlas_size_px"]`。
 - 只重跑 M4：删 `run_manifest.json` 里 `M4/M5/M6` 三条记录（先备份）。**S1 无
   `input_key` → `RESUME_LEGACY` 跳过**，不会触发 COLMAP 重算。
+- **假引用要「体检」而不是「再扫一遍代码」**：改写入端只对新建档生效。`h3d archive refs`
+  五态 ok/empty/external/unverified/dangling —— 判据是**档案里的实体**，不是「长得像版本号」。
+  `dangling` 置空 + 原值写 `params.ref_repair`；`unverified`（记录晚于资产）只报不修
+  （现指向的实体是真的，清掉反而低估）；退出码当门：还剩 dangling 即 1。
+- **修复不能走 `register()`**：按 `content_key` 命中缓存会直接返回旧记录（改了不生效）
+  → 走 `Archive.rewrite_asset()`，只允许改 `uv_atlas_ref`/`params`，产物路径/内容键/版本号
+  与盘上记录不一致即拒绝（否则就是篡改历史的后门）。
 - **判据必须带反向对照**：真机继承 vs 基准图集，岛内逐 texel 中位 |Δ| 正确 6.33 /
   上下翻转 29.0 / 左右翻转 31.7 / 旋转 180° 31.7 / 平移 16 px 10.0 / 纯灰 62.7；
   ±4 px 平移搜索无更优偏移 = 无系统错位。只有「错的时候明显变大」才算有分辨力。
