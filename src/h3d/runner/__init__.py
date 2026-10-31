@@ -509,6 +509,16 @@ def _locate_texture_atlas(tex_dir: str, item_id: str,
     return os.path.join(tex_dir, cands[0]) if cands else None
 
 
+#: 带进 manifest 的图斑明细条数上限。报表要能「指着看第 1 处在哪」，但不能把
+#: 几十处全塞进 manifest —— 那是日记不是指标。完整清单仍在 regions.csv。
+_ANOMALY_TOP_N = 10
+
+
+#: 带进 manifest 的图斑明细条数上限。报表要能「指着看第 1 处在哪」，但不能把
+#: 几十处全塞进 manifest —— 那是日记不是指标。完整清单仍在 regions.csv。
+_ANOMALY_TOP_N = 10
+
+
 @register_stage("X3")
 def _stage_anomaly_qc(task: Task, cfg) -> StageResult:
     """X3 单期纹理异常筛查：在 M4 图集上做无监督离群，结论进质检报表。
@@ -573,6 +583,13 @@ def _stage_anomaly_qc(task: Task, cfg) -> StageResult:
         "anomaly_sigma_median": (None if m.get("sigma_median") is None
                                  else round(float(m["sigma_median"]), 3)),
         "island_ratio": round(float(m.get("island_ratio") or 0.0), 4),
+        # 前 N 处图斑的边界框（按面积降序，与 regions.csv 同序）。报表据此
+        # 画出「第 1 处 (x0,y0)-(x1,y1)」，用户不用再翻 CSV。
+        "anomaly_top_regions": [
+            {k: r[k] for k in ("region_id", "x0", "y0", "x1", "y1",
+                               "texels", "area_ratio", "score_mean")}
+            for r in (summary.get("regions") or [])[:_ANOMALY_TOP_N]
+        ],
     }
     outputs = [os.path.join(out_dir, n) for n in
                ("anomaly_heat.png", "anomaly_mask.png", "regions.csv",
@@ -710,6 +727,7 @@ def _stage_quality(task: Task, cfg) -> StageResult:
         metrics["anomaly_atlas"] = x3.get("anomaly_atlas")
         metrics["anomaly_atlas_digest"] = x3.get("anomaly_atlas_digest")
         metrics["anomaly_sigma_median"] = x3.get("anomaly_sigma_median")
+        metrics["anomaly_top_regions"] = x3.get("anomaly_top_regions") or []
 
     # 先落盘报告（失败也有据可查），再判定
     qc_dir = os.path.join(task.root, "60_qc", task.item_id)
@@ -784,6 +802,9 @@ def _stage_quality(task: Task, cfg) -> StageResult:
         "anomaly_atlas": metrics.get("anomaly_atlas"),
         "anomaly_atlas_digest": metrics.get("anomaly_atlas_digest"),
         "anomaly_sigma_median": metrics.get("anomaly_sigma_median"),
+        # 前 N 处图斑的边界框（列表，可 JSON 化）。不带它，报表只能印「35 处」
+        # 却指不出任何一处 —— 用户要复核还是得去翻 regions.csv。
+        "anomaly_top_regions": metrics.get("anomaly_top_regions") or [],
     }
     return StageResult("M5", TaskStatus.DONE, reports, manifest_metrics)
 

@@ -72,13 +72,12 @@
 - **断点续跑跳过 ≠ 无产物**：`is_done()` 命中须 `restore_stage()` 恢复 outputs/metrics。
 - **续跑判据是输入指纹不只是状态**（`runner/fingerprint.py`→manifest `input_key`）=外部输入摘要+
   上游阶段键+参数快照，**配置用减法**（只剔 `project`/`runner`；白名单漏一段就是「改参数不重跑」）。
-  旧记录无 key → 旧规则跳过。**并行 `workers>1` 不做续跑判定**（已补 WARNING 未修）。
+  **并行 `workers>1` 不做续跑判定**（已补 WARNING 未修）。
 - **同照片多件**按「名+大小+SHA-1」比对，命中复制 `fused_dense.ply`+`capture_meta.json`（S1→0.2s）；
   开关 `sfm_solve.reuse_identical_photos`。
 - **禁静默降级/`except: pass`**：兜底须同时写 metrics+WARNING（novel 曾被吞数周）。配置读
-  `utf-8-sig`（→`[E001]`）；`_is_junk_dir()` 过滤；`validate` 0 件 rc=1；子进程走
-  `proc.run_external`；派生状态原子写；`STAGE_ORDER` 必须与 `STAGE_REGISTRY` 一致（漏 P1→
-  KeyError 被 Qt 吞）。
+  `utf-8-sig`（→`[E001]`）；`validate` 0 件 rc=1；子进程走 `proc.run_external`；派生状态原子写；
+  `STAGE_ORDER` 必须与 `STAGE_REGISTRY` 一致（漏 P1→KeyError 被 Qt 吞）。
 
 ## 输出布局（paths.py 唯一出口）
 - `阶段成果/`（12 子目录 + `99_runs` + `output`）+ `交付成果/`（`report/`+`<件号>/`）+`输出说明.txt`；
@@ -184,10 +183,11 @@
   30.3/53.2/15.7 → z 3.21/1.82/**6.37**，只最后那处中）。低信噪比不是估计器缺陷，
   别用「按面积累加证据」硬拉（σ=53 的根源就是材质交界，一拉就炸假阳性）。改为报下限：
   `anomaly_sigma_median`（最粗尺度岛内 σ_L 中位，**只取 L 通道**，取错通道恒为地板 2.0）。
-- **该图集是上千个小 UV 岛拼的马赛克**：热力图最亮一圈压在岛边界（最近邻填充的固有偏差）；
-  腐蚀 0/2/3/5/8 只把误报压到 1.77/1.56/1.35/1.21% 却赔 23%~64% 面积 → 不腐蚀，注明「岛边缘
-  1~2 纹素内的结论不可靠」。连通域散布（641 个，≥24 纹素 425 个），真起过滤作用的是**面积比**
-  （1e-4）不是绝对纹素数。
+- **该图集是上千个小 UV 岛拼的马赛克**，而**图集里相邻纹素在实物上并不相邻** → 「局部背景」
+  跨岛取值物理上没意义，岛间反照率差会被记成异常（裁前 3 处 bbox 全是「亮岛被暗岛包围」）。
+  腐蚀边界只能把误报 2.18%→1.21% 还赔面积 → 不腐蚀；**正解是按岛归一化**（每岛只与自己岛
+  中位数比），未做。在此之前「35 处」只能读作**待人工复核处数，不是病害数**（报表脚注已写）。
+  连通域散布（641 个，≥24 纹素 425 个），真起过滤作用的是**面积比**（1e-4）。
 - 合成 12 项：6~120 texel 边界 IoU 全 1.00；纯净渐变/σ=1.5 噪声 0.000%；竖条纹贴横条纹关纹理
   不命中、开则 IoU≥0.7。
 - **已接进编排层**（切片 5）：阶段 `X3` 在 `M4→P1→`**`X3`**`→M5`，顺序只在
@@ -203,16 +203,15 @@
   （novel=0 照合 → 面数+70%、rmse+34%、覆盖−60%）。
 - **无度量基准不得缩放**：`_has_metric_anchor()=bool(task.raw_paths)`，无锚点 factor=1.0 +
   `reason=uncalibrated_sfm_units`；**SfM 的 PLY 塞进 00_raw 会被当锚点 → 假毫米数**。
-- 照片目录须同源：优先 `task.root/00_photo` 再回退上级（X2 曾多写一层 `dirname` → 色卡不生效）。
+- 照片目录须同源：优先 `task.root/00_photo` 再回退上级（多写一层 `dirname` → 色卡不生效）。
 
 ## COLMAP / 稠密
 1. mapper 多子重建，`sparse/0` 未必最大（取图像最多者，图像数读 `images.bin` 头 8B uint64）；
    `--output_path` 有 ExistsDir 校验，目录须先建。
 2. 可复现靠 `num_threads 1`；两遍稠密序号各 1..N，判据 grep=2N，进度须识别遍数。
 3. `tvec`≠相机中心：`C=-R_co^T@tvec`、`R=-R_co`（前 −Z）；错用致 `projected_cameras=0`、纹理全空。
-4. `patch_match_stereo` 会跳过已有 photometric.bin（位姿变→点云错乱但 rc=0）；全量重建须连
-   `<ws>/dense` 清。
-5. 同根两批互毁（`is_open` 失败、GPU 争抢 45→145s）；`core/lockfile.py` 接管残留锁。
+4. `patch_match_stereo` 跳过已有 photometric.bin（位姿变→点云错乱但 rc=0）；全量重建须清 `<ws>/dense`。
+5. 同根两批互毁（`is_open` 失败、GPU 争抢）；`core/lockfile.py` 接管残留锁。
 6. 超时覆盖两遍（30 张 3.84MP 实测 6815 s，`views×MP×45×passes` 下限 1800）；续算靠 `_pose_fp`；
    **超时也必须落盘**（否则残留上轮日志 → 误写「需 CUDA」）；取消须杀进程树。
 7. `dense_max_image_size` 默认 1600；关 geom_consistency 后 fusion 须 `--input_type photometric`。

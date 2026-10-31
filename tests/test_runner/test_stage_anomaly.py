@@ -38,11 +38,19 @@ def _atlas(size: int = 192, *, seed: int = 7) -> tuple[np.ndarray, np.ndarray]:
     return rgb, island
 
 
-def _write_atlas(root: str, item: str = "r1", *, size: int = 192) -> str:
-    """把图集/掩膜写进 ``50_tex/<item>/``（模拟 M4 产物），返回项目根。"""
+def _write_atlas(root: str, item: str = "r1", *, size: int = 192,
+                 blob: bool = False) -> str:
+    """把图集/掩膜写进 ``50_tex/<item>/``（模拟 M4 产物），返回项目根。
+
+    ``blob=True`` 时在岛内贴一个高对比色斑 —— 明细列表需要至少一处图斑才测得出来，
+    平滑渐变上恒为 0 处（那会让「列表正确」与「列表恒空」无法区分）。
+    """
     from PIL import Image
 
     rgb, island = _atlas(size)
+    if blob:
+        c = size // 2
+        rgb[c - 10:c + 10, c - 10:c + 10] = np.array([240, 235, 200], np.uint8)
     d = os.path.join(root, "50_tex", item)
     os.makedirs(d, exist_ok=True)
     Image.fromarray(rgb).save(os.path.join(d, f"{item}_L1.0_diffuse.png"))
@@ -113,6 +121,31 @@ class TestStageContract:
         assert res.metrics["anomaly_area_units"] == "texel_ratio"
         # 可检下限的可读形式：本件的纹理尺度 σ_L（Lab 单位）
         assert res.metrics["anomaly_sigma_median"] > 0
+
+    def test_top_regions_carried_with_bounded_length(self, tmp_path):
+        """指标里要带**前 N 处图斑的边界框**，但必须有上限。
+
+        报表要能直接指着看「第 1 处在哪」，而不是让用户去翻 CSV；但也不能把
+        几十处全塞进 manifest（那是日记不是指标）。所以固定取前 N（按面积降序，
+        与 regions.csv 同序），并写明总数。
+        """
+        from h3d.runner import _ANOMALY_TOP_N, _stage_anomaly_qc
+        from h3d.runner.task import TaskStatus
+
+        _write_atlas(str(tmp_path), blob=True)
+        res = _stage_anomaly_qc(_item(tmp_path), _cfg(tmp_path))
+
+        assert res.status == TaskStatus.DONE, res.metrics
+        top = res.metrics["anomaly_top_regions"]
+        assert isinstance(top, list) and top, "明细列表为空（注入的色斑没被检出？）"
+        assert len(top) <= _ANOMALY_TOP_N
+        first = top[0]
+        for key in ("region_id", "x0", "y0", "x1", "y1", "texels", "area_ratio"):
+            assert key in first, key
+        # 面积降序，且第一处确实框住了注入的色斑（中心在 (96,96)）
+        assert first["texels"] >= top[-1]["texels"]
+        assert first["x0"] <= 96 <= first["x1"], first
+        assert first["y0"] <= 96 <= first["y1"], first
 
     def test_broken_atlas_degrades_instead_of_failing_the_item(self, tmp_path):
         """图集是坏 PNG → 仍然 SKIPPED（不抛异常）。
@@ -297,6 +330,12 @@ def _m5_project(tmp_path) -> object:
         "anomaly_atlas": "50_tex/r1/r1_L1.0_diffuse.png",
         "anomaly_atlas_digest": "0123456789ab",
         "anomaly_sigma_median": 30.3,
+        "anomaly_top_regions": [
+            {"region_id": 1, "x0": 445, "y0": 5, "x1": 487, "y1": 26,
+             "texels": 590, "area_ratio": 0.000229, "score_mean": 6.404},
+            {"region_id": 2, "x0": 1777, "y0": 1291, "x1": 1827, "y1": 1316,
+             "texels": 964, "area_ratio": 0.000374, "score_mean": 5.816},
+        ],
     })
     return task, cfg
 
@@ -323,6 +362,9 @@ class TestMetricsReachTheReport:
         assert m5["anomaly_atlas_digest"] == "0123456789ab"
         # 「可检下限」必须跟着走：没有它，漏检只能被读成「没有病害」
         assert m5["anomaly_sigma_median"] == pytest.approx(30.3)
+        # 明细也要过白名单：否则报表只能看到「35 处」却指不出任何一处
+        assert len(m5["anomaly_top_regions"]) == 2
+        assert m5["anomaly_top_regions"][0]["x0"] == 445
 
     def test_anomaly_does_not_touch_the_quality_gate(self, tmp_path):
         """异常面积是参考信息，**不得**参与达标判定。
@@ -373,6 +415,44 @@ class TestMetricsReachTheReport:
         assert "岛边缘" in html, "缺少「岛边缘 1~2 纹素不可靠」的口径说明"
         # 纹理尺度要能在同一格里读出来（不加列，避免 16 列的表再变宽）
         assert "σ_L" in html, "报出了异常面积却没给「这件的纹理尺度有多大」"
+
+    def test_html_lists_region_boxes(self, tmp_path):
+        """报表要能直接指着看「第 1 处在哪」—— 而不是只给一个总数。
+
+        ``regions.csv`` 里有完整清单，但报表是交付物：让人为了看一处边界框去
+        翻 CSV，等于这一层筛查永远停在「跑过一次」。明细放进可折叠块，页面不
+        被撑长，也不改动已有章节编号。
+        """
+        from h3d.core import PipelineConfig, RunManifest
+        from h3d.report.html_export import generate_html
+
+        regions = [
+            {"region_id": 1, "x0": 445, "y0": 5, "x1": 487, "y1": 26,
+             "texels": 590, "area_ratio": 0.000229, "score_mean": 6.404},
+            {"region_id": 2, "x0": 1777, "y0": 1291, "x1": 1827, "y1": 1316,
+             "texels": 964, "area_ratio": 0.000374, "score_mean": 5.816},
+        ]
+        cfg = PipelineConfig()
+        cfg.runner.manifest = os.path.join(str(tmp_path), "90_meta", "m.json")
+        os.makedirs(os.path.dirname(cfg.runner.manifest), exist_ok=True)
+        m = RunManifest(config_sha256="abc123")
+        m.record("r1/M4", "done", [], 70.0, texture_size=2048,
+                 atlas_utilization=0.615, texture_coverage=0.55)
+        m.record("r1/M5", "done", [], 1.0, coverage=0.9, rmse_mm=2.0,
+                 mps_m=0.001, anomaly_ratio=0.0218, anomaly_regions=35,
+                 anomaly_sigma_median=14.5, anomaly_top_regions=regions)
+        m.save(cfg.runner.manifest)
+
+        out = os.path.join(str(tmp_path), "report.html")
+        generate_html(RunManifest.load(cfg.runner.manifest), out_path=out,
+                      project="t")
+        with open(out, encoding="utf-8") as fh:
+            html = fh.read()
+
+        assert "<details" in html, "明细没有做成可折叠块（会撑长页面）"
+        assert "(445, 5)-(487, 26)" in html, "第 1 处的边界框没画出来"
+        assert "共 35 处" in html, "只列了前 2 处，必须写明总数"
+        assert "regions.csv" in html, "要指出去哪里看完整清单"
 
     def test_accuracy_csv_has_anomaly_columns(self, tmp_path):
         """``accuracy.csv``（论文表的取数口）要带异常两列。

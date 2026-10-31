@@ -455,6 +455,10 @@ _TEMPLATE = """<!DOCTYPE html>
   td.mono { font-family: Consolas, "Courier New", monospace; font-size: 12px;
             color: #555; }
   .mono-note { font-size: 11px; color: #777; }
+  details { margin: 10px 0; }
+  details > summary { cursor: pointer; padding: 6px 0; color: #1a6bb5; }
+  table.mini { width: auto; margin: 8px 0 8px 18px; font-size: 12px; }
+  table.mini th, table.mini td { padding: 3px 10px; }
   .hint { color: #8a6d3b; background: #fcf8e3; padding: 10px 14px; border-radius: 4px;
           font-size: 13px; }
   ul.findings { padding-left: 20px; font-size: 13px; }
@@ -585,6 +589,8 @@ _TEMPLATE = """<!DOCTYPE html>
 </p>
 <p class="footnote">
   <b>异常面积 / 图斑数（X3 单期筛查）的读法</b>：它是<b>相对量</b>，不是病害面积。
+  图斑数是<b>待人工复核处数</b>，不是「查出了这么多病害」——图集里的相邻纹素在
+  实物上并不相邻（UV 岛拼贴），所以岛与岛之间的底色差也会被记成一处。
   每个纹素与**局部中位数背景**比，超过 k≈3.5 倍稳健尺度就算异常；所以同一处斑块
   在平滑区域与在粗糙纹理区域给出的分数不同——<b>检出能力随局部信噪比变化</b>，
   不能只报「可检出 ΔE≥X」。另外图集是若干 UV 岛拼成的，<b>岛边缘 1~2 纹素内的
@@ -595,6 +601,33 @@ _TEMPLATE = """<!DOCTYPE html>
   <code>图集摘要</code>是当次被检图集文件的内容摘要前 12 位——换一版图集重烘焙后
   这个值会变，结论才能对得上「基于哪一版」。
 </p>
+
+{% for row in tex_rows %}
+{% if row.anomaly_top %}
+<details>
+  <summary><b>{{ row.item }}</b>：共 {{ row.anomaly_n }} 处可疑图斑，
+    下列前 {{ row.anomaly_top|length }} 处（按面积降序）</summary>
+  <table class="mini">
+    <tr><th>#</th><th>边界框 (x0, y0)-(x1, y1)</th><th>纹素数</th>
+        <th>占岛内</th><th>均分</th></tr>
+    {% for r in row.anomaly_top %}
+    <tr>
+      <td class="num">{{ r.id }}</td>
+      <td class="mono">{{ r.bbox }}</td>
+      <td class="num">{{ r.texels }}</td>
+      <td class="num">{{ r.ratio }}</td>
+      <td class="num">{{ r.score }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="footnote">
+    坐标是<b>图集纹素坐标</b>（左上角为原点，含端点），可直接在
+    <code>60_qc/{{ row.item }}/anomaly/anomaly_heat.png</code> 上对照。
+    完整清单（含峰分）见 <code>60_qc/{{ row.item }}/anomaly/regions.csv</code>。
+  </p>
+</details>
+{% endif %}
+{% endfor %}
 
 <h2>四、质检指标（M5）</h2>
 <table>
@@ -902,6 +935,18 @@ def generate_html(manifest: RunManifest,
                                     default="未筛查"),
             "anomaly_digest": (get(item, "M5").get("anomaly_atlas_digest")
                                or "—"),
+            "anomaly_n": _num(get(item, "M5").get("anomaly_regions"), 0,
+                              default=0),
+            # 明细行在 Python 侧拼好：模板只负责排版，不做数字格式化
+            "anomaly_top": [
+                {"id": r.get("region_id"),
+                 "bbox": f"({r.get('x0')}, {r.get('y0')})-"
+                         f"({r.get('x1')}, {r.get('y1')})",
+                 "texels": r.get("texels"),
+                 "ratio": _pct(r.get("area_ratio"), 3),
+                 "score": _num(r.get("score_mean"), 2)}
+                for r in (get(item, "M5").get("anomaly_top_regions") or [])
+            ],
             "verdict": verdict, "cls": cls,
         })
 
