@@ -127,18 +127,18 @@
 - 布局 `archive/{artifact.json, epochs/<id>.json, assets/<id>__v<N>.json, atlas/<ver>.json}`；
   **包裹不改** `阶段成果/`；`CanonicalAsset` 只存相对路径+哈希（换盘符不断）。**只读靠代码强制**
   （`open(mode)` 含 `w/a/x/+` 抛 `ReadOnlyViolation`，相对路径锁在项目根内）。
-- **`looks_like_project()` 只认旧布局**，新布局在 `阶段成果/` 下会被判否 → 迁移/GUI 建档用
-  `looks_like_h3d_project()`（都认，仍排除 `output`/`report`）。
+- **`looks_like_project()` 只认旧布局**（新布局在 `阶段成果/` 下判否）→ 建档/迁移用
+  `looks_like_h3d_project()`（仍排除 `output`/`report`）。
 - `content_key` 必须嵌套+`sort_keys`，禁止拼字符串（`{a:1,b:23}` 与 `{a:12,b:3}` 撞车 → 缓存返回
   错误产物且不报错）；`KEY_SCHEMA` 进 payload。基准期首个时相自动，显式改换必须 WARNING。
 - **迁移的 `route` 只是布局推断**（00_raw 有 .ply 就是 A），不是来源验证（1.1.12 有 SfM 冒充
   激光件）；B3 须补真实核验。runner **只在已建档项目**登记产物。
 - **建档入口在 GUI「打开项目」**（`ensure_archive` 四态），并在 `_stage_inputs()` **之后**再补一次
-  （那一步才把数据复制进 00_raw/00_photo）；`read_status()` 只读刷新绝不建档。
+  （那步才把数据复制进 00_raw）；`read_status()` 只读刷新绝不建档。
 - **空时相必须允许**（`migrate(allow_no_asset=True)`，CLI 默认仍拒）：`_register_archive` 要求
   `baseline()` 非空 → 新建项目首跑前登记永远不发生。`migrate._first_item` 必须探 `00_photo`。
-- **「机制写好了但没人调用」**是 B1 最大坑：`AtlasRegistry.register` 零调用 → inherit 永远报「没有
-  图集记录」。查这类先 `grep -rn "\.register(" src/`。
+- **「机制写好了但没人调用」**是 B1 最大坑（`AtlasRegistry.register` 曾零调用 → inherit 永远报
+  「没有图集记录」）。查这类先 `grep -rn "\.register(" src/`。
 - `register_layout(arch, uv_path, item_id=…)`：幂等、变了自动 `atlas-vN+1`+WARNING、坏文件返
   `None`。**图集是件级**（`item_id` 决定幂等范围，否则多件项目第二件判成换版、第一件引用被改写）；
   登记位在 runner `_register_archive`，**先图集后资产**，`size_px` 取 `results["M4"].metrics`。
