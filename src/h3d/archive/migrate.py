@@ -32,7 +32,9 @@ __all__ = ["migrate"]
 
 log = logging.getLogger(__name__)
 
-#: 迁移时写入的初始图集版本。B1 做图集继承后由基准期重新定名。
+#: 迁移产物 content_key 的成分之一（只影响去重键，不再写进 ``uv_atlas_ref``）。
+#: 图集由基准期跑 M4 时登记（``archive.atlas.register_layout``），迁移**不知道**
+#: 也不该猜：存量项目没有 ``archive/atlas/`` 记录，写一个版本号等于编造引用。
 _INITIAL_ATLAS = "atlas-v1"
 
 #: 视为「激光几何原始数据」的扩展名。
@@ -222,7 +224,7 @@ def migrate(root: str, *, epoch_id: str = "E1", title: str = "",
         asset = CanonicalAsset(
             epoch_id=epoch_id, version=1, content_key=key,
             mesh_path=rel(mesh), cloud_path=None, texture_path=rel(tex),
-            uv_atlas_ref=_INITIAL_ATLAS, cameras_path=rel(meta),
+            uv_atlas_ref="", cameras_path=rel(meta),
             params={"migrated_from": "legacy_layout"},
             created_at=_dt.datetime.now().isoformat(timespec="seconds"),
         )

@@ -995,7 +995,8 @@ class BatchProcessor:
                         task.item_id, stage_id, exc)
             return ""
 
-    def _register_archive(self, task: Task, manifest: RunManifest) -> None:
+    @staticmethod
+    def _register_archive(task: Task, manifest: RunManifest) -> None:
         """把本件产物登记进文物档案（**仅在项目已建档时**）。
 
         为什么放在编排层而不是某个阶段里：档案登记是「书记员」的职责，不是
@@ -1048,12 +1049,38 @@ class BatchProcessor:
                 return (os.path.relpath(p, proj).replace(os.sep, "/")
                         if p else None)
 
+            # 图集登记必须在资产登记之前：资产的 uv_atlas_ref 要指到刚登记的
+            # 实体上。原来这里写死 "atlas-v1" —— 引用没有实体，报表却一切正常
+            # （r16 手写白名单的同构缺陷，真机 2026-10-31 暴露）。
+            atlas_ref = ""
+            try:
+                from h3d.archive.atlas import register_layout
+                m4 = task.results.get("M4")
+                size_px = int(((m4.metrics if m4 else {}) or {}).get(
+                    "atlas_size_px") or 0)
+                uv_path = (os.path.join(os.path.dirname(tex),
+                                        f"{task.item_id}_uv.npz")
+                           if tex else "")
+                if uv_path:
+                    rec = register_layout(arch, uv_path,
+                                          item_id=task.item_id,
+                                          size_px=size_px)
+                    atlas_ref = rec.atlas_version if rec else ""
+                if not atlas_ref:
+                    log.warning(
+                        "未登记图集（%s）：缺 50_tex/%s/%s_uv.npz 或布局读不出，"
+                        "本件纹理无法被复测期继承",
+                        task.item_id, task.item_id, task.item_id)
+            except Exception as exc:  # noqa: BLE001 - 档案属增量能力
+                log.warning("图集登记失败（继承将不可用）：%s（%s）",
+                            task.item_id, exc)
+
             asset = CanonicalAsset(
                 epoch_id=base.epoch_id, version=1,
                 content_key=_archive_key(
                     inputs, {"pipeline": 1, "stages": stage_keys}),
                 mesh_path=_rel(mesh), cloud_path=None, texture_path=_rel(tex),
-                uv_atlas_ref="atlas-v1", cameras_path=_rel(cam),
+                uv_atlas_ref=atlas_ref, cameras_path=_rel(cam),
                 params={"pipeline": "runner", "stage_keys": stage_keys},
                 created_at=datetime.now().isoformat(timespec="seconds"))
             saved = arch.register(asset)

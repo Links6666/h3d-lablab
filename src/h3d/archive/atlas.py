@@ -22,6 +22,7 @@ texel 与第 1 期不存在一一对应，ΔE 逐点比较完全失效。
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 from dataclasses import asdict, dataclass, field
@@ -34,7 +35,7 @@ from .store import Archive, _atomic_write_json, _load_json
 
 __all__ = ["AtlasFrozen", "AtlasRecord", "AtlasRegistry", "ATLAS_DIR",
            "UvLayout", "uv_digest", "save_uv_layout", "load_uv_layout",
-           "load_uv_layout_ex"]
+           "load_uv_layout_ex", "register_layout"]
 
 #: 图集记录目录（位于 ``<项目>/archive/`` 下）。
 ATLAS_DIR = "atlas"
@@ -44,6 +45,8 @@ ATLAS_DIR = "atlas"
 _VERSION_RE = re.compile(r"^atlas-v(\d+)$")
 
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+
+log = logging.getLogger(__name__)
 
 
 class AtlasFrozen(RuntimeError):
@@ -210,6 +213,10 @@ class AtlasRecord:
     artifact_id: str
     epoch_id: str
     uv_digest: str
+    #: 布局属于哪一件文物。图集是**件级**资产：一个项目可以有多件，各件各有
+    #: 一套 UV 展开；没有这个字段就无法区分「同一件重跑」与「另一件登记」，
+    #: 后者会被误判成换版。
+    item_id: str = ""
     mesh_digest: str = ""
     size_px: int = 0
     uv_rel_path: str = ""
@@ -315,3 +322,79 @@ class AtlasRegistry:
         saved = AtlasRecord.from_dict(payload)
         _atomic_write_json(self._path(saved.atlas_version), saved.to_dict())
         return saved
+
+
+def _record_item(rec: AtlasRecord) -> str:
+    """记录归属的件号。旧记录（无 ``item_id`` 字段）从 ``note`` 里捞回来。"""
+    if rec.item_id:
+        return rec.item_id
+    m = re.search(r"item=([^,;\s]+)", rec.note or "")
+    return m.group(1) if m else ""
+
+
+def register_layout(arch: Archive, uv_path: str, *, item_id: str,
+                    size_px: int = 0,
+                    mesh_digest: str = "") -> AtlasRecord | None:
+    """把一份落盘的 UV 布局登记成档案的图集版本。返回登记后的记录。
+
+    为什么需要这个入口（真机 2026-10-31）
+    ------------------------------------
+    B1 第一版只做了「冻结判定 + 继承读取」，**没有任何代码写
+    ``archive/atlas/atlas-vN.json``**，于是 ``inherit`` 永远报「没有图集记录」，
+    而且重跑 M4 也补不上：落 ``uv.npz`` 与登记图集是两件事。同处还留着
+    ``uv_atlas_ref="atlas-v1"`` 的手写常量——资产声称自己挂在一个从不存在的
+    图集上，报表一切正常。这是 r16「手写白名单」的同构缺陷。
+
+    语义
+    ----
+    * 图集由**基准期**定义：记录一律挂在 ``arch.baseline()`` 上，调用方负责
+      判断「本次跑的是不是基准期」（复测期不得改写基准图集）。
+    * 无档案基准期 / 布局文件缺失或损坏 → 返回 ``None``，**不建目录不抛错**：
+      档案是增量能力，不能反过来让建模失败。
+    * ``uv_rel_path`` 相对项目根（换盘符/换机器不断，与 ``CanonicalAsset``
+      同一条纪律）；解析后落到项目根之外的路径直接拒绝。
+    """
+    layout_path = os.path.abspath(uv_path) if uv_path else ""
+    if not layout_path or not os.path.isfile(layout_path):
+        return None
+    try:
+        layout = load_uv_layout_ex(layout_path)
+    except (OSError, ValueError):
+        return None
+    base = arch.baseline()
+    if base is None:
+        return None
+    root = arch.root
+    rel = os.path.relpath(layout_path, root).replace(os.sep, "/")
+    if rel.startswith("../") or _is_absolute(rel):
+        return None
+    registry = AtlasRegistry(arch)
+    digest = uv_digest(layout.uv, layout.faces)
+    same_item = [r for r in registry.versions()
+                 if _record_item(r) == (item_id or "")]
+    current = same_item[-1] if same_item else None
+    if current is not None and current.uv_digest == digest:
+        # 幂等短路：又跑了一次 M4，但布局一字未改。若不在这里返回，每跑一次
+        # 版本号就涨一格，复测期继承的到底是哪一版将无法追溯。
+        return current
+    rec = AtlasRecord(
+        atlas_version=registry.next_version(),
+        artifact_id=arch.artifact().artifact_id,
+        epoch_id=base.epoch_id,
+        uv_digest=digest,
+        mesh_digest=mesh_digest,
+        size_px=int(size_px),
+        uv_rel_path=rel,
+        texels=int(size_px) * int(size_px),
+        item_id=item_id, note=f"item={item_id}")
+    if current is not None:
+        # 换版不是错误，但**绝不许静默**：v1 原样保留，可引用旧版的资产从此
+        # 与新图集无法逐 texel 比对 —— 这类「看起来成功」的失效本项目栽过两次
+        # （r16 手写白名单、r17 自报 rmse）。
+        log.warning(
+            "基准图集换版：%s（uv_digest %s）→ %s（uv_digest %s）。"
+            "旧版记录与布局文件均保留未覆盖；引用旧图集的产物需重算才能与新图集"
+            "逐 texel 比对（atlas_stale 自动标记尚未实装）",
+            current.atlas_version, current.uv_digest[:12],
+            rec.atlas_version, digest[:12])
+    return registry.register(rec)

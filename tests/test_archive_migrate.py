@@ -55,7 +55,11 @@ def test_migrate_creates_artifact_epoch_and_asset(tmp_path):
     asset = arch.latest("E1")
     assert asset is not None and asset.version == 1
     assert asset.mesh_path.replace("\\", "/").endswith("30_dense/relic_001/relic_001.ply")
-    assert asset.uv_atlas_ref  # 迁移时给一个初始图集版本，B1 再谈继承
+    # 迁移**不能**编造图集引用：存量项目没有图集记录，写 ``atlas-v1`` 等于让资产
+    # 声称自己挂在一个从不存在的图集上（真机 2026-10-31：两个存量项目都这样，
+    # inherit 报「没有 atlas-v1 的记录」时没人知道其实根本没登记过）。
+    assert asset.uv_atlas_ref == ""
+    assert not os.path.isdir(os.path.join(str(root), "archive", "atlas"))
 
 
 def test_migrate_marks_route_b_without_raw(tmp_path):
