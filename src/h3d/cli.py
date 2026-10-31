@@ -88,6 +88,16 @@ def _build_parser() -> argparse.ArgumentParser:
                             help="图集边长；默认沿用基准图集记录的尺寸")
     p_arch_inh.add_argument("--json", action="store_true", help="以 JSON 输出")
 
+    p_arch_refs = arch_sub.add_parser(
+        "refs", help="体检资产里的图集引用（查无实体的可置空修复）")
+    p_arch_refs.add_argument("-p", "--path", default=".", help="项目根目录")
+    p_arch_refs.add_argument(
+        "--fix", action="store_true",
+        help="把「查无实体」的引用置空（原值留在 params.ref_repair）")
+    p_arch_refs.add_argument(
+        "--dry-run", action="store_true", help="只列出将要修复的条目，不写文件")
+    p_arch_refs.add_argument("--json", action="store_true", help="以 JSON 输出")
+
     return parser
 
 
@@ -337,6 +347,90 @@ def _cmd_archive_inherit(args) -> int:
     return 0 if res.ok else 1
 
 
+#: 体检状态的显示名。状态码本身给脚本用，中文名给人看 —— 两边都要有，
+#: 只输出 ``dangling`` 这种词的话，用户不会知道它意味着「这条引用指向空气」。
+_REF_STATE_LABEL = {
+    "ok": "合格",
+    "empty": "无引用",
+    "external": "跨项目",
+    "unverified": "时间倒挂",
+    "dangling": "查无实体",
+}
+
+
+def _cmd_archive_refs(args) -> int:
+    """``h3d archive refs``：体检资产里的图集引用，可选修复。
+
+    背景：B1 切片 7 之前 ``migrate`` 与 runner 都往 ``uv_atlas_ref`` 里写死
+    ``"atlas-v1"``，而档案里没有那条记录。改掉写入口只对新建档生效，存量档案
+    里那批假引用还在——所以需要一次显式体检 + 修复。
+
+    退出码当门用：**还剩「查无实体」就是 1**（没修或修不掉），全绿才 0。
+    时间倒挂（``unverified``）不算失败：实体现在确实在，只是证明不了当时也在。
+    """
+    import json as _json
+
+    from h3d.archive import Archive
+    from h3d.archive.audit import audit_atlas_refs, repair_atlas_refs
+
+    try:
+        arch = Archive.open(args.path)
+    except FileNotFoundError:
+        print(f"该目录还没有文物档案：{args.path}\n"
+              f"  建档：h3d archive migrate <项目目录>", file=sys.stderr)
+        return 1
+
+    report = repair_atlas_refs(arch, dry_run=bool(args.dry_run or not args.fix))
+    fixed = report.repaired if (args.fix and not args.dry_run) else []
+    # 修完之后退出码必须看**盘上现在**还剩几条，而不是修复前的清单：
+    # 否则「刚修好」也会报 rc=1，脚本以为失败了。
+    findings = audit_atlas_refs(arch) if fixed else report.findings
+    dangling = [f for f in findings if f.state == "dangling"]
+
+    if args.json:
+        print(_json.dumps({
+            "artifact": arch.artifact().to_dict(),
+            "findings": [{"epoch_id": f.epoch_id, "version": f.version,
+                          "ref": f.ref, "state": f.state, "detail": f.detail}
+                         for f in report.findings],
+            "repaired": [] if not fixed else
+                        [{"epoch_id": f.epoch_id, "version": f.version,
+                          "dropped": f.ref} for f in fixed],
+            "dry_run": bool(args.dry_run or not args.fix),
+        }, ensure_ascii=False, indent=2))
+        return 0 if not dangling else 1
+
+    art = arch.artifact()
+    print(f"文物：{art.artifact_id}  {art.title}")
+    if not report.findings:
+        print("  （还没有产物可体检）")
+    counts: dict[str, int] = {}
+    for f in report.findings:
+        counts[f.state] = counts.get(f.state, 0) + 1
+        label = _REF_STATE_LABEL.get(f.state, f.state)
+        print(f"  {label:<6} {f.epoch_id} v{f.version}  {f.ref or '—':<18} "
+              f"{f.detail}")
+
+    if fixed:
+        print(f"\n已置空 {len(fixed)} 条引用的图集字段"
+              f"（原值留在 params.ref_repair，可追溯）：")
+        for f in fixed:
+            print(f"  {f.epoch_id} v{f.version}  {f.ref}")
+    elif dangling and args.fix:
+        print(f"\n--dry-run：以上 {len(dangling)} 条**将**被置空，本次未写文件。")
+    elif dangling:
+        print(f"\n{len(dangling)} 条引用查无实体。加 --fix 置空"
+              f"（不可逆，先用 --dry-run 看清单）：")
+        for f in dangling:
+            print(f"  {f.epoch_id} v{f.version}  {f.ref}")
+
+    summary = "  ".join(f"{_REF_STATE_LABEL.get(k, k)} {v}"
+                        for k, v in sorted(counts.items()))
+    tail = f"（已置空 {len(fixed)}）" if fixed else ""
+    print(f"\n体检 {len(report.findings)} 条：{summary}{tail}")
+    return 0 if not dangling else 1
+
+
 def _cmd_archive(args) -> int:
     """文物档案：迁移（存量项目 → 时相）与状态查看。
 
@@ -369,6 +463,9 @@ def _cmd_archive(args) -> int:
 
     if args.archive_cmd == "inherit":
         return _cmd_archive_inherit(args)
+
+    if args.archive_cmd == "refs":
+        return _cmd_archive_refs(args)
 
     # status
     try:

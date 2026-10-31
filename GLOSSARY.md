@@ -54,7 +54,7 @@ PDF 第 9 章把七个构建阶段命名为 P0–P6，但 `P1` 在代码里已�
 | 代号 | 内容 | 交付物 | 依赖 | 本轮状态 |
 |---|---|---|---|---|
 | `B0` | 契约与档案（本文件 + 类型定义 + 只读挂载 + 内容哈希 + 迁移 + 续跑指纹 + GUI 入口） | 契约文档 + `h3d/archive/` + `h3d/runner/fingerprint.py` + 迁移脚本 + 「文物档案」页 | — | **闭环**（切片 1–6 完成；见 `docs/adr/0001`） |
-| `B1` | 图集继承（复测期重烘焙到基准图集 + 版本冻结） | re-bake 模块 + texel 对齐测试 | B0 | **内核 + CLI + GUI + 图集登记完成；真机端到端跑通**（`1.1.12`→`1.1.11`，逐 texel 中位差 6.33）；真实复测数据未验 |
+| `B1` | 图集继承（复测期重烘焙到基准图集 + 版本冻结） | re-bake 模块 + texel 对齐测试 | B0 | **内核 + CLI + GUI + 图集登记 + 引用体检完成；真机端到端跑通**（`1.1.12`→`1.1.11`，逐 texel 中位差 6.33）；真实复测数据未验 |
 | `B2` | X3 单时相异常检测 | 异常热力图 + 掩膜 + 区域列表 | B0 | 未开始 |
 | `B3` | X1 补全（前置校验 / 稳定区 ICP / LOD / ΔE） | 距离与色差热力图 + 报表 | B0, B1 | 未开始 |
 | `B4` | A0 病害语义（规范转类别 + MobileSAM 标注 + YOLOv8n-seg） | 类别体系 + 数据集 + best.pt + 面积报表 | B0 | 未开始 |
@@ -78,6 +78,10 @@ PDF 第 9 章把七个构建阶段命名为 P0–P6，但 `P1` 在代码里已�
 | **图集限定名** | `<artifact_id>@atlas-vN`（如 `relic_001@atlas-v1`） | 跨项目引用必须带前缀：`atlas-v1` 是**项目内**命名空间，两个项目的 v1 不是一回事 |
 | **图集登记 register_layout** | `h3d.archive.atlas.register_layout(arch, uv_path, item_id=…)`：由 runner 在 M4 之后调用，写 `archive/atlas/atlas-vN.json` | 图集是**件级**资产（`item_id` 进记录）；布局没变则幂等，变了自动建 `atlas-vN+1` 并 WARNING（旧版不覆盖）；缺/坏 npz 返回 `None` 不建目录 |
 | **编造引用** | 资产/报表里写了一个版本号、但档案里没有对应实体（如迁移直接写 `uv_atlas_ref="atlas-v1"` 却从无 `atlas/` 记录） | 与 r16 手写白名单同构：一切看起来正常，直到要继承时才炸。**引用必须来自登记结果** |
+| **引用体检 audit_atlas_refs** | 逐条核对资产 `uv_atlas_ref` 是否在档案里有实体，五态：`ok` / `empty` / `external` / `unverified` / `dangling` | 判据是**档案里的实体**，不是「长得像版本号」；每条资产都落一行（0 行无法区分「全合格」与「没查」） |
+| **时间倒挂 unverified** | 图集记录 `frozen_at` **晚于**资产 `created_at`：现在查得到，写引用那一刻还没有 | 只报不修：引用现指向的实体是真的，清掉反而低估；要不要重跑由人判断 |
+| **引用修复 repair_atlas_refs** | `h3d archive refs [--fix] [--dry-run]`：把 `dangling` 置空，原值/原因写进 `params.ref_repair` | 只置空不「回填」——证不出来就不编；`external`/`unverified` 不动；退出码当门：还剩 dangling 即 1 |
+| **原地改写 rewrite_asset** | `Archive.rewrite_asset(asset)`：覆盖已登记资产，**只允许改** `uv_atlas_ref` 与 `params` | 不进 `register()`（会命中缓存不生效，或另起版本）；产物路径/内容键/时相/版本号不一致即拒绝 |
 | **图集继承 inherit** | 用基准的 mesh/uv/faces + 复测的相机/照片重投影 | **不重新展开 UV**；位姿变换算错不报错，判据是纹素差不是覆盖率 |
 | **内容哈希 content_key** | `sha256(输入数据哈希 + 参数快照)` 的规范化结果 | 命中即复用，是「不重复计算」的机制本体 |
 | **只读挂载 read-only mount** | 分析入口拿到的产物句柄，任何写操作抛 `ReadOnlyViolation` | 由代码强制，不靠约定 |

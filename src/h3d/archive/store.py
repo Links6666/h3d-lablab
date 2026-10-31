@@ -336,6 +336,36 @@ class Archive:
         return saved
 
     # -- 只读挂载 -----------------------------------------------------------
+    def rewrite_asset(self, asset: CanonicalAsset) -> CanonicalAsset:
+        """**就地**改写一条已登记资产，只允许改引用类字段。
+
+        存在的理由只有一条：存量档案里 ``uv_atlas_ref`` 被写成了不存在的图集
+        （B1 切片 7 之前的 ``migrate`` 与 runner 都写死 ``atlas-v1``），需要一次
+        显式修复。修复**不能**走 :meth:`register` —— 那会按 ``content_key`` 命中
+        缓存直接返回旧记录（改了也不生效），或者在哈希不同时另起一个版本
+        （历史变成两条，谁也说不清哪条是真的）。
+
+        因此这里把口子收窄到「引用元数据」：``uv_atlas_ref`` 与 ``params`` 之外
+        的任何字段（产物路径、内容键、时相、版本号）与盘上的记录不一致，
+        一律拒绝 —— 否则这个接口就成了「悄悄篡改历史」的后门。
+        """
+        path = self._asset_path(asset.epoch_id, asset.version)
+        current = _load_json(path)
+        if current is None:
+            raise FileNotFoundError(
+                f"档案里没有 {asset.epoch_id} v{asset.version} 这条资产，不能改写")
+        old = CanonicalAsset.from_dict(current)
+        for name in ("content_key", "mesh_path", "cloud_path", "texture_path",
+                     "cameras_path"):
+            if getattr(old, name) != getattr(asset, name):
+                raise ValueError(
+                    f"只有引用类字段可改：{name} 从 {getattr(old, name)!r} 变成 "
+                    f"{getattr(asset, name)!r}，这会篡改历史产物")
+        saved = CanonicalAsset.from_dict({**asset.to_dict(),
+                                          "version": old.version})
+        _atomic_write_json(path, saved.to_dict())
+        return saved
+
     def mount(self, asset: CanonicalAsset) -> ReadOnlyAsset:
         """把产物挂成只读句柄，供分析入口（X1 / X3 / A0…）使用。"""
         paths: dict[str, str] = {}

@@ -136,6 +136,41 @@ float64 读回会判成「图集变了」，版本号无意义地一路涨）、
 一套 UV 展开；没有这个字段，「另一件登记」会被误判成「同一件换版」，前一件的
 引用会被悄悄改写。
 
+### D8 存量假引用靠「体检 + 显式修复」收口，判据是档案实体而非字符串
+
+D7 改掉了写入端（runner 取登记结果、`migrate` 不再写引用），但那只对**新建档**
+生效。1.1.0~1.1.13 期间建的档里，`uv_atlas_ref="atlas-v1"` 已经躺在
+`archive/assets/*.json` 里，而档案里没有那条记录——引用指向空气。
+
+修复不能靠「再扫一遍代码」：没有写入口就不该有检查点，检查点必须由人触发。
+因此加一条体检命令 `h3d archive refs`，把每条资产的引用判成五态：
+
+| 状态 | 判据 | 动作 |
+|---|---|---|
+| `ok` | 记录存在，且 `frozen_at` 早于资产 `created_at` | 不动 |
+| `empty` | 无引用（迁移后新建档的正常态） | 不动 |
+| `external` | 限定名 `<artifact>@atlas-vN`，实体在基准项目里 | 不动（本档案无资格判定） |
+| `unverified` | 记录存在但**晚于**资产创建：写引用那一刻实体还不存在 | **只报不修**，见下 |
+| `dangling` | 记录根本不存在 | **置空** `uv_atlas_ref`，原值留 `params.ref_repair` |
+
+三条关键取舍：
+
+1. **置空而不是回填。** 「能证明才回填」，而存量资产既没有自己的 `_uv.npz`
+   指纹，纹理文件也可能已被后来的重跑覆盖——回填出来的「正确」是现在对、
+   当时不对。置空是「不再声称挂在某版图集上」，不是「抹掉曾经有过一条引用」，
+   所以原值、原因、判据文本一律写进 `params.ref_repair` 留痕。
+2. **`unverified` 不修。** 1.1.12 的两条资产（14:18/14:47 写死 `atlas-v1`，
+   记录 16:23 才建）正是这种：写引用时确实没有实体，但盘上的纹理现在确实是
+   `atlas-v1` 烘的，清掉反而低估。留状态 + 报表可见，让人判断要不要重跑。
+3. **就地改写走 `Archive.rewrite_asset()`，不进 `register()`。** `register` 会按
+   `content_key` 命中缓存直接返回旧记录（改了不生效），或者在哈希不同时另起版本
+   （历史变两条，谁也说不清哪条是真的）。`rewrite_asset` 只允许改
+   `uv_atlas_ref` 与 `params`，产物路径/内容键/时相/版本号一律比对盘上记录，
+   不一致即拒绝——否则这个接口就是「悄悄篡改历史」的后门。
+
+退出码当门用：**还剩 `dangling` 就是 1**（未修或修不掉），全绿才 0；`unverified`
+不算失败。`--dry-run` 只列清单不落盘。
+
 ## 后果
 
 **正面**
@@ -158,9 +193,10 @@ float64 读回会判成「图集变了」，版本号无意义地一路涨）、
 ## 未决
 
 - 自动 `atlas_stale` 标记与报表列（本批未做）。
-- 存量资产的**假引用残留**：1.1.0~1.1.13 迁移建的档里，`uv_atlas_ref="atlas-v1"`
-  已经写进去了（当时还没登记机制）。改 `migrate` 只对新建档生效，旧档案需要一次
-  显式修复（置空或按现有 `atlas/` 记录回填），未做。
+- 存量假引用：D8 已给体检/修复入口，`1.1.11` 的 `E1__v1` 已置空。但
+  `1.1.12` 的两条停在 `unverified`（记录晚于资产）——要不要为它们重跑一次 M4
+  让时间戳对齐，还是就这样带着痕迹留着，**未决**。另外 `1.1.0~1.1.10` 的其余
+  存量项目没有逐一跑过体检。
 - 同一项目内多时相布局（D1 的另一条路）。
 - 跨期配准的**真实**精度：`align_points_to_mesh` 是「点云→网格」，复测是网格→
   网格，两者靠顶点采样近似。真实数据上需要复核 fitness 与最终纹理的一致性。
@@ -178,6 +214,7 @@ float64 读回会判成「图集变了」，版本号无意义地一路涨）、
 | 5 | `inherit_epoch` 编排（跨项目、限定名、失败分流） | ✅ | `tests/test_archive_inherit_epoch.py` 7 项 |
 | 6 | CLI `h3d archive inherit` + GUI「继承基准图集…」 | ✅ | `tests/test_cli_archive_inherit.py` 5 项 + `test_gui_archive_panel.py` 8 项 |
 | 7 | 图集登记接线：`register_layout` + runner 承接 + 件级归属 + 迁移不编造引用 | ✅ | `tests/test_archive_atlas_register.py` 5 项 + `test_runner_atlas_ref.py` 3 项 + `test_archive_migrate.py` 补断言 |
+| 8 | 引用体检与修复：`audit_atlas_refs` 五态 + `repair_atlas_refs` 置空留痕 + `Archive.rewrite_asset` 收窄口子 + CLI `h3d archive refs` | ✅ | `tests/test_archive_ref_audit.py` 6 项 + `test_cli_archive_refs.py` 5 项 |
 
 真机（2026-10-31，`E:/兵马俑照片`）：
 
@@ -186,6 +223,9 @@ float64 读回会判成「图集变了」，版本号无意义地一路涨）、
 | 切片 1–6 后直接继承 | rc=1「基准项目没有 atlas-v1 的图集记录」——两个存量项目都是迁移建的档，且当时**没有任何代码登记图集**，重跑 M4 也补不上（这就是切片 7 的由来） |
 | 切片 7 后：`1.1.12` 重跑 M4/M5/M6 | rc=0，落 `50_tex/relic_001/relic_001_uv.npz`（2.39 MB）+ `archive/atlas/atlas-v1.json`（digest `09d6c00f…`，`size_px=2048`，`item_id=relic_001`） |
 | `--base 1.1.12 --from 1.1.11` | **rc=0**，`relic_001@atlas-v1`，2048²，`s=0.9886`，`projected_cameras=30/30`，岛内填充率 98.92%，`in_frame=92.54%` |
+| 切片 8 体检 `1.1.11` | rc=1：`E1 v1` **查无实体**（`atlas-v1`，项目连 `archive/atlas/` 都没有）、`E1 v2` 跨项目（`relic_001@atlas-v1`） |
+| 切片 8 修复 `1.1.11 --fix` | rc=0：`E1__v1.json` 的 `uv_atlas_ref` 置空、`params.ref_repair.dropped="atlas-v1"`；`E1__v2.json` **md5 不变**（`ddd66b77…` 前后一致）；再跑一次 rc=0 且无新变更（幂等） |
+| 切片 8 体检 `1.1.12` | rc=0：两条都是 **时间倒挂**（记录 16:23:33 晚于资产 14:18:27 / 14:47:04），按 D8 只报不修 |
 | 普通目录当基准 / 同一目录当基准与复测 | 分别提示「不是一个 H3D 项目」「不能与自己继承」 |
 
 **逐 texel 比对**（基准 `relic_001_L1.0_diffuse.png` vs 继承 `…@atlas-v1_inherited.png`，
