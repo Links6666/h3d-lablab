@@ -24,6 +24,8 @@ from h3d.core import RecoverableError, RunManifest, get_logger, sha256_text
 from h3d.core.media import list_images
 import json
 
+from .fingerprint import (digest_path, is_skippable, resume_decision,
+                          resume_reason_text, stage_input_key)
 from .task import Task, TaskStatus, StageResult
 
 log = get_logger("runner.batch_processor")
@@ -568,7 +570,19 @@ def _run_task_worker(cfg_dict: dict, task: Task, stages: dict,
     _record_scale(task, scale_info)
     results: dict[str, dict] = {}
     failures: list[dict] = []
+    # 并行 worker **不做**续跑判定（历史行为：主进程统一写 manifest，worker
+    # 互不可见），但仍要记录输入指纹——否则这一批跑完的 manifest 全是「无指纹」
+    # 记录，用户下次以单进程续跑时只能永远走 legacy 兼容分支。
+    try:
+        cfg_eff = cfg.to_dict()
+    except Exception as exc:  # noqa: BLE001
+        cfg_eff = {}
+        log.warning("配置快照失败（worker，%s）：%s", task.item_id, exc)
+    upstream_keys: dict[str, str] = {}
     for stage_id, stage_fn in stages.items():
+        cur_key = BatchProcessor._input_key(stage_id, task, cfg_eff, upstream_keys)
+        if cur_key:
+            upstream_keys[stage_id] = cur_key
         task.begin_stage(stage_id)
         if _stage_enabled(stage_id, cfg):
             _log_stage_start(stage_id, task.item_id)
@@ -603,6 +617,7 @@ def _run_task_worker(cfg_dict: dict, task: Task, stages: dict,
                 "metrics": res.metrics,
                 "elapsed_s": round(elapsed, 4),
                 "error": "",
+                "input_key": cur_key,
             }
         except RecoverableError as exc:
             # 场景①：可选增强失败 → 降级跳过，主线继续（与主流程同构）
@@ -734,9 +749,19 @@ class BatchProcessor:
         if getattr(self.cfg.runner, "force_rerun", False):
             log.warning("强制重算已开启（runner.force_rerun=true）：忽略断点续跑，"
                         "%d 件的全部阶段重跑；S1 稠密工作区（含深度图）将重建。"
-                        "M4 图集缓存与 S1 照片指纹复用仍按参数判定，参数未变则命中",
-                        len(tasks))
+                        "M4 图集缓存与 S1 照片指纹复用仍按参数判定，参数未变则命中。"
+                        "——只需重算「输入变了」的件时请关掉它：续跑已按输入内容"
+                        "（原始几何/照片摘要 + 参数快照）逐阶段判定，并在日志里"
+                        "用 ↻ 标出重跑原因", len(tasks))
         if workers > 1 and len(tasks) > 1:
+            if getattr(self.cfg.runner, "resume", True):
+                # 「有机制但没生效」是本项目反复踩的坑（r16 的 manifest 白名单）：
+                # 用户开了 workers 又以为续跑仍在工作，于是每次都全量重算还查不出原因。
+                log.warning(
+                    "并行模式（workers=%d）不做断点续跑判定：worker 之间不共享 "
+                    "manifest，本次 %d 件全部阶段都会重算——内容指纹（输入是否变化）"
+                    "只在 workers=1 时生效。想复用已完成阶段请改 runners.workers=1。",
+                    workers, len(tasks))
             tasks, failures = self._run_parallel(tasks, manifest, failures, workers)
         else:
             for task in tasks:
@@ -786,6 +811,7 @@ class BatchProcessor:
                     if res["status"] == TaskStatus.DONE.value:
                         manifest.record(key, "done", res["outputs"],
                                         res["elapsed_s"],
+                                        input_key=res.get("input_key") or "",
                                         **_strip_reserved(res["metrics"]))
                     elif res["status"] == TaskStatus.FAIL.value:
                         manifest.record_fail(key, res["error"])
@@ -795,6 +821,9 @@ class BatchProcessor:
                         manifest.record(key, res["status"], [], res["elapsed_s"],
                                         **_strip_reserved(res["metrics"]))
                 failures.extend(task_failures)
+        # 档案登记放在主进程（worker 里写会撞 archive/assets）。
+        for task in done_tasks.values():
+            self._register_archive(task, manifest)
         return [done_tasks.get(t.item_id, t) for t in tasks], failures
 
     # -- 单任务调度 --------------------------------------------------------
@@ -818,24 +847,60 @@ class BatchProcessor:
             # 位姿变过而深度图残留正是「强制重算」要解决的场景，这里一并打开。
             cfg = _force_dense_restart(cfg)
         _record_scale(task, scale_info)
+        # 配置快照整件只算一次：``to_dict`` 是递归 Deepcopy，每阶段调一遍在
+        # 大批量下是纯浪费，而同一件文物内部 cfg 不会变。
+        try:
+            cfg_dict = cfg.to_dict()
+        except Exception as exc:  # noqa: BLE001 - 快照失败不得阻断管线
+            cfg_dict = {}
+            log.warning("配置快照失败（%s），本件按「输入已变化」处理：%s",
+                        task.item_id, exc)
+        upstream_keys: dict[str, str] = {}
         for stage_id, stage_fn in self.stages.items():
             key = f"{task.item_id}/{stage_id}"
+            cur_key = self._input_key(stage_id, task, cfg_dict, upstream_keys)
 
-            # 断点续跑：已完成 且 产物仍在 且 上游未重跑 且 未强制重算 -> 跳过
-            if (self.cfg.runner.resume and not force and not rerun_chain
-                    and manifest.is_done(key) and self._outputs_exist(manifest, key)):
-                # 关键：跳过 ≠ 无产物。必须把 manifest 里的产物与指标恢复到
-                # task.results，否则下游 M3/M4/M5 读 outputs_of() 得到空列表
-                # （实机 2026-10-18：续跑后 M5 报 [E100] 参考点云为空）。
-                entry = manifest.stages.get(key) or {}
-                restored = {k: v for k, v in entry.items()
-                            if k not in _MANIFEST_RESERVED}
-                outs = list(entry.get("outputs") or [])
-                task.restore_stage(stage_id, outs, restored,
-                                   entry.get("elapsed_s") or 0.0)
-                log.info("○ %s 跳过：%s（断点续跑，复用 %d 个产物）",
-                         stage_id, task.item_id, len(outs))
-                continue
+            # 断点续跑：未强制重算 + 上游本轮未重跑 + **输入指纹未变** -> 跳过。
+            # 旧判据只看 status=done 与产物存在，于是「换了照片 / 改了参数」
+            # 会被静默跳过（产物还在、状态还是 done，看不出输入已经变了）。
+            if self.cfg.runner.resume and not force and not rerun_chain:
+                code = resume_decision(manifest.stages.get(key), cur_key,
+                                       self._outputs_exist(manifest, key))
+                if is_skippable(code):
+                    # 关键：跳过 ≠ 无产物。必须把 manifest 里的产物与指标恢复到
+                    # task.results，否则下游 M3/M4/M5 读 outputs_of() 得到空列表
+                    # （实机 2026-10-18：续跑后 M5 报 [E100] 参考点云为空）。
+                    entry = manifest.stages.get(key) or {}
+                    restored = {k: v for k, v in entry.items()
+                                if k not in _MANIFEST_RESERVED}
+                    outs = list(entry.get("outputs") or [])
+                    task.restore_stage(stage_id, outs, restored,
+                                       entry.get("elapsed_s") or 0.0)
+                    # 记「实际产出这套产物的输入键」，而不是当下算出的键：
+                    # legacy 记录没有键时退化为当前键，下一次就能正常比对。
+                    upstream_keys[stage_id] = str(entry.get("input_key") or cur_key)
+                    log.info("○ %s 跳过：%s（%s，复用 %d 个产物）",
+                             stage_id, task.item_id,
+                             resume_reason_text(code), len(outs))
+                    continue
+                if manifest.stages.get(key):
+                    # 有记录却不能跳过，必须写明原因——否则与「静默跳过」
+                    # 一样无从排查（用户只看到这一阶段又跑了一遍）。
+                    # 但只有 done/fail/running 才算「重跑」；disabled/skipped 的
+                    # 记录本来就是「上次没执行」，打 ↻ 会让用户以为出了状况
+                    # （真机 2026-10-31：P1/X1/X2 未启用却连打三行「重跑」）。
+                    prev = str((manifest.stages.get(key) or {}).get("status")
+                               or "")
+                    if prev in ("done", "fail", "running"):
+                        log.info("↻ %s 重跑：%s（%s）", stage_id, task.item_id,
+                                 resume_reason_text(code))
+                    else:
+                        log.debug("· %s 本次重新判定（上次 %s）：%s",
+                                  stage_id, prev, resume_reason_text(code))
+            # 乐观登记：本阶段即便失败 break，也不会再用到本键；而成功执行后
+            # 下游必须看到新键，否则每次运行都要白重跑一次下游。
+            if cur_key:
+                upstream_keys[stage_id] = cur_key
 
             task.begin_stage(stage_id)
             if _stage_enabled(stage_id, cfg):
@@ -872,6 +937,7 @@ class BatchProcessor:
                 rerun_chain = True  # 真正执行才触发级联重跑
                 task.finish_stage(stage_id, res.outputs, res.metrics, elapsed)
                 manifest.record(key, "done", res.outputs, elapsed,
+                                input_key=cur_key,
                                 **_strip_reserved(res.metrics))
                 # 增量落盘（设计书 40.3「先记 manifest 再落盘」）：
                 # 既保证中断可恢复，也让同一轮内的下游阶段（M6 论文表格归档）
@@ -905,6 +971,7 @@ class BatchProcessor:
         # 实测：全阶段断点续跑跳过 + P1/X1/X2 未启用 → 任务停在 RUNNING，
         # 汇总变成 done=0 skipped=0，界面判「运行未完成」（r11 同类误报的新路径）。
         _finalize_task_status(task)
+        self._register_archive(task, manifest)
 
     def _save_manifest(self, manifest: RunManifest) -> None:
         """增量落盘 manifest（失败不阻断流程——最终 run() 还会再写一次）。"""
@@ -912,6 +979,89 @@ class BatchProcessor:
             manifest.save(self.cfg.runner.manifest)
         except OSError as exc:  # noqa: BLE001
             log.warning("manifest 增量落盘失败（继续执行）：%s", exc)
+
+    @staticmethod
+    def _input_key(stage_id: str, task: Task, cfg_dict: dict,
+                   upstream: dict[str, str]) -> str:
+        """计算阶段输入指纹；算不出来时返回空串并 WARNING。
+
+        空串在 :func:`resume_decision` 里一律判为「已变化」——「算不出来」绝不能
+        当成「没变」，那等于关掉整个机制却仍然印出「已跳过」。
+        """
+        try:
+            return stage_input_key(stage_id, task, cfg_dict, upstream)
+        except Exception as exc:  # noqa: BLE001 - 指纹属增强，不得阻断管线
+            log.warning("阶段输入指纹计算失败（%s/%s），按「输入已变化」处理：%s",
+                        task.item_id, stage_id, exc)
+            return ""
+
+    def _register_archive(self, task: Task, manifest: RunManifest) -> None:
+        """把本件产物登记进文物档案（**仅在项目已建档时**）。
+
+        为什么放在编排层而不是某个阶段里：档案登记是「书记员」的职责，不是
+        M5/M6 的业务；挂在 M6 上会让「用户关掉 M6」等价于「档案永不更新」。
+
+        为何不自动建档：runner 擅自往项目根写 ``archive/`` 会改变既有项目的
+        目录形态，而 1.1.0~1.1.13 的存量项目全是「只认阶段成果」的布局。
+        建档由 GUI / ``h3d archive migrate`` 显式触发。
+
+        登记失败一律 WARNING 不抛：档案是增量能力，不能反过来让建模失败。
+        """
+        if task.status != TaskStatus.DONE:
+            return
+        try:
+            from h3d.archive import ARCHIVE_DIR, Archive, CanonicalAsset
+            from h3d.archive import content_key as _archive_key
+            from h3d.core import paths
+
+            proj = paths.project_root_of(task.root)
+            if not os.path.isfile(os.path.join(proj, ARCHIVE_DIR,
+                                               "artifact.json")):
+                return
+            arch = Archive.open(proj)
+            base = arch.baseline()
+            if base is None:
+                log.debug("档案无基准期，跳过登记：%s", task.item_id)
+                return
+
+            mesh = next((p for p in task.outputs_of("M3") if p), None)
+            tex = next((p for p in task.outputs_of("M4")
+                        if "diffuse" in os.path.basename(p).lower()), None)
+            cam = os.path.join(task.root, "90_meta",
+                               f"{task.item_id}_capture_meta.json")
+            if not os.path.isfile(cam):
+                cam = None
+
+            inputs: dict[str, str] = {}
+            for kind, path in (("mesh", mesh), ("texture", tex),
+                               ("cameras", cam)):
+                if path and os.path.isfile(path):
+                    inputs[kind] = digest_path(path)
+            if not inputs:
+                log.debug("无可用产物，跳过档案登记：%s", task.item_id)
+                return
+
+            stage_keys = {sid: str((manifest.stages.get(f"{task.item_id}/{sid}")
+                                    or {}).get("input_key") or "")
+                          for sid in task.results}
+            def _rel(p: str | None) -> str | None:
+                return (os.path.relpath(p, proj).replace(os.sep, "/")
+                        if p else None)
+
+            asset = CanonicalAsset(
+                epoch_id=base.epoch_id, version=1,
+                content_key=_archive_key(
+                    inputs, {"pipeline": 1, "stages": stage_keys}),
+                mesh_path=_rel(mesh), cloud_path=None, texture_path=_rel(tex),
+                uv_atlas_ref="atlas-v1", cameras_path=_rel(cam),
+                params={"pipeline": "runner", "stage_keys": stage_keys},
+                created_at=datetime.now().isoformat(timespec="seconds"))
+            saved = arch.register(asset)
+            log.info("档案登记：%s %s v%d（产物 %d 项）",
+                     task.item_id, saved.epoch_id, saved.version, len(inputs))
+        except Exception as exc:  # noqa: BLE001 - 档案属增量能力
+            log.warning("档案登记失败（不影响本次建模）：%s（%s）",
+                        task.item_id, exc)
 
     @staticmethod
     def _outputs_exist(manifest: RunManifest, key: str) -> bool:
@@ -985,7 +1135,10 @@ class BatchProcessor:
 
 
 # manifest.record 的保留关键字（防 metrics 含保留键导致 TypeError）
-_MANIFEST_RESERVED = {"stage", "status", "outputs", "elapsed_s", "item_id"}
+# ``input_key`` 也在其中：它是 record 的**显式形参**，若某个阶段的 metrics
+# 恰好带同名键，不滤掉就会 TypeError: got multiple values for keyword argument。
+_MANIFEST_RESERVED = {"stage", "status", "outputs", "elapsed_s", "item_id",
+                      "input_key"}
 
 
 def _strip_reserved(metrics: dict) -> dict:

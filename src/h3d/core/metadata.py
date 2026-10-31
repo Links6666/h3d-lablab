@@ -127,18 +127,29 @@ class RunManifest:
         status: str = _STATUS_DONE,
         outputs: Optional[list[str]] = None,
         elapsed_s: Optional[float] = None,
+        input_key: str = "",
         **metrics: Any,
     ) -> None:
         """登记阶段结果：状态、产物路径、耗时与任意关键指标（如 rmse_mm）。
 
         设计书 40.3 约定「先记 manifest 再落盘」——编排器应先调用本方法，
         再写产物文件，保证中断可恢复。
+
+        ``input_key`` 是该阶段的**输入内容指纹**（见
+        :mod:`h3d.runner.fingerprint`）。它与指标分开存放，因为它是断点续跑的
+        判据而不是可展示的数值：
+
+        * 只按 ``status=done`` 判定续跑时，「换了照片 / 改了参数」会被静默跳过
+          （manifest 说完成、产物也还在，看不出输入已经变了）；
+        * 有了它，续跑能区分「真的没变」与「变了要重算」，后者会在日志里说明原因。
         """
         entry: dict[str, Any] = {"status": status}
         if outputs is not None:
             entry["outputs"] = outputs
         if elapsed_s is not None:
             entry["elapsed_s"] = round(float(elapsed_s), 3)
+        if input_key:
+            entry["input_key"] = input_key
         entry.update(metrics)
         self.stages[stage] = entry
 
