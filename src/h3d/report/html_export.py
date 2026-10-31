@@ -591,10 +591,12 @@ _TEMPLATE = """<!DOCTYPE html>
   <b>异常面积 / 图斑数（X3 单期筛查）的读法</b>：它是<b>相对量</b>，不是病害面积。
   图斑数是<b>待人工复核处数</b>，不是「查出了这么多病害」——图集里的相邻纹素在
   实物上并不相邻（UV 岛拼贴），所以岛与岛之间的底色差也会被记成一处。
-  每个纹素与**局部中位数背景**比，超过 k≈3.5 倍稳健尺度就算异常；所以同一处斑块
-  在平滑区域与在粗糙纹理区域给出的分数不同——<b>检出能力随局部信噪比变化</b>，
-  不能只报「可检出 ΔE≥X」。另外图集是若干 UV 岛拼成的，<b>岛边缘 1~2 纹素内的
-  结论不可靠</b>（背景必须跨岛估计，存在固有偏差），那一条边上的报警请人工复核。
+  每个纹素与<b>它所在那个 UV 岛</b>的中位数背景比，超过 k≈3.5 倍本岛稳健尺度才算
+  异常——<b>不跨岛比较</b>。这条不是优化而是必须：UV 图集是若干岛拼成的，<b>相邻
+  纹素在实物上并不相邻</b>，跨岛比较会把「这块岛的底色与邻居不同」记成病害
+  （真机图集 3690 个岛，跨岛口径下 35 处「异常」里大部分是这种）。
+  代价是<b>岛内病变面积超过该岛一半时，归一化会把病变当成本底</b>而看不见——
+  小岛（中位几十纹素）只适用「比岛内常见的起伏更明显」这一档。
   异常面积格内的 <code>σ_L≈N</code> 是<b>本件</b>典型位置的局部纹理跨度（Lab 单位）——
   <b>同一个 ΔE，在这个数越大的地方越难检出</b>；比它小一个量级的差异不要指望
   能被查出来，那不等于「没有病害」。
@@ -605,8 +607,8 @@ _TEMPLATE = """<!DOCTYPE html>
 {% for row in tex_rows %}
 {% if row.anomaly_top %}
 <details>
-  <summary><b>{{ row.item }}</b>：共 {{ row.anomaly_n }} 处可疑图斑，
-    下列前 {{ row.anomaly_top|length }} 处（按面积降序）</summary>
+  <summary><b>{{ row.item }}</b>：共 {{ row.anomaly_n }} 处可疑图斑（图集 {{ row.anomaly_islands }}
+    个 UV 岛，按岛比较），下列前 {{ row.anomaly_top|length }} 处（按面积降序）</summary>
   <table class="mini">
     <tr><th>#</th><th>边界框 (x0, y0)-(x1, y1)</th><th>纹素数</th>
         <th>占岛内</th><th>均分</th></tr>
@@ -937,6 +939,9 @@ def generate_html(manifest: RunManifest,
                                or "—"),
             "anomaly_n": _num(get(item, "M5").get("anomaly_regions"), 0,
                               default=0),
+            # 岛数：结论的口径之一（1 个岛 = 单岛图集；3690 个 = 拼贴图集）
+            "anomaly_islands": _num(get(item, "M5").get("anomaly_island_count"),
+                                    0, default="—"),
             # 明细行在 Python 侧拼好：模板只负责排版，不做数字格式化
             "anomaly_top": [
                 {"id": r.get("region_id"),

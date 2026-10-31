@@ -412,7 +412,10 @@ class TestMetricsReachTheReport:
         assert "异常面积" in html and "图斑" in html
         assert "2.18%" in html, "异常面积没渲染出来"
         assert "35" in html
-        assert "岛边缘" in html, "缺少「岛边缘 1~2 纹素不可靠」的口径说明"
+        # 口径说明必须跟着算法走：按岛归一化之后，「岛边缘不可靠」这条已经不成立
+        # （不再跨岛取背景），换成了「不跨岛比较」+「岛内病变超过一半会看不见」。
+        assert "不跨岛比较" in html, "缺少「按岛比较」的口径说明"
+        assert "超过该岛一半" in html, "缺少「岛内病变过半会当成本底」这条已知边界"
         # 纹理尺度要能在同一格里读出来（不加列，避免 16 列的表再变宽）
         assert "σ_L" in html, "报出了异常面积却没给「这件的纹理尺度有多大」"
 

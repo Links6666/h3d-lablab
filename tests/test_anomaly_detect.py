@@ -245,15 +245,199 @@ class TestDetectionFloorIsReported:
     """
 
     def test_sigma_median_follows_texture_strength(self):
+        """σ_L 必须跟着「这块表面有多不平」走，而不是一个常数。
+
+        改按岛归一化之后，σ_L 的口径从「局部块残差的分位数」变成「本岛自身的
+        离散度」——它包含岛上的明暗渐变（真实存在，但局部中位数背景会把它减掉）。
+        所以这里用三种底分别锁：**纯色**落在地板上、**渐变**明显更高、**条纹**
+        最高。只断言「纯色 == 2.0」会漏掉后两者，只断言单调又锁不住地板。
+        """
         from h3d.anomaly import detect_atlas_anomalies
 
-        smooth = detect_atlas_anomalies(_gradient(512), _round_island(512))
-        noisy = detect_atlas_anomalies(_stripes(512, amp=10), _round_island(512))
+        flat = np.full((512, 512, 3), 128, np.uint8)
+        s_flat = detect_atlas_anomalies(flat, _round_island(512)).metrics["sigma_median"]
+        s_grad = detect_atlas_anomalies(
+            _gradient(512), _round_island(512)).metrics["sigma_median"]
+        s_stripe = detect_atlas_anomalies(
+            _stripes(512, amp=10), _round_island(512)).metrics["sigma_median"]
 
-        s_smooth = smooth.metrics["sigma_median"]
-        s_noisy = noisy.metrics["sigma_median"]
-        assert s_smooth is not None and s_noisy is not None
-        # 平滑底落在地板上（ΔE≈2 是刚可辨差异）
-        assert s_smooth == pytest.approx(2.0, abs=0.5), s_smooth
-        # 条纹底的纹理尺度必须显著更大 —— 这是「同一个 ΔE 更难检出」的度量
-        assert s_noisy > 3.0, f"条纹底的纹理尺度只有 {s_noisy}，指标没反映真实噪声"
+        assert s_flat == pytest.approx(2.0, abs=0.1), (
+            f"纯色底的 σ_L 应落在地板 2.0（刚可辨 ΔE），实得 {s_flat}")
+        assert s_grad > 2.5, f"渐变底的 σ_L 只有 {s_grad}，没反映岛上的明暗变化"
+        assert s_stripe > s_grad, f"条纹 {s_stripe} 不该低于渐变 {s_grad}"
+
+
+def _mosaic(size: int = 512, cell: int = 112, pad: int = 14,
+            seed: int = 20261031) -> tuple[np.ndarray, np.ndarray]:
+    """多岛拼贴图集：每块岛底色不同、各自带一点渐变与采集噪声，**全都没有病害**。
+
+    为什么必须用这个夹具而不是「一个大圆」：真机图集（1.1.12）是 **3690 个 UV 岛**
+    拼成的马赛克，中位 69 texel，全图集**没有任何纹素离岛边界超过 75 texel** ——
+    最小的 31 窗口对一半以上的纹素都跨岛，最大的 201 窗口则处处跨岛。用单岛
+    大圆测，「跨岛比较」这条错误在夹具里根本不存在，测试永远是绿的。
+
+    每块岛的底色相差几十 Lab 单位（石像不同部位、不同光照烘焙），这在实物上
+    完全正常；把它们拿来互相比较，必然把「这块岛比邻居深」记成异常。
+    """
+    rng = np.random.default_rng(seed)
+    img = np.zeros((size, size, 3), np.float32)
+    island = np.zeros((size, size), bool)
+    yy, xx = np.mgrid[0:size, 0:size].astype(np.float32)
+    k = 0
+    for y0 in range(pad, size - cell, cell):
+        for x0 in range(pad, size - cell, cell):
+            k += 1
+            sl = (slice(y0, y0 + cell - pad), slice(x0, x0 + cell - pad))
+            base = rng.uniform(70, 200, 3)
+            # 岛内自己的平缓渐变（模拟一件器物上的光照/曲率），幅度很小
+            gy = rng.uniform(-6, 6) * (yy[sl] - yy[sl].mean()) / cell
+            gx = rng.uniform(-6, 6) * (xx[sl] - xx[sl].mean()) / cell
+            patch = base[None, None, :] + (gx + gy)[..., None]
+            patch = patch + rng.normal(0, 1.5, patch.shape)      # 采集噪声
+            img[sl] = patch
+            island[sl] = True
+    return np.clip(img, 0, 255).astype(np.uint8), island
+
+
+class TestIslandsAreNotComparedToEachOther:
+    """跨岛不做比较：**相邻纹素在实物上并不相邻**。
+
+    真机裁图核对（`x3_top3.png`）发现排在最前的三处「异常」都是「一块亮 UV 岛
+    被一圈暗小岛包围」—— 那不是病害，是岛间反照率差。这一类误报不是阈值能调掉
+    的：它来自把图集当成了连续图像。
+    """
+
+    def test_mosaic_of_clean_islands_has_no_anomaly(self):
+        from h3d.anomaly import detect_atlas_anomalies
+
+        img, island = _mosaic()
+        res = detect_atlas_anomalies(img, island)
+
+        assert res.metrics["anomalous_ratio"] < 0.005, (
+            f"干净的拼贴图集被判 {res.metrics['anomalous_ratio']:.2%} 异常 —— "
+            f"跨岛比较把底色差记成了病害")
+        assert res.metrics["n_regions"] == 0, (
+            f"报了 {res.metrics['n_regions']} 处异常，实际一处病害都没有")
+
+    def test_blob_inside_one_island_is_still_found(self):
+        """归一化不能靠「把灵敏度调死」换来干净。
+
+        反向对照：同一条管线上，岛内注入的斑块必须仍然被抓到。只测「干净时
+        不报」，加个永久返回空掩膜的实现也能过。
+        """
+        from h3d.anomaly import detect_atlas_anomalies
+
+        img, island = _mosaic()
+        # 取第一块岛的中心（cell 起点 pad=14，岛宽 98）
+        cy = cx = 14 + 49
+        img[cy - 10:cy + 10, cx - 10:cx + 10] = np.array([240, 232, 210], np.uint8)
+
+        res = detect_atlas_anomalies(img, island)
+        assert res.mask[cy, cx], "岛内注入的斑块没被抓到 —— 归一化把灵敏度做没了"
+
+    def test_per_island_switch_actually_diffs(self):
+        """``per_island=False`` 必须真的退回旧行为（否则这个开关是假的）。
+
+        留开关只为一件事：让 ``scripts/verify_x3_islands.py`` 能给出 A/B 数字。
+        一个「设了也不生效」的配置项，比没有更糟 —— 报表会拿它当依据。
+        """
+        from h3d.anomaly import AnomalyConfig, detect_atlas_anomalies
+
+        img, island = _mosaic()
+        off = detect_atlas_anomalies(img, island,
+                                     config=AnomalyConfig(per_island=False))
+        on = detect_atlas_anomalies(img, island)
+        assert off.metrics["anomalous_ratio"] > 3 * on.metrics["anomalous_ratio"], (
+            f"关掉逐岛归一化后误报没有明显变大（关 {off.metrics['anomalous_ratio']:.2%}"
+            f" vs 开 {on.metrics['anomalous_ratio']:.2%}）—— 开关没接线")
+        # 岛数由夹具布局决定，不写死数字：写死一个数就变成「测夹具」了，
+        # 真正要锁的是「两种模式下都如实报出来，且报的是同一批岛」。
+        assert off.metrics["island_count"] == on.metrics["island_count"] > 1
+
+
+def _mosaic(size: int = 512, cell: int = 112, pad: int = 14,
+            seed: int = 20261031) -> tuple[np.ndarray, np.ndarray]:
+    """多岛拼贴图集：每块岛底色不同、各自带一点渐变与采集噪声，**全都没有病害**。
+
+    为什么必须用这个夹具而不是「一个大圆」：真机图集（1.1.12）是 **3690 个 UV 岛**
+    拼成的马赛克，中位 69 texel，全图集**没有任何纹素离岛边界超过 75 texel** ——
+    最小的 31 窗口对一半以上的纹素都跨岛，最大的 201 窗口则处处跨岛。用单岛
+    大圆测，「跨岛比较」这条错误在夹具里根本不存在，测试永远是绿的。
+
+    每块岛的底色相差几十 Lab 单位（石像不同部位、不同光照烘焙），这在实物上
+    完全正常；把它们拿来互相比较，必然把「这块岛比邻居深」记成异常。
+    """
+    rng = np.random.default_rng(seed)
+    img = np.zeros((size, size, 3), np.float32)
+    island = np.zeros((size, size), bool)
+    yy, xx = np.mgrid[0:size, 0:size].astype(np.float32)
+    k = 0
+    for y0 in range(pad, size - cell, cell):
+        for x0 in range(pad, size - cell, cell):
+            k += 1
+            sl = (slice(y0, y0 + cell - pad), slice(x0, x0 + cell - pad))
+            base = rng.uniform(70, 200, 3)
+            # 岛内自己的平缓渐变（模拟一件器物上的光照/曲率），幅度很小
+            gy = rng.uniform(-6, 6) * (yy[sl] - yy[sl].mean()) / cell
+            gx = rng.uniform(-6, 6) * (xx[sl] - xx[sl].mean()) / cell
+            patch = base[None, None, :] + (gx + gy)[..., None]
+            patch = patch + rng.normal(0, 1.5, patch.shape)      # 采集噪声
+            img[sl] = patch
+            island[sl] = True
+    return np.clip(img, 0, 255).astype(np.uint8), island
+
+
+class TestIslandsAreNotComparedToEachOther:
+    """跨岛不做比较：**相邻纹素在实物上并不相邻**。
+
+    真机裁图核对（`x3_top3.png`）发现排在最前的三处「异常」都是「一块亮 UV 岛
+    被一圈暗小岛包围」—— 那不是病害，是岛间反照率差。这一类误报不是阈值能调掉
+    的：它来自把图集当成了连续图像。
+    """
+
+    def test_mosaic_of_clean_islands_has_no_anomaly(self):
+        from h3d.anomaly import detect_atlas_anomalies
+
+        img, island = _mosaic()
+        res = detect_atlas_anomalies(img, island)
+
+        assert res.metrics["anomalous_ratio"] < 0.005, (
+            f"干净的拼贴图集被判 {res.metrics['anomalous_ratio']:.2%} 异常 —— "
+            f"跨岛比较把底色差记成了病害")
+        assert res.metrics["n_regions"] == 0, (
+            f"报了 {res.metrics['n_regions']} 处异常，实际一处病害都没有")
+
+    def test_blob_inside_one_island_is_still_found(self):
+        """归一化不能靠「把灵敏度调死」换来干净。
+
+        反向对照：同一条管线上，岛内注入的斑块必须仍然被抓到。只测「干净时
+        不报」，加个永久返回空掩膜的实现也能过。
+        """
+        from h3d.anomaly import detect_atlas_anomalies
+
+        img, island = _mosaic()
+        # 取第一块岛的中心（cell 起点 pad=14，岛宽 98）
+        cy = cx = 14 + 49
+        img[cy - 10:cy + 10, cx - 10:cx + 10] = np.array([240, 232, 210], np.uint8)
+
+        res = detect_atlas_anomalies(img, island)
+        assert res.mask[cy, cx], "岛内注入的斑块没被抓到 —— 归一化把灵敏度做没了"
+
+    def test_per_island_switch_actually_diffs(self):
+        """``per_island=False`` 必须真的退回旧行为（否则这个开关是假的）。
+
+        留开关只为一件事：让 ``scripts/verify_x3_islands.py`` 能给出 A/B 数字。
+        一个「设了也不生效」的配置项，比没有更糟 —— 报表会拿它当依据。
+        """
+        from h3d.anomaly import AnomalyConfig, detect_atlas_anomalies
+
+        img, island = _mosaic()
+        off = detect_atlas_anomalies(img, island,
+                                     config=AnomalyConfig(per_island=False))
+        on = detect_atlas_anomalies(img, island)
+        assert off.metrics["anomalous_ratio"] > 3 * on.metrics["anomalous_ratio"], (
+            f"关掉逐岛归一化后误报没有明显变大（关 {off.metrics['anomalous_ratio']:.2%}"
+            f" vs 开 {on.metrics['anomalous_ratio']:.2%}）—— 开关没接线")
+        # 岛数由夹具布局决定，不写死数字：写死一个数就变成「测夹具」了，
+        # 真正要锁的是「两种模式下都如实报出来，且报的是同一批岛」。
+        assert off.metrics["island_count"] == on.metrics["island_count"] > 1

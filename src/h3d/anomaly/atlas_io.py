@@ -87,6 +87,9 @@ def run_item(stage_root: str, item_id: str, *,
             "scales": [int(x) for x in cfg.scales], "k": cfg.k,
             "min_scale": cfg.min_scale, "tex_scale": cfg.tex_scale,
             "scale_cap": cfg.scale_cap, "use_texture": cfg.use_texture,
+            # 结论的口径：按岛归一化（逐岛中位归零 + 逐岛尺度）还是旧的跨岛
+            # 空间邻域。同一个图集两种口径给出的异常面积差 9 倍，不记就说不清。
+            "per_island": cfg.per_island,
             "min_region_ratio": cfg.min_region_ratio,
             "min_region_texels": cfg.min_region_texels,
         },

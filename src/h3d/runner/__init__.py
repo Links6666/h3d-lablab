@@ -583,6 +583,11 @@ def _stage_anomaly_qc(task: Task, cfg) -> StageResult:
         "anomaly_sigma_median": (None if m.get("sigma_median") is None
                                  else round(float(m["sigma_median"]), 3)),
         "island_ratio": round(float(m.get("island_ratio") or 0.0), 4),
+        # 图集由多少个 UV 岛拼成，以及是否按岛比较。**1 与 3690 是两种东西**：
+        # 单岛图集上「局部空间背景」成立，拼贴图集上只有按岛才成立。报表要能
+        # 说清这条结论是哪种口径下得出的。
+        "island_count": int(m.get("island_count") or 0),
+        "per_island": bool(m.get("per_island")),
         # 前 N 处图斑的边界框（按面积降序，与 regions.csv 同序）。报表据此
         # 画出「第 1 处 (x0,y0)-(x1,y1)」，用户不用再翻 CSV。
         "anomaly_top_regions": [
@@ -728,6 +733,8 @@ def _stage_quality(task: Task, cfg) -> StageResult:
         metrics["anomaly_atlas_digest"] = x3.get("anomaly_atlas_digest")
         metrics["anomaly_sigma_median"] = x3.get("anomaly_sigma_median")
         metrics["anomaly_top_regions"] = x3.get("anomaly_top_regions") or []
+        metrics["anomaly_island_count"] = x3.get("island_count")
+        metrics["anomaly_per_island"] = x3.get("per_island")
 
     # 先落盘报告（失败也有据可查），再判定
     qc_dir = os.path.join(task.root, "60_qc", task.item_id)
@@ -805,6 +812,10 @@ def _stage_quality(task: Task, cfg) -> StageResult:
         # 前 N 处图斑的边界框（列表，可 JSON 化）。不带它，报表只能印「35 处」
         # 却指不出任何一处 —— 用户要复核还是得去翻 regions.csv。
         "anomaly_top_regions": metrics.get("anomaly_top_regions") or [],
+        # 按岛归一化的口径（岛数 + 是否按岛）。异常面积脱离口径就没法读：
+        # 「3690 个岛按岛比较」与「一整块按空间邻域比较」是两套数。
+        "anomaly_island_count": metrics.get("anomaly_island_count"),
+        "anomaly_per_island": metrics.get("anomaly_per_island"),
     }
     return StageResult("M5", TaskStatus.DONE, reports, manifest_metrics)
 

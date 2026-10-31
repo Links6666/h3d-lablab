@@ -4,12 +4,24 @@
 筛查，回答「这里是否异常」，**不给病害类别**（类别是 S0 的事）。定位是单次采集
 下的快速排查：不需要标注、不需要训练、不需要 GPU。
 
-三个「一句话」的骨架
+四个「一句话」的骨架
 --------------------
-1. **背景用局部中位数**（:func:`_median_background`，`cv2.medianBlur`，
+1. **按岛归一化**（:func:`_island_stats`）：每个 UV 岛先减去**它自己的中位数**，
+   跨岛不比较。这一步不是优化——图集是若干岛拼成的，**相邻纹素在实物上并不
+   相邻**，真机图集上 201 窗口能整窗落在同一岛内的纹素是 **0.0%**。
+2. **背景用局部中位数**（:func:`_median_background`，`cv2.medianBlur`，
    O(1)/纹素）——不是均值、不是裁剪均值。
-2. **尺度用块内 75 分位**（:func:`_block_median`），脏块用邻域值替换。
-3. **三档窗口取最大分**（31 / 81 / 201 纹素）——小窗看细节、大窗看大片。
+3. **尺度用本岛的 75 分位**（岛内 ``|L − 岛中位|``）：一块 16~50 纹素里装着
+   几个岛的纹素，块级分位数天然跨岛。
+4. **三档窗口取最大分**（31 / 81 / 201 纹素）——小窗看细节、大窗看大片。
+
+按岛之前的历史（保留，说明为什么不再用「块级尺度 + 脏块替换」）
+--------------------------------------------------------------
+旧版用块内 75 分位当尺度、脏块（>2× 邻域）用邻域值替换。它在单岛合成图上
+工作良好，但真机 1.1.12 的图集是 3690 个岛：「邻域」是别的岛，判据随即误判
+（干净的岛被判成脏块、σ 被替换成很低的值、z 虚高）。换成本岛尺度后真机
+误报 2.18%/35 处 → 0.24%/7 处，注入灵敏度不变（9/11）。取舍的完整表格见
+``docs/adr/0003-single-epoch-anomaly.md`` 的 D11。
 
 为什么背景必须是中位数（这一条是量出来的，不是偏好）
 ----------------------------------------------------
@@ -75,8 +87,8 @@ class AnomalyConfig:
     #: 尺度估计的块边长（纹素）。``0`` = 按窗口自动取 ``W/4``。块内取精确中位数
     #: 作局部噪声尺度：中位数的击穿点是 50%，病变占不到半块就不影响估计。
     scale_block: int = 0
-    #: 脏块判定倍数：块内尺度超过邻域中位数这么多倍时，判定该块被病变自己写脏、
-    #: 用邻域值取代。调小更灵敏（也会更容易误报），调大更保守。
+    #: 脏块判定倍数（**旧口径**：跨岛空间邻域）。块内尺度超过邻域中位数这么多
+    #: 倍时判定该块被病变写脏、用邻域值取代。只在 ``per_island=False`` 时生效。
     scale_cap: float = 2.0
     #: 最小图斑占岛内面积比，低于它的连通域按噪点丢弃。
     min_region_ratio: float = 1e-4
@@ -102,7 +114,12 @@ class AnomalyConfig:
     #: 纹理特征的块边长（纹素）。结构张量的累加需要足够的样本，16 是实测下限
     #: （8 时一致性抖动 ±0.3，分不开条纹与噪点）。
     tex_block: int = 16
-
+    #: 按岛归一化：每个 UV 岛先用**自己的中位数**归零再比较，尺度也只从本岛纹素
+    #: 估计。UV 图集是若干岛拼成的，**相邻纹素在实物上并不相邻**——跨岛比较必然
+    #: 把「这块岛的底色与邻居不同」记成异常（真机 1.1.12 的图集是 3690 个岛，
+    #: 全图集没有一处纹素离岛边界超过 75 texel，201 窗口处处跨岛）。
+    #: 关掉只为对照实验（``scripts/verify_x3_islands.py`` 用它出 A/B 数字）。
+    per_island: bool = True
 
 @dataclass(frozen=True)
 class AnomalyRegion:
@@ -262,25 +279,85 @@ def _median_background(ch: np.ndarray, size: int) -> np.ndarray:
     return cv2.medianBlur(a, k).astype(np.float32)
 
 
+def _island_stats(lab: np.ndarray, island: np.ndarray):
+    """逐岛中位数与逐岛尺度。返回 ``(labels, n, median_map, scale_map)``。
+
+    为什么必须按岛：UV 图集是若干岛拼成的**马赛克**，相邻纹素在**实物上并不
+    相邻**（同一件石像的袍子与脸可以被展开到图集上挨着）。真机 1.1.12 的图集
+    有 3690 个岛、中位 69 texel，**没有任何纹素离岛边界超过 75 texel** —— 最小
+    的 31 窗口对一半以上纹素都跨岛，201 窗口处处跨岛。于是「局部空间背景」在
+    这张图上处处不成立：它把「这块岛比邻居深」当成异常。实测干净拼贴夹具上
+    21.16% 的纹素被判异常，全部来自底色差。
+
+    中位数取**每岛自己的**：一块岛的底色是它的固有属性（不同部位、不同光照
+    烘焙），把它归零之后，剩下的才是「相对这块岛本身的变化」。
+
+    尺度同样取每岛自己的（``q75(|L - 岛中位|) / 1.1503``）：小岛总共几十个
+    纹素，局部块尺度会被邻岛带偏；而岛自身的离散度是稳的。**只取 L 通道**——
+    这是纹理栖身的那一路，a/b 在多数图集上本来就平，取错通道会让尺度恒等于
+    地板（这个 bug 被 ``TestDetectionFloorIsReported`` 抓过）。
+    """
+    from scipy import ndimage
+
+    labels, n = ndimage.label(np.asarray(island, dtype=bool),
+                              structure=np.ones((3, 3), bool))
+    median_map = np.zeros(lab.shape, np.float32)
+    scale_map = np.zeros(lab.shape[:2], np.float32)
+    if n == 0:
+        return labels, 0, median_map, scale_map
+
+    flat = labels.ravel()
+    order = np.argsort(flat, kind="stable")
+    starts = np.searchsorted(flat[order], np.arange(0, n + 2))
+    chans = [lab[..., c].ravel()[order] for c in range(lab.shape[2])]
+    med = np.zeros((n + 1, lab.shape[2]), np.float32)
+    scale = np.zeros(n + 1, np.float32)
+    for k in range(1, n + 1):
+        a, b = starts[k], starts[k + 1]
+        if b <= a:                      # label 无对应像素（不会发生，但别静默）
+            continue
+        for c in range(lab.shape[2]):
+            med[k, c] = np.median(chans[c][a:b])
+        dev = np.abs(chans[0][a:b] - med[k, 0])
+        scale[k] = np.percentile(dev, 75) / 1.1503
+    median_map = med[labels]
+    scale_map = scale[labels]
+    return labels, int(n), median_map, scale_map
+
+
 def _robust_z(arr: np.ndarray, size: int, floor: float,
               block: int | None = None, cap: float = 2.0,
-              with_sigma: bool = False):
-    """单通道 ``|残差| / 稳健尺度``：局部中位数背景 + 块级中位数尺度。
+              with_sigma: bool = False, island: np.ndarray | None = None,
+              scale_map: np.ndarray | None = None,
+              ):
+    """单通道 ``|残差| / 稳健尺度``：局部中位数背景 + 块级分位数尺度。
 
     两个估计器都取 50% 击穿点，但职责不同：
 
     * **背景**必须逐纹素精确（决定边界在哪）→ :func:`_median_background`；
-    * **尺度**是空间慢变量（同一片袍子的纹理强度差不多），块内精确中位数再
-      上采样就够，而且比逐纹素中位数便宜一个量级 → :func:`_block_median`。
+    * **尺度**是空间慢变量（同一片袍子的纹理强度差不多），块内分位数再上采样
+      就够，而且比逐纹素中位数便宜一个量级。
 
-    尺度还要再乘 1.4826：块中位数给的是「残差绝对值的中位数」，而阈值的口径
-    是 σ（高斯的 ``median|r| = 0.6745σ``）。不换算等于把尺度偷偷缩小 1/3，
-    3.5 的门限实际只有 2.36σ，三通道 RMS 的尾部有 6% 纹素越界。
+    尺度还要再换算成 σ 口径：``q75(|r|) = 1.1503σ``。不换算等于把尺度偷偷
+    缩小 1/3，3.5 的门限实际只有 2.36σ，三通道 RMS 的尾部有 6% 纹素越界。
+
+    ``island`` 给了就走**按岛**的版本：σ 取本岛自身的离散度（:func:`_island_stats`），
+    不再做任何跨纹素的块级估计 —— 一个 UV 岛就是一片连续表面，这是唯一在拼贴
+    图上说得通的「同一片」范围。
     """
     bg = _median_background(arr, size)
     resid = np.abs(arr - bg)
-    q75 = _block_median(resid, block or max(16, int(size) // 4), cap=cap)
-    sig = q75 / 1.1503            # q75(|r|) = 1.1503σ（高斯口径）
+    if island is not None:
+        # 按岛模式：σ 直接取**本岛自身的离散度**，不再做块级分位数。
+        # 为什么不做：块级分位数在拼贴图上是「一个块里几个岛的纹素混在一起」
+        # 的分位数，被病变填满的块还会跳到病变自身的对比度（实测 40 texel 斑块
+        # 在 W=81 上把 σ 撑到 89）。补一个「邻域中位数池化」能救回灵敏度
+        # （真机注入 10/11），但把邻岛的 σ 又混回来，误报涨到 3.34%/71 处。
+        # 直接取本岛尺度不需要任何兜底：真机 0.242%/7 处、注入 9/11。
+        sig = np.where(island, scale_map, 0.0)
+    else:
+        q75 = _block_median(resid, block or max(16, int(size) // 4), cap=cap)
+        sig = q75 / 1.1503
     lifted = np.maximum(sig, floor)
     if with_sigma:
         return resid / lifted, lifted
@@ -306,12 +383,16 @@ def _grid_z(feats: np.ndarray, size: int, floor: float) -> np.ndarray:
 # 内部：颜色与纹理两路证据
 # ---------------------------------------------------------------------------
 def _colour_score(lab: np.ndarray, cfg: AnomalyConfig,
-                  island: np.ndarray | None = None
+                  island: np.ndarray | None = None,
+                  scale_map: np.ndarray | None = None
                   ) -> tuple[np.ndarray, float | None]:
     """逐纹素颜色异常分（各尺度取最大）+ **本件的纹理尺度中位数**。
 
     三个 Lab 通道各自标准化后取均方根——单一通道的异常（比如只有 b 通道偏移
     的泛碱）不会被另外两个正常通道稀释。
+
+    传入 ``island`` 时，尺度估计限定在岛内（``scale_map`` 是逐岛尺度，给样本
+    不足的块兜底）；不传则退回「跨岛空间邻域」的旧口径。
 
     第二个返回值是最粗尺度上、岛内 ``σ_L`` 的中位数（Lab 单位）。它是**可检
     下限的可读形式**：同一个 ΔE，在 σ_L=15 的平滑区是 6σ 异常，在 σ_L=53 的
@@ -322,6 +403,8 @@ def _colour_score(lab: np.ndarray, cfg: AnomalyConfig,
     h, w = lab.shape[:2]
     best = np.zeros((h, w), np.float32)
     sigma_median: float | None = None
+    # ``scale_map`` 只在按岛模式下给出；没有它就是旧口径（跨岛空间邻域）。
+    z_island = island if scale_map is not None else None
     for size in cfg.scales:
         s = int(size) | 1                        # 窗口取奇数
         s = min(s, max(3, min(h, w) | 1))        # 窗口不得大于图像
@@ -329,7 +412,8 @@ def _colour_score(lab: np.ndarray, cfg: AnomalyConfig,
         sig_l = None
         for c in range(lab.shape[2]):
             z, sig = _robust_z(lab[..., c], s, cfg.min_scale, cfg.scale_block,
-                               cfg.scale_cap, with_sigma=True)
+                               cfg.scale_cap, with_sigma=True, island=z_island,
+                               scale_map=scale_map)
             total += z * z
             if c == 0:
                 # 只取 **L 通道**：它是纹理所栖身的那一路，a/b 在多数图集上
@@ -565,8 +649,19 @@ def detect_atlas_anomalies(image: np.ndarray, island: np.ndarray, *,
         raise ValueError("岛内掩膜全为空：图集没有可用纹素，无法检测"
                          "（通常是 UV 展开或掩膜生成失败，不是检测问题）")
 
-    lab = _fill_outside(_to_lab(rgb), island)
-    colour_score, sigma_median = _colour_score(lab, cfg, island)
+    # 逐岛统计总是算：即使关掉归一化，``island_count`` 也要能报出来（用户要
+    # 知道这件图集是「一整块」还是「三千块拼贴」，这决定了结论该怎么读）。
+    raw = _to_lab(rgb)
+    labels, n_islands, island_median, island_scale = _island_stats(raw, island)
+    if cfg.per_island:
+        # **先归零再填充**：反过来的话岛外填充值没减中位数，每条岛边界又长出
+        # 一个人为台阶（原型第一版就是这么错的，真机误报 10.7%）。
+        lab = _fill_outside(raw - island_median, island)
+        colour_score, sigma_median = _colour_score(lab, cfg, island,
+                                                   island_scale)
+    else:
+        lab = _fill_outside(raw, island)
+        colour_score, sigma_median = _colour_score(lab, cfg, island)
     score = colour_score
     mask_tex = np.zeros_like(island)
 
@@ -602,13 +697,20 @@ def detect_atlas_anomalies(image: np.ndarray, island: np.ndarray, *,
 
     metrics = {
         "island_ratio": n_island / float(island.size),
+        # 这张图集由多少个 UV 岛拼成。**1 与 3690 是两种东西**：单岛图集上
+        # 「局部空间背景」成立，拼贴图集上只有「按岛」才成立。
+        "island_count": int(n_islands),
+        "per_island": bool(cfg.per_island),
         "anomalous_ratio": float(mask.sum()) / float(n_island),
         "scales": [int(s) for s in cfg.scales],
         "k": float(cfg.k),
         "min_scale": float(cfg.min_scale),
         "tex_scale": float(cfg.tex_scale) if cfg.use_texture else None,
         "use_texture": bool(cfg.use_texture),
-        "score_max": float(score.max()) if score.size else 0.0,
+        # 只看岛内：岛外是未着色空隙（分数由填充值算出，没有意义）。把岛外
+        # 最大值算进来，会让「一块干净图集」的 score_max 由 3.52 而非 1.29
+        # 决定 —— 指标描述的是被筛查的区域，不是整张 png。
+        "score_max": float(score[island].max()) if n_island else 0.0,
         "score_p99": float(np.percentile(score[island], 99)) if n_island else 0.0,
         # 可检下限的可读形式：本件在最粗尺度上的纹理尺度中位（Lab 单位）。
         # 同一个 ΔE，σ 越大越难检出 —— 报它比写一句「灵敏度随信噪比变化」有用。
