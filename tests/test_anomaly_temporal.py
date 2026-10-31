@@ -185,3 +185,92 @@ class TestDeltaE:
         lab2[..., 0] = 128.0 + 25.5           # L 抬 10 个 CIE 单位（8 位下 25.5）
         d = delta_e_map(lab, lab2)
         assert d.max() == pytest.approx(10.0, abs=0.2)
+
+
+class TestLightingAlignment:
+    """两期照明/白平衡差异必须先归一化，否则 ΔE 那一列在骗人。
+
+    实测（真机 1.1.12，把同一张图集整体提亮 +25）：五态判定**不变**（X3 的岛内
+    归一化把常数抵消了），但稳定态的 ΔE 变成 9.8——报表上读起来像「这处病害
+    加重了近 10 个色差」，其实一个像素都没变。对比度变化更糟：会凭空造出「新增」。
+
+    所以对齐不是「优化」，是让 ΔE 这一列有可比性。做法是逐通道的**分位仿射**
+    （配 q10/q90 与中位），只在岛内估计——用最小二乘会被少数病变带偏，
+    用全图又会把岛外的黑底算进去。
+    """
+
+    def _shifted(self, a, offset=25.0):
+        return np.clip(a.astype(np.float32) + offset, 0, 255).astype(np.uint8)
+
+    def test_brightness_shift_is_removed_from_delta_e(self):
+        from h3d.anomaly.temporal import TemporalConfig, track
+
+        a = _gradient(512)
+        # 斑块用**中间调**：近白色（238,230,196）提亮 25 后会饱和裁切，
+        # 裁掉的信息任何对齐都还原不了 —— 那测的是裁切，不是对齐。
+        _inject(a, 300, 200, 14, colour=(70, 62, 52))
+        b = self._shifted(a, 25.0)          # 内容完全相同，只是整体提亮
+        res_a, res_b = _detect(a), _detect(b)
+        on = track(a, b, res_a, res_b)
+        off = track(a, b, res_a, res_b, config=TemporalConfig(align_light=False))
+
+        assert on.changes, "对齐后不该一条都不剩"
+        assert max(c.delta_e for c in on.changes) < 2.0, (
+            f"对齐后仍有 ΔE={max(c.delta_e for c in on.changes):.1f} —— 光照没被减掉")
+        assert max(c.delta_e for c in off.changes) > 5.0, (
+            "不对齐时 ΔE 也没被污染，说明这个夹具没造出光照差异")
+
+    def test_contrast_change_is_removed_from_delta_e(self):
+        """对比度（增益）也要减掉——只减偏移挡不住换灯。
+
+        真机上对比度 ×1.35 时曾凭空造出「新增」（图斑面积跨过最小面积门限），
+        这里用 ΔE 污染量与状态两点一起锁：污染必须被减掉，状态不许变。
+        """
+        from h3d.anomaly.temporal import TemporalConfig, track
+
+        a = _gradient(512)
+        for cx, cy in ((300, 200), (180, 330)):
+            _inject(a, cx, cy, 14, colour=(70, 62, 52))
+        b = np.clip(128.0 + 1.35 * (a.astype(np.float32) - 128.0), 0,
+                    255).astype(np.uint8)
+        res_a, res_b = _detect(a), _detect(b)
+        on = track(a, b, res_a, res_b)
+        off = track(a, b, res_a, res_b, config=TemporalConfig(align_light=False))
+
+        assert [c.state for c in on.changes if c.state != "stable"] == [], (
+            f"对齐后仍冒出状态变化：{[c.state for c in on.changes]}")
+        # 对齐后仍留有约 2 个 ΔE：8 位量化在**暗部**被 Lab 放大（RGB 差 1 个码值，
+        # 在 L≈30 处就是 2 个 ΔE）。这不是对齐的缺陷，是 8 位图集的下限。
+        on_de = max(c.delta_e for c in on.changes)
+        off_de = max(c.delta_e for c in off.changes)
+        assert on_de < 3.0, f"对齐后 ΔE 仍有 {on_de:.1f}"
+        assert on_de < 0.5 * off_de, (
+            f"对齐只减掉了 {1 - on_de / off_de:.0%}（{off_de:.1f}→{on_de:.1f}）")
+        assert max(c.delta_e for c in off.changes) > 5.0, (
+            "不对齐时 ΔE 也没被污染，夹具没造出对比度差异")
+
+    def test_real_change_survives_alignment(self):
+        """对齐只能减掉**全局**差异，局部真变化必须留着。"""
+        from h3d.anomaly.temporal import track
+
+        a = _gradient(512)
+        b = self._shifted(a, 20.0)
+        _inject(b, 300, 200, 16)            # 只有第二期有
+        rep = track(a, b, _detect(a), _detect(b))
+        assert [c.state for c in rep.changes] == ["appeared"], rep.metrics
+        assert rep.changes[0].delta_e > 10, (
+            f"真变化的 ΔE 只剩 {rep.changes[0].delta_e:.1f} —— 对齐把局部变化也抹了")
+
+    def test_alignment_parameters_are_reported(self):
+        """报出来的数要能让人复查：逐通道增益/偏移 + 对齐后的残差。"""
+        from h3d.anomaly.temporal import track
+
+        a = _gradient(512)
+        b = self._shifted(a, 25.0)
+        rep = track(a, b, _detect(a), _detect(b))
+        m = rep.metrics
+        assert m["light_align"] is True
+        assert len(m["light_gain"]) == 3 and len(m["light_offset"]) == 3
+        # offset 是 8 位码值：整体提亮 25 个码值 → 对齐时减掉 25
+        assert m["light_offset"][0] == pytest.approx(-25.0, abs=1.0)
+        assert m["delta_e_residual"] < 1.5

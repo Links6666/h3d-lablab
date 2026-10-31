@@ -60,12 +60,15 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--root", default=DEFAULT_ROOT)
     ap.add_argument("--item", default=None)
+    ap.add_argument("--relight", action="store_true",
+                    help="另跑一组「换灯」对照：第二期整体提亮 25 / 对比度 ×1.35，"
+                         "看照明对齐挡住了什么")
     ap.add_argument("--save-b", default="",
                     help="把造出来的第二期图集存到该路径（便于用 CLI 复跑）")
     args = ap.parse_args()
 
     from h3d.anomaly import detect_atlas_anomalies
-    from h3d.anomaly.temporal import STATE_LABEL, TemporalConfig, track
+    from h3d.anomaly.temporal import STATE_LABEL, track
 
     rgb, mask, item = load(args.root, args.item)
     h, w = mask.shape
@@ -189,6 +192,29 @@ def main() -> int:
     if moved:
         for c in moved:
             print(f"    {c.label} {c.bbox_a}->{c.bbox_b} ΔE={c.delta_e:.1f}")
+
+    if args.relight:
+        from h3d.anomaly.temporal import TemporalConfig as _TC
+
+        print("\n换灯对照（内容完全相同，只是光照/对比度变了）")
+        print(f"  {'扰动':14s} {'对齐':4s} {'非稳定态':>6s} {'稳定态ΔE中位':>12s} "
+              f"{'残差ΔE':>7s}")
+        for tag, img_b in (("整体提亮 +25",
+                            np.clip(rgb.astype(np.float32) + 25, 0, 255).astype(np.uint8)),
+                           ("对比度 ×1.35",
+                            np.clip(128.0 + 1.35 * (rgb.astype(np.float32) - 128.0),
+                                    0, 255).astype(np.uint8))):
+            rb = detect_atlas_anomalies(img_b, mask)
+            for name, cfg in (("关", _TC(align_light=False)), ("开", _TC())):
+                rep2 = track(rgb, img_b, res_a, rb, config=cfg)
+                moved = [c for c in rep2.changes if c.state != "stable"]
+                st = [c.delta_e for c in rep2.changes if c.state == "stable"]
+                med = float(np.median(st)) if st else 0.0
+                print(f"  {tag:14s} {name:4s} {len(moved):6d} {med:12.2f} "
+                      f"{rep2.metrics['delta_e_residual']:7.2f}")
+        print("  读数：对齐把「稳定态 ΔE」从 8~10 压回 0~1。不减的话报表会印出"
+              "「这处病害加重了 10 个色差」，\n        而其实一个像素都没变——"
+              "这一列在换灯之后就不可读了。")
 
     print("\n注：第二期是**仿真**的（改三处已知位置），验证的是「关联 + 状态机 + ΔE 门限」"
           "\n    这套机制；真实两期数据还要验 UV 继承的像素级配准与两期光照差异。")

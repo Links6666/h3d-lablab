@@ -66,6 +66,11 @@ class TemporalConfig:
     #: 变化是否**可见**的门限（CIE76 ΔE）。低于它说明两期像素几乎没动，
     #: 「变没变」这件事本身不成立——报出来只会是阈值抖动。ΔE≈5 是「一眼能看出」。
     delta_e_min: float = 5.0
+    #: 比对前是否做**两期照明对齐**（逐通道分位仿射）。默认开。
+    #: 光照是烘进纹理的：同一件文物换一次灯，整张图的 ΔE 就整体偏移，稳定态会
+    #: 印出「ΔE 9.8」这种读数——一个像素都没变，读起来却像病害加重了 10 个色差。
+    #: 关掉只用于对照实验（证明对齐确实起了作用）。
+    align_light: bool = True
 
 
 @dataclass(frozen=True)
@@ -211,6 +216,51 @@ def _median_delta_e(de: np.ndarray, island: np.ndarray,
     return float(np.median(de[sel]))
 
 
+def align_epochs(image_a: np.ndarray, image_b: np.ndarray, island: np.ndarray,
+                 *, lo: float = 10.0, hi: float = 90.0,
+                 max_gain: float = 2.0) -> tuple[np.ndarray, dict]:
+    """把第二期对齐到第一期的光照/白平衡。返回 ``(对齐后的 RGB float32, 参数)``。
+
+    逐通道做**分位仿射**：用 q_lo/q_hi 配尺度、用中位配偏移，只在岛内估计。
+
+    * **在 RGB 码值空间做，不在 Lab**：曝光与白平衡作用在传感器 RGB 上，
+      「整体提亮 25 个码值」在 RGB 里正是一个平移；换算到 Lab 之后它变成非线性
+      （L 有立方根），用 Lab 的仿射只能减掉一部分——实测残差 4.4 个 ΔE，足够
+      在报表里印成「病害变了」。
+    * 为什么不用最小二乘：它会去拟合少数病变（我们要看的正是它们），把
+      「病害变亮」当成「整体变亮」减掉。
+    * 为什么只在岛内：岛外是未着色的黑底，会把 q_lo 拉到 0、增益估成 2 倍。
+    * 为什么是仿射而不是只减偏移：换灯往往同时改对比度（增益），只减偏移挡不住。
+
+    **只减全局差异**：仿射是全局的，一个斑块改不了三个分位数，所以局部真变化
+    不受影响。反过来也成立——整件均匀变色（如整体泛黄）会被当成光照减掉，
+    这层追踪只报**局部**变化。
+
+    参数单位：``gain`` 无量纲，``offset`` 是 **8 位码值**（与输入同一把尺子）；
+    「减完还剩多少」看 ``delta_e_residual``（ΔE 单位）。
+    """
+    a = np.asarray(image_a, np.float32)
+    b = np.array(image_b, np.float32, copy=True)
+    mask = np.asarray(island, bool)
+    if not mask.any():
+        return b, {"gain": [1.0] * 3, "offset": [0.0] * 3}
+    gains, offsets = [], []
+    for c in range(a.shape[2]):
+        va = a[..., c][mask]
+        vb = b[..., c][mask]
+        qa = np.percentile(va, [lo, hi])
+        qb = np.percentile(vb, [lo, hi])
+        span_a = float(qa[1] - qa[0])
+        span_b = float(qb[1] - qb[0])
+        gain = span_a / span_b if span_b > 1e-3 else 1.0
+        gain = float(np.clip(gain, 1.0 / max_gain, max_gain))
+        offset = float(np.median(va) - gain * np.median(vb))
+        b[..., c] = np.clip(b[..., c] * gain + offset, 0.0, 255.0)
+        gains.append(round(gain, 4))
+        offsets.append(round(offset, 3))
+    return b, {"gain": gains, "offset": offsets}
+
+
 def track(image_a: np.ndarray, image_b: np.ndarray, res_a, res_b,
           *, config: TemporalConfig | None = None) -> TemporalReport:
     """比对两期的 X3 结果，输出五态变化清单。
@@ -236,7 +286,12 @@ def track(image_a: np.ndarray, image_b: np.ndarray, res_a, res_b,
             f"{cfg.layout_min_iou}）：跨期比较要求同一物理点落在同一纹素上，"
             f"布局一变所有结论作废。请走图集继承（epochs 复测）而不是重新展开。")
 
-    de = delta_e_map(_to_lab(image_a), _to_lab(image_b))
+    light = {"gain": [1.0] * 3, "offset": [0.0] * 3}
+    img_b_use = image_b
+    if cfg.align_light:
+        # 对齐在 RGB 码值空间做（曝光/白平衡作用的地方），再换成 Lab 算 ΔE
+        img_b_use, light = align_epochs(image_a, image_b, isle_a & isle_b)
+    de = delta_e_map(_to_lab(image_a), _to_lab(img_b_use))
     regions_a = list(res_a.regions)
     regions_b = list(res_b.regions)
     pairs = _match(regions_a, regions_b, cfg)
@@ -288,6 +343,14 @@ def track(image_a: np.ndarray, image_b: np.ndarray, res_a, res_b,
         counts[ch.state] += 1
     metrics = {
         **counts,
+        # 照明对齐：参数必须报出来，否则「ΔE 是多少」无法复查
+        "light_align": bool(cfg.align_light),
+        "light_gain": light["gain"],
+        "light_offset": light["offset"],
+        # 对齐后岛内的中位 ΔE：同源内容应≈0；它明显不小时说明两期差异不是
+        # 纯光照（内容真的变了，或者根本配错了图集）
+        "delta_e_residual": (None if not (isle_a & isle_b).any() else
+                             round(float(np.median(de[isle_a & isle_b])), 3)),
         "n_changes": len(kept),
         "matched": len(pairs),
         "filtered_by_delta_e": dropped,
