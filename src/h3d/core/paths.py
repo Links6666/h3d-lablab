@@ -222,6 +222,30 @@ def looks_like_project(project_root: str) -> bool:
     return False
 
 
+def looks_like_h3d_project(project_root: str) -> bool:
+    """目录是不是一个 H3D 项目根，**新旧两种布局都认**。
+
+    与 :func:`looks_like_project` 的区别
+    ------------------------------------
+    ``looks_like_project`` 只认**旧布局**（标记直接躺在项目根），它是
+    ``migrate_legacy`` 的闸门，要求严格。1.1.13 起产物已下沉到
+    ``<项目>/阶段成果/``，新布局下根目录里只有一个 ``阶段成果``，
+    旧判据会判否 —— 于是档案迁移（``h3d.archive.migrate``）不能用它。
+
+    这里在新布局下多探一层：``阶段成果/`` 里任一份阶段专属目录存在即算数。
+    **仍然不含** ``output`` 与 ``report`` —— 2026-10-26 的教训不变。
+    """
+    root = os.path.abspath(project_root)
+    if looks_like_project(root):
+        return True
+    stage = stage_root(root if os.path.basename(root) != STAGE_DIR
+                       else os.path.dirname(root))
+    if not os.path.isdir(stage):
+        return False
+    return any(os.path.isdir(os.path.join(stage, d))
+               for d in _STAGE_CHILDREN if d != "output")
+
+
 def legacy_dirs_present(project_root: str) -> list[str]:
     """旧布局下**直接位于项目根**的阶段/交付目录（迁移候选）。"""
     if not os.path.isdir(project_root) or not looks_like_project(project_root):

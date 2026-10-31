@@ -58,6 +58,21 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("gui", help="启动图形界面（P1 核心版）")
     p_report.add_argument("-c", "--config", required=True, help="配置文件路径")
 
+    p_arch = sub.add_parser(
+        "archive", help="文物档案（时相登记 / 存量迁移 / 状态查看）")
+    arch_sub = p_arch.add_subparsers(dest="archive_cmd", required=True)
+    p_arch_mig = arch_sub.add_parser(
+        "migrate", help="把存量项目认成一个时相（只读，不改产物）")
+    p_arch_mig.add_argument("-p", "--path", default=".",
+                            help="项目根或其「阶段成果」目录（默认当前目录）")
+    p_arch_mig.add_argument("--epoch", default="E1", help="时相 id（默认 E1）")
+    p_arch_mig.add_argument("--title", default="", help="文物名称（默认取件号）")
+    p_arch_mig.add_argument("--new-epoch", action="store_true",
+                            help="已有档案时再追加一个时相，而不是返回 already")
+    p_arch_status = arch_sub.add_parser("status", help="列出档案中的时相与产物版本")
+    p_arch_status.add_argument("-p", "--path", default=".", help="项目根目录")
+    p_arch_status.add_argument("--json", action="store_true", help="以 JSON 输出")
+
     return parser
 
 
@@ -265,6 +280,67 @@ def _cmd_doctor(cfg_path: Optional[str], fix: bool, as_json: bool,
 # ---------------------------------------------------------------------------
 # 入口
 # ---------------------------------------------------------------------------
+def _cmd_archive(args) -> int:
+    """文物档案：迁移（存量项目 → 时相）与状态查看。
+
+    档案层是「重新采集」与「重新计算」解耦的载体（ADR-0001），所以这里的
+    migrate 只**新建** ``archive/``，绝不改写 ``阶段成果`` 里的任何字节。
+    """
+    import json as _json
+
+    from h3d.archive import Archive
+    from h3d.archive.migrate import migrate
+
+    if args.archive_cmd == "migrate":
+        try:
+            res = migrate(args.path, epoch_id=args.epoch, title=args.title,
+                          force_new_epoch=args.new_epoch)
+        except ValueError as exc:
+            # 迁移闸门（非项目目录 / 无可登记产物）属于用户输入问题，
+            # 给可读信息 + rc=1，不打印 traceback。
+            print(f"迁移失败：{exc}", file=sys.stderr)
+            return 1
+        if res["status"] == "already":
+            print(f"档案已存在，未变更（基准期 {res['epoch_id']}）。"
+                  f"如需追加时相，加 --new-epoch。")
+        else:
+            print(f"已建档：{res['artifact_id']} / {res['epoch_id']} "
+                  f"v{res['version']}  内容键 {res['content_key'][:16]}…")
+            if res["missing"]:
+                print(f"  缺失产物：{'、'.join(res['missing'])}（报表会显示 N/A）")
+        return 0
+
+    # status
+    try:
+        arch = Archive.open(args.path)
+    except FileNotFoundError:
+        print(f"该目录还没有文物档案：{args.path}", file=sys.stderr)
+        return 1
+    art = arch.artifact()
+    rows = []
+    for ep in arch.epochs():
+        assets = arch.assets(ep.epoch_id)
+        rows.append({
+            "epoch_id": ep.epoch_id, "route": ep.route,
+            "baseline": ep.is_baseline, "captured_on": ep.captured_on,
+            "qc": ep.qc_status, "versions": [a.version for a in assets],
+            "content_keys": [a.content_key[:12] for a in assets],
+        })
+    if args.json:
+        print(_json.dumps({"artifact": art.to_dict(), "epochs": rows},
+                          ensure_ascii=False, indent=2))
+        return 0
+    print(f"文物：{art.artifact_id}  {art.title}")
+    if not rows:
+        print("  （还没有时相）")
+    for r in rows:
+        tag = "基准期" if r["baseline"] else "复测期"
+        print(f"  {r['epoch_id']}  路线{r['route']}  {tag}  "
+              f"{r['captured_on']}  QC={r['qc']}  "
+              f"产物版本 {r['versions'] or '无'}")
+    return 0
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     from h3d.core import ConfigError, H3DError, get_logger
 
@@ -286,6 +362,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                                show_all=args.all, deep=args.deep)
         if args.command == "report":
             return _cmd_report(args.config)
+        if args.command == "archive":
+            return _cmd_archive(args)
         parser.print_help()
         return 2
     except ConfigError as exc:
