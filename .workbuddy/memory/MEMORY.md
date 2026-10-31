@@ -21,8 +21,7 @@
   类别图 → 每纹素 3D 面积积分。坑：单视图硬投影 = 整件都有病害。
 - **X4 病害时序追踪**：图斑关联（IoU+质心+面积比→匈牙利）、状态机五态；UV 对齐优先、几何 ICP
   兜底；显著性用 M3C2 LoD95 + 最小图斑面积。
-- X3 ≥80 texel 大斑块灵敏度不足（需要降采样版大窗口）；图斑明细只进 `regions.csv` 没进 HTML；
-  进度权重没在多件批上验过分布。
+- X3 ≥80 texel 大斑块灵敏度不足（需降采样版大窗口）；图斑明细只进 CSV；进度权重未在多件批验证。
 - S1 写死 `single_camera 1`（多机位误合并）、`SIMPLE_RADIAL`（换镜头失准）；质检判别力不足
   （`samples=4000`/`coverage_threshold=0.3` 实测 81.8% 形同虚设）；镂空/内侧缺覆盖 → 泊松留洞 +
   22.3% 纹素靠反面填充，需补低机位/俯拍，稀疏特征弱（30 张 13,990 点、track 3.95）→ 补侧向硬光/
@@ -195,9 +194,9 @@
   因为 `atlas-vN` 只有档案继承时才有）。
 
 ## 双场景 / 尺度
-- ①（带扫描件）≠②（纯照片）：S1/P1/X1/X2 在①失败只降级，在② S1 是唯一几何源、失败即整件失败；
-  判据 `stage in {S1,P1,X1,X2} and bool(task.raw_paths)`。双源几何只 `novel≥0.15` 并入（novel=0
-  照合 → 面数+70%、rmse+34%、覆盖−60%）。
+- ①（带扫描件）≠②（纯照片）：S1/P1/X1/X2/X3 在①失败只降级，在② S1 是唯一几何源、失败即整件
+  失败；判据 `stage in OPTIONAL_STAGES and bool(task.raw_paths)`。双源几何只 `novel≥0.15` 并入
+  （novel=0 照合 → 面数+70%、rmse+34%、覆盖−60%）。
 - **无度量基准不得缩放**：`_has_metric_anchor()=bool(task.raw_paths)`，无锚点 factor=1.0 +
   `reason=uncalibrated_sfm_units`；**SfM 的 PLY 塞进 00_raw 会被当锚点 → 假毫米数**。
 - 照片目录须同源：优先 `task.root/00_photo` 再回退上级（X2 曾多写一层 `dirname` → 色卡不生效）。
@@ -211,7 +210,7 @@
    `<ws>/dense` 清。
 5. 同根两批互毁（`is_open` 失败、GPU 争抢 45→145s）；`core/lockfile.py` 接管残留锁。
 6. 超时覆盖两遍（30 张 3.84MP 实测 6815 s，`views×MP×45×passes` 下限 1800）；续算靠 `_pose_fp`；
-   **超时也必须落盘**（`EXIT CODE: TIMEOUT`）否则残留上轮日志 → 误写「需 CUDA」；取消须杀进程树。
+   **超时也必须落盘**（否则残留上轮日志 → 误写「需 CUDA」）；取消须杀进程树。
 7. `dense_max_image_size` 默认 1600；关 geom_consistency 后 fusion 须 `--input_type photometric`。
 
 ## 测试坑
