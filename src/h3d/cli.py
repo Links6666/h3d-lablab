@@ -88,6 +88,17 @@ def _build_parser() -> argparse.ArgumentParser:
                             help="图集边长；默认沿用基准图集记录的尺寸")
     p_arch_inh.add_argument("--json", action="store_true", help="以 JSON 输出")
 
+    p_anom = sub.add_parser(
+        "anomaly", help="X3 单期纹理异常检测（单次采集的快速筛查）")
+    p_anom.add_argument("-p", "--path", default=".",
+                        help="项目根或其「阶段成果」目录（默认当前目录）")
+    p_anom.add_argument("--item", default="", help="只跑某一件（默认全部）")
+    p_anom.add_argument("--k", type=float, default=0.0,
+                        help="robust z 阈值（默认 3.5，越小越敏感）")
+    p_anom.add_argument("--no-write", action="store_true",
+                        help="只计算不落盘（不写 60_qc/<件>/anomaly）")
+    p_anom.add_argument("--json", action="store_true", help="以 JSON 输出")
+
     p_arch_refs = arch_sub.add_parser(
         "refs", help="体检资产里的图集引用（查无实体的可置空修复）")
     p_arch_refs.add_argument("-p", "--path", default=".", help="项目根目录")
@@ -431,6 +442,64 @@ def _cmd_archive_refs(args) -> int:
     return 0 if not dangling else 1
 
 
+def _cmd_anomaly(args) -> int:
+    """``h3d anomaly``：对单期 UV 图集做无监督异常筛查（X3）。
+
+    只做编排：找输入、逐件调用、把结论翻译成退出码。判据全在
+    :func:`h3d.anomaly.detect_atlas_anomalies` 里，命令行不重复实现。
+    """
+    import json as _json
+
+    from h3d.anomaly import AnomalyConfig
+    from h3d.core import paths
+    from h3d.anomaly.atlas_io import find_items, run_item
+
+    import os as _os
+
+    project = paths.project_root_of(_os.path.abspath(args.path))
+    stage = paths.stage_root(project)
+    items = [args.item] if args.item else find_items(stage)
+    if not items:
+        print(f"{stage}/50_tex 下没有同时具备图集与掩膜的件。\n"
+              f"  先跑 M4 照片纹理（产物：<件>_L1.0_diffuse.png + "
+              f"<件>_L1.0_mask.png），再回来做异常筛查。", file=sys.stderr)
+        return 1
+
+    cfg = AnomalyConfig(k=args.k) if args.k > 0 else AnomalyConfig()
+    results, errors = [], []
+    for item in items:
+        try:
+            results.append(run_item(stage, item, config=cfg,
+                                    write=not args.no_write))
+        except (FileNotFoundError, ValueError) as exc:
+            errors.append({"item_id": item, "error": str(exc)})
+            print(f"[{item}] 跳过：{exc}", file=sys.stderr)
+
+    if args.json:
+        print(_json.dumps({"items": results, "errors": errors},
+                          ensure_ascii=False, indent=2))
+    else:
+        if results:
+            scales = "/".join(str(int(x)) for x in cfg.scales)
+            print(f"单期纹理异常筛查（k={cfg.k}，背景窗口 {scales} 纹素）")
+        for r in results:
+            m = r["metrics"]
+            print(f"  {r['item_id']}  {r['size'][0]}²  "
+                  f"岛内 {m['island_ratio'] * 100:.1f}%  "
+                  f"异常 {m['anomalous_ratio'] * 100:.2f}%  "
+                  f"图斑 {m['n_regions']} 处"
+                  + (f"  最大 {m['largest_ratio'] * 100:.2f}%"
+                     if m.get("largest_ratio") else ""))
+            if r.get("output_dir"):
+                print(f"      产物：{r['output_dir']}/"
+                      f"（heat.png / mask.png / regions.csv / metrics.json）")
+            elif args.no_write:
+                print("      （--no-write：未落盘）")
+    if errors and not results:
+        return 1
+    return 0 if not errors else 1
+
+
 def _cmd_archive(args) -> int:
     """文物档案：迁移（存量项目 → 时相）与状态查看。
 
@@ -523,6 +592,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             return _cmd_report(args.config)
         if args.command == "archive":
             return _cmd_archive(args)
+        if args.command == "anomaly":
+            return _cmd_anomaly(args)
         parser.print_help()
         return 2
     except ConfigError as exc:
