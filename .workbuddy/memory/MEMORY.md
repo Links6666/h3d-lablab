@@ -143,6 +143,15 @@
 - 测试坑：`pytest --basetemp=<项目内路径>` 会让 36 项 runner/texture 测试互相污染而失败
   （单文件带 basetemp 是绿的）；用默认 `%TEMP%`，exit=0 即全绿，summary 行可能被沙箱
   safe-delete 提示盖掉。
+- **续跑判据是「输入内容指纹」不只是状态**（`runner/fingerprint.py`，manifest 的 `input_key`）：
+  旧判据「done + 产物在」会让「换照片/改参数」静默跳过（产物还在，看不出输入变了），逃生口
+  `force_rerun` 又是布尔整批。键 = 外部输入(原始几何/照片摘要) + 上游阶段键(逐级累积) +
+  参数快照；**配置用减法**（只剔 `project`/`runner` 两个执行控制段，其余全参与）——白名单式
+  漏一段就是「改了参数不重跑」，与 r16 手写白名单同构。旧记录无 key → 按旧规则跳过
+  （不能改成重跑：存量 30 件要 40 分钟）。
+- **并行模式 `workers>1` 不做续跑判定**（worker 不共享 manifest），指纹在这条路线上不生效，
+  已补 WARNING 但未修行为。日志里 done/fail/running 才打 `↻ 重跑`，disabled/skipped 走 debug。
+- runner **只在已建档项目**登记产物（不自动建 `archive/`）；全跳过时 task=SKIPPED 故不重复登记。
 
 ## 双场景 / 尺度
 - ①（带扫描件）≠②（纯照片）：S1/P1/X1/X2 在①失败只降级；在② S1 是唯一几何源、失败即整件失败。
