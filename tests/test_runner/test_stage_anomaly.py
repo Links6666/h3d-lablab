@@ -400,7 +400,7 @@ class TestMetricsReachTheReport:
                  anomaly_atlas_digest="0123456789ab")
         m.record("r1/M5", "done", [], 1.0, coverage=0.9, rmse_mm=2.0,
                  mps_m=0.001, anomaly_ratio=0.0218, anomaly_regions=35,
-                 anomaly_sigma_median=30.3)
+                 anomaly_sigma_median=30.3, anomaly_k=3.5)
         m.save(cfg.runner.manifest)
 
         out = os.path.join(str(tmp_path), "report.html")
@@ -418,6 +418,8 @@ class TestMetricsReachTheReport:
         assert "超过该岛一半" in html, "缺少「岛内病变过半会当成本底」这条已知边界"
         # 纹理尺度要能在同一格里读出来（不加列，避免 16 列的表再变宽）
         assert "σ_L" in html, "报出了异常面积却没给「这件的纹理尺度有多大」"
+        # 实际用的 k 也要标出来：--k 可调，脚注里写死一个数会在改过之后变成假话
+        assert "k=3.5" in html, "没标出实际使用的阈值 k"
 
     def test_html_lists_region_boxes(self, tmp_path):
         """报表要能直接指着看「第 1 处在哪」—— 而不是只给一个总数。

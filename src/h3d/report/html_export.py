@@ -571,7 +571,7 @@ _TEMPLATE = """<!DOCTYPE html>
     <td class="num">{{ row.consistency }}</td><td>{{ row.flipped }}</td>
     <td class="num">{{ row.pixel_scale }}</td>
     <td class="num">{{ row.anomaly_ratio }}<br>
-        <span class="mono-note">σ_L≈{{ row.anomaly_sigma }}</span></td>
+        <span class="mono-note">σ_L≈{{ row.anomaly_sigma }} · k={{ row.anomaly_k }}</span></td>
     <td class="num">{{ row.anomaly_regions }}</td>
     <td class="mono">{{ row.anomaly_digest }}</td>
     <td class="{{ row.cls }}">{{ row.verdict }}</td>
@@ -589,12 +589,16 @@ _TEMPLATE = """<!DOCTYPE html>
 </p>
 <p class="footnote">
   <b>异常面积 / 图斑数（X3 单期筛查）的读法</b>：它是<b>相对量</b>，不是病害面积。
-  图斑数是<b>待人工复核处数</b>，不是「查出了这么多病害」——图集里的相邻纹素在
-  实物上并不相邻（UV 岛拼贴），所以岛与岛之间的底色差也会被记成一处。
-  每个纹素与<b>它所在那个 UV 岛</b>的中位数背景比，超过 k≈3.5 倍本岛稳健尺度才算
+  图斑数是<b>待人工复核处数</b>，不是「查出了这么多病害」——它只说「这片区域与
+  它所在那块岛的常见起伏明显不同」，为什么不同（掉彩、泛碱、光照、补色）不在
+  这一层的判定范围里。
+  每个纹素与<b>它所在那个 UV 岛</b>的中位数背景比，超过 <b>k</b> 倍本岛稳健尺度才算
   异常——<b>不跨岛比较</b>。这条不是优化而是必须：UV 图集是若干岛拼成的，<b>相邻
   纹素在实物上并不相邻</b>，跨岛比较会把「这块岛的底色与邻居不同」记成病害
   （真机图集 3690 个岛，跨岛口径下 35 处「异常」里大部分是这种）。
+  k 默认 3.5，实际值见格内 <code>k=</code>（<code>--k</code> 可调）。
+  <b>调高不会更准，只会更钝</b>：实测 k 从 3.5 升到 4.5，图斑 7→4，但 ΔE=120 的
+  80 texel 注入覆盖率同时从 0.92 掉到 0——被过滤的与该检出的强度是重叠的。
   代价是<b>岛内病变面积超过该岛一半时，归一化会把病变当成本底</b>而看不见——
   小岛（中位几十纹素）只适用「比岛内常见的起伏更明显」这一档。
   异常面积格内的 <code>σ_L≈N</code> 是<b>本件</b>典型位置的局部纹理跨度（Lab 单位）——
@@ -933,6 +937,8 @@ def generate_html(manifest: RunManifest,
             # 在 σ_L=53 只有 2σ。跟异常面积同格显示（图上不加列，避免表变宽）。
             "anomaly_sigma": _num(get(item, "M5").get("anomaly_sigma_median"),
                                   1, default="—"),
+            # 实际用的阈值。``--k`` 可改，脚注里写死一个数会在改过之后变成假话。
+            "anomaly_k": _num(get(item, "M5").get("anomaly_k"), 1, default="—"),
             "anomaly_regions": _num(get(item, "M5").get("anomaly_regions"), 0,
                                     default="未筛查"),
             "anomaly_digest": (get(item, "M5").get("anomaly_atlas_digest")

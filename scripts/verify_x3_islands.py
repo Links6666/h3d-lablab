@@ -82,6 +82,8 @@ def main() -> int:
     ap.add_argument("--item", default=None)
     ap.add_argument("--inject", action="store_true",
                     help="另跑 24/40/80 texel 注入（约 2 min）")
+    ap.add_argument("--k-sweep", action="store_true",
+                    help="扫 k 与注入命中（约 8 min）——用来说明「提 k 换干净」能不能成立")
     args = ap.parse_args()
 
     from h3d.anomaly import AnomalyConfig, detect_atlas_anomalies
@@ -131,6 +133,40 @@ def main() -> int:
                     hits += cov >= 0.5
                     cells.append(f"{side}:{cov:.2f}")
             print(f"  {tag:14s} {hits}/{tot}   [{' '.join(cells)}]")
+
+    if args.k_sweep:
+        from verify_x3_sensitivity import inject, pick_spots
+
+        print("\nk 扫描（真机）：图斑数 vs 注入命中 —— 看阈值能不能分开两者")
+        print(f"  {'k':>4}  异常      图斑   " + "  ".join(f"{s}texel 命中" for s in (24, 40, 80)))
+        masks = {}
+        for k in (3.5, 4.0, 4.5, 5.0, 6.0):
+            cfg = AnomalyConfig(k=k)
+            r = detect_atlas_anomalies(rgb, island, config=cfg)
+            masks[k] = (r.mask, r.metrics)
+        spots = {sd: pick_spots(island, sd) for sd in (24, 40, 80)}
+        shots = {}
+        for sd, pts in spots.items():
+            for cx, cy in pts:
+                img2, gt, _ = inject(rgb, cx, cy, sd, 120.0)
+                shots[(sd, cx, cy)] = (img2, gt & island)
+        for k, (base_mask, met) in masks.items():
+            cfg = AnomalyConfig(k=k)
+            cells = []
+            for sd in (24, 40, 80):
+                hit = tot = 0
+                for cx, cy in spots[sd]:
+                    img2, gt = shots[(sd, cx, cy)]
+                    r = detect_atlas_anomalies(img2, island, config=cfg)
+                    # 增量：扣掉该 k 下未注入时就有的报警
+                    cov = float(((r.mask & ~base_mask) & gt).sum()) / max(1, int(gt.sum()))
+                    tot += 1
+                    hit += cov >= 0.5
+                cells.append(f"{hit}/{tot}")
+            print(f"  {k:4.1f}  {met['anomalous_ratio']:7.3%}  {met['n_regions']:4d}   "
+                  + "        ".join(cells))
+        print("  注：命中按**增量**算（扣掉该 k 下既有的报警）。若提 k 只掉图斑不掉命中，"
+              "\n      说明阈值能分开两者；若命中跟着掉，说明被过滤的和要检出的强度重叠 —— k 不是可用的分界。")
 
     print("\n口径提醒：异常面积是「比本岛常见起伏更明显」的纹素占比，不是病害面积；"
           "\n          岛内病变面积超过该岛一半时，归一化会把病变当成本底而看不见。")
