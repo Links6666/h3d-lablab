@@ -253,14 +253,26 @@ def _stage_preprocess(task: Task, cfg) -> StageResult:
     # 判据直接复用既有的双源融合阈值：novel 低于阈值 = 两源没有增量信息 =
     # 大概率同源。命中即落盘标记 + WARNING，供报表降级表述（不改数值，只改口径）。
     _novel = metrics.get("dense_novel_ratio")
-    if task.raw_paths and isinstance(_novel, (int, float)) \
-            and _novel < _DENSE_MERGE_MIN_NOVEL:
-        metrics["dual_source_duplicate"] = True
+    if task.raw_paths and not isinstance(_novel, (int, float)):
+        # 有 00_raw、但本次没有 SfM 稠密几何可对比（sfm_solve.dense=false 或
+        # S1 未产出）——「同源」这件事**无法判定**。旧实现只在 novel 存在时检测，
+        # 于是 dense 关掉时自证依旧被写成「激光扫描」（1.1.12 真机正是如此）。
+        # 判不出就必须说判不出，不能默认相信。
+        metrics["dual_source_checked"] = False
         log.warning(
-            "M1 双源几何近乎重合：%s 的 00_raw 与 SfM 稠密模型新信息仅 %.1f%%"
-            "（阈值 %.0f%%）——00_raw 很可能本身就是照片重建产物。本件的"
-            "配准/精度/覆盖率属「自证」，不能作为路线一（激光几何）的验证依据。",
-            task.item_id, _novel * 100, _DENSE_MERGE_MIN_NOVEL * 100)
+            "M1 双源交叉验证未执行：%s 有 00_raw，但本次没有 SfM 稠密几何"
+            "（sfm_solve.dense 未启用或 S1 未产出）——无法判断 00_raw 是否"
+            "本身就是照片重建产物；本件的配准/精度/覆盖率属「单源自证」，"
+            "不能作为路线一（激光几何）的验证依据。", task.item_id)
+    elif task.raw_paths and isinstance(_novel, (int, float)):
+        metrics["dual_source_checked"] = True
+        if _novel < _DENSE_MERGE_MIN_NOVEL:
+            metrics["dual_source_duplicate"] = True
+            log.warning(
+                "M1 双源几何近乎重合：%s 的 00_raw 与 SfM 稠密模型新信息仅 %.1f%%"
+                "（阈值 %.0f%%）——00_raw 很可能本身就是照片重建产物。本件的"
+                "配准/精度/覆盖率属「自证」，不能作为路线一（激光几何）的验证依据。",
+                task.item_id, _novel * 100, _DENSE_MERGE_MIN_NOVEL * 100)
     # 几何来源口径：场景② 没有激光基线，novel 无从计算（恒 None），
     # 报表里必须写清"这是唯一几何源"而不是留一个空指标。
     if not task.raw_paths:
@@ -271,6 +283,10 @@ def _stage_preprocess(task: Task, cfg) -> StageResult:
         metrics["dense_source"] = "raw_looks_like_sfm"
     elif metrics.get("dense_merged"):
         metrics["dense_source"] = "laser+sfm"
+    elif metrics.get("dual_source_checked") is False:
+        # 有 00_raw 但没跑过 SfM 稠密 → 无从交叉验证，不能凭"有个文件"就
+        # 断言是激光扫描件。单列一档，报表写「激光（未交叉验证）」。
+        metrics["dense_source"] = "laser_unverified"
     else:
         metrics["dense_source"] = "laser"
     log.info("M1 完成：%s（%d 站，%d -> %d 点）",
@@ -321,7 +337,8 @@ def _stage_register(task: Task, cfg) -> StageResult:
     ref = load_point_cloud(cleaned[0])
     outputs: list[str] = []
     metrics: dict = {"n_scans": len(cleaned), "registered": True,
-                     "identity": False}
+                     "identity": False, "low_confidence": False,
+                     "icp_init": None}
     # 参考站（s01）也以恒等变换落盘，保证 20_registered 是完整的多站配准结果
     # （M3 稠密重建将合并 20_registered 下全部站点）
     ref_out = os.path.join(out_dir, f"{task.item_id}_s01.ply")
@@ -339,6 +356,22 @@ def _stage_register(task: Task, cfg) -> StageResult:
         metrics[f"rmse_s{i:02d}"] = round(float(res["inlier_rmse"]), 6)
         metrics["fitness"] = metrics[f"fitness_s{i:02d}"]
         metrics["inlier_rmse"] = metrics[f"rmse_s{i:02d}"]
+        # 配准可信度与所选初值：fitness 0.3~0.5 多半是"翻转解"（几何贴合、
+        # 方向反了），报表必须能看出这次配准是否可信（1.1.12 端到端实测）。
+        metrics[f"icp_init_s{i:02d}"] = res.get("icp_init")
+        metrics[f"low_confidence_s{i:02d}"] = bool(res.get("low_confidence"))
+        metrics["icp_init"] = metrics[f"icp_init_s{i:02d}"]
+        metrics["low_confidence"] = bool(
+            metrics["low_confidence"] or res.get("low_confidence"))
+        # 配准矩阵本身也落盘（2026-10-31）：报表只能看 fitness/rmse，
+        # 而「配准到底对不对」需要跟已知变换比对——不落矩阵就无法事后核算，
+        # 只能重跑。scripts/verify_registration_e2e.py 据此算旋转角误差。
+        try:
+            metrics[f"transformation_s{i:02d}"] = [
+                [round(float(v), 6) for v in row]
+                for row in res["transformation"]]
+        except (TypeError, ValueError, IndexError) as exc:  # noqa: BLE001
+            log.warning("M2 配准矩阵落盘失败（不影响配准本身）：%s", exc)
     log.info("M2 完成：%s（%d 站配准，末站 fitness=%.3f）",
              task.item_id, metrics["n_scans"] - 1, metrics["fitness"])
     return StageResult("M2", TaskStatus.DONE, outputs, metrics)

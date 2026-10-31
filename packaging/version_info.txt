@@ -6,8 +6,8 @@
 # 「命令行说 1.1.4、属性页说 1.1.3」这类漂移。
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 1, 12, 0),
-    prodvers=(1, 1, 12, 0),
+    filevers=(1, 1, 13, 0),
+    prodvers=(1, 1, 13, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -21,11 +21,11 @@ VSVersionInfo(
         '080404b0',
         [StringStruct('CompanyName', '文保数字化研发组'),
          StringStruct('FileDescription', 'H3D 中小型文物三维建模自动化系统'),
-         StringStruct('FileVersion', '1.1.12.0'),
+         StringStruct('FileVersion', '1.1.13.0'),
          StringStruct('InternalName', 'H3D'),
          StringStruct('OriginalFilename', 'H3D.exe'),
          StringStruct('ProductName', 'H3D 中小型文物三维建模自动化系统'),
-         StringStruct('ProductVersion', '1.1.12.0'),
+         StringStruct('ProductVersion', '1.1.13.0'),
          StringStruct('LegalCopyright', '完全开源'),
          StringStruct('Comments', '激光几何 + SfM 照片纹理，GUI 向导式零命令行')]),
     ]),

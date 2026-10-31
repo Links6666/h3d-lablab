@@ -1,0 +1,40 @@
+{
+  "model": "E:\\兵马俑照片\\1.1.12\\阶段成果\\30_dense\\relic_001\\relic_001.ply",
+  "injected": {
+    "angle_deg": 7.0,
+    "axis": "y",
+    "shift_ratio": 0.01,
+    "scale": 1.0,
+    "shift_abs": [
+      0.06116,
+      -0.06116,
+      0.03058
+    ]
+  },
+  "points": 44900,
+  "diag": 6.11611,
+  "scale_info": {
+    "factor": 1.6530027314398144,
+    "diag": 6.116110106327313,
+    "spacing": 0.0334661822523232,
+    "applied": true
+  },
+  "m2_status": "done",
+  "m2_metrics": {
+    "n_scans": 2,
+    "registered": true,
+    "identity": false,
+    "fitness_s02": 1.0,
+    "rmse_s02": 0.0,
+    "fitness": 1.0,
+    "inlier_rmse": 0.0
+  },
+  "median_gap_ratio": 0.0,
+  "rot_err_deg": 0.036,
+  "elapsed_s": 2.25,
+  "verdict": "PASS",
+  "thresholds": {
+    "max_gap": 0.02,
+    "max_rot_deg": 2.0
+  }
+}

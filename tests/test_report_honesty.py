@@ -288,3 +288,77 @@ def _task_prep_ply():
         o3d.io.write_triangle_mesh(path, m)
 
     return write
+
+
+# --------------------------------------------------------------------------- #
+# 2026-10-31（1.1.13）：对齐失败与翻转解的诊断必须出现在报表里
+# --------------------------------------------------------------------------- #
+def test_geom_source_laser_unverified():
+    """dense=false 时同源检测失效，几何来源不能默认写「激光扫描」。"""
+    from h3d.report.html_export import _geom_source
+
+    m1 = {"dense_source": "laser_unverified", "n_scans": 1}
+    text = _geom_source(m1)
+    assert "未与 SfM 交叉验证" in text
+    assert text != "激光扫描"
+
+
+def test_findings_blame_alignment_not_normals_when_out_of_frame():
+    """normal 高但 in_frame 低时，诊断必须指向对齐，而不是法线。"""
+    def get(item, stage):
+        return {
+            "M4": {"island_fill_ratio": 0.5749, "in_frame_fraction": 0.4461,
+                   "normal_visible_fraction": 0.9224},
+        }.get(stage, {})
+
+    texts = " ".join(f["text"] for f in _findings(["x"], get))
+    assert "几何与位姿" in texts
+    assert "画幅内" in texts
+    # 不能把用户引向法线
+    assert "优先检查法线朝向是否整体翻转" not in texts
+
+
+def test_findings_keep_normal_hint_when_in_frame_ok():
+    """真·法线问题时仍要给法线提示（别把旧判据删掉）。"""
+    def get(item, stage):
+        return {
+            "M4": {"island_fill_ratio": 0.5749, "in_frame_fraction": 0.93},
+        }.get(stage, {})
+
+    texts = " ".join(f["text"] for f in _findings(["x"], get))
+    assert "法线朝向" in texts
+
+
+def test_findings_warn_on_low_confidence_registration():
+    """fitness 低于可信阈值时，诊断必须说"可能翻转 180 度"。"""
+    def get(item, stage):
+        return {
+            "M2": {"registered": True, "low_confidence": True,
+                   "fitness": 0.336, "icp_init": "flip180_axis1"},
+        }.get(stage, {})
+
+    texts = " ".join(f["text"] for f in _findings(["x"], get))
+    assert "配准可信度" in texts
+    assert "翻转" in texts
+
+
+def test_findings_warn_on_laser_unverified():
+    def get(item, stage):
+        return {"M1": {"dense_source": "laser_unverified"}}.get(stage, {})
+
+    texts = " ".join(f["text"] for f in _findings(["x"], get))
+    assert "交叉验证" in texts
+    assert "自证" in texts
+
+
+@pytest.mark.parametrize("align,expect", [
+    ({"status": "skipped", "reason": "already_aligned（几何与 SfM 点云同系）"},
+     "跳过（几何已与点云同系）"),
+    ({"rejected": True, "quality": {"diag_ratio": 2.0266}}, "无效已回退恒等"),
+    ({"accepted": True, "method": "ransac", "scale_s": 0.98}, "已采纳"),
+    (None, "N/A"),
+])
+def test_align_text_variants(align, expect):
+    from h3d.report.html_export import _align_text
+
+    assert expect in _align_text(align)

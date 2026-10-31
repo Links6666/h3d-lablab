@@ -74,6 +74,10 @@ _SOURCE_CN = {
     # 既不能写成「激光扫描」（会让人以为有外部基准），也不能写成 sfm_only
     # （几何确实是 raw 提供的）。单独一个取值 + 降级表述。
     "raw_looks_like_sfm": "00_raw（与 SfM 稠密同源，未经外部基准）",
+    # 2026-10-31 真机 1.1.12：有 00_raw、但本次 SfM 只跑稀疏（dense=false），
+    # 拿不到第二份几何做交叉验证。「有文件」不等于「有激光基准」，于是既不
+    # 敢写「激光扫描」，也没证据说它同源，单列一档把不确定性说出来。
+    "laser_unverified": "00_raw（未与 SfM 交叉验证）",
 }
 
 
@@ -150,6 +154,38 @@ def _geom_source(m1: dict) -> str:
     return "N/A"
 
 
+def _align_text(align: Any) -> str:
+    """M4「几何-位姿对齐」一列的可读结论。
+
+    这一列存在的理由：``island_fill_ratio`` 偏低时，法线朝向与坐标对齐是两种
+    完全不同的成因。旧报表两个指标都不给，读者只能猜。1.1.12 真机正是对齐
+    被一次失败的相似变换搬走（包围盒剩 2.03 倍），却被误读成法线问题。
+    """
+    if not isinstance(align, dict):
+        return "N/A"
+    status = align.get("status")
+    if status == "skipped":
+        reason = str(align.get("reason") or "")
+        if reason.startswith("already_aligned"):
+            return "跳过（几何已与点云同系）"
+        if "geometry_from_sfm" in reason:
+            return "跳过（几何来自 SfM，同坐标系）"
+        return f"跳过（{reason[:24]}）"
+    if align.get("rejected"):
+        ratio = (align.get("quality") or {}).get("diag_ratio")
+        extra = f"，尺度 {ratio:.2f}×" if isinstance(ratio, (int, float)) else ""
+        return f"无效已回退恒等{extra}"
+    if align.get("accepted") is True:
+        s = align.get("scale_s")
+        method = align.get("method") or "ICP"
+        if isinstance(s, (int, float)):
+            return f"已采纳（{method}，s={s:.3f}）"
+        return f"已采纳（{method}）"
+    if align.get("error"):
+        return f"失败回退（{str(align['error'])[:20]}）"
+    return "N/A"
+
+
 def _esc(value: Any) -> str:
     """把外部字符串转义成可安全嵌入 ``|safe`` 片段的形式。
 
@@ -178,6 +214,9 @@ def _stage_note(entry: dict) -> str:
     # 否则单站任务的配准精度会被当成"已验证"（2026-10-26 真机）。
     if status == "done" and entry.get("identity"):
         return "恒等落盘：单站输入，未发生任何配准变换"
+    if status == "done" and entry.get("low_confidence"):
+        return (f"完成，但可信度低：fitness={entry.get('fitness')}"
+                f"（初值 {entry.get('icp_init') or '?'}）")
     outputs = entry.get("outputs") or []
     if outputs:
         return f"{len(outputs)} 个产物"
@@ -257,11 +296,26 @@ def _findings(items: list[str],
             get(item, "M4"), get(item, "M5"), get(item, "M6"))
 
         fill = m4.get("island_fill_ratio")
+        in_frame = m4.get("in_frame_fraction")
         if isinstance(fill, (int, float)) and fill < 0.85:
-            out.append({"level": "warn", "text": (
-                f"{_esc(item)}：UV 岛内仅 {_pct(fill)} 纹素采到颜色（阈值 85%）——"
-                "大面积无可见相机。优先检查法线朝向是否整体翻转、位姿与遮挡判据，"
-                "其次看 UV 岛是否过碎。")})
+            # 1.1.12 真机之前，这里一律归因「法线/遮挡/位姿」。实测该件
+            # normal_visible_fraction=92%，岛内却只有 57.5% —— 根因是几何被
+            # 一次失败的相似变换搬走、大面积投到画幅外。两种成因的修法完全
+            # 不同（一个是法线定向，一个是几何-位姿对齐），必须分流。
+            if isinstance(in_frame, (int, float)) and in_frame < 0.85:
+                out.append({"level": "warn", "text": (
+                    f"{_esc(item)}：UV 岛内仅 {_pct(fill)} 纹素采到颜色（阈值 85%），"
+                    f"而<b>落在任一图像画幅内</b>的纹素也只有 {_pct(in_frame)}——"
+                    "问题不在法线朝向，在<b>几何与位姿的尺度/平移对齐</b>："
+                    "三角形算出了位置，投影却掉到照片外的空白处。"
+                    "查 M4 的 <code>icp_align</code> 结果（<code>accepted</code> 是否为 "
+                    "false、<code>diag_ratio</code> 是否偏离 1）、"
+                    "以及 <code>scale.reference_diag</code> 与真实尺寸是否匹配。")})
+            else:
+                out.append({"level": "warn", "text": (
+                    f"{_esc(item)}：UV 岛内仅 {_pct(fill)} 纹素采到颜色（阈值 85%）——"
+                    "大面积无可见相机。优先检查法线朝向是否整体翻转、位姿与遮挡判据，"
+                    "其次看 UV 岛是否过碎。")})
         flipped = m4.get("normal_flipped")
         if flipped:
             out.append({"level": "warn", "text": (
@@ -316,6 +370,15 @@ def _findings(items: list[str],
                 "量级差两个数量级以上。<b>单位换算必然有误</b>：中误差已自动退出毫米门"
                 "（报表中标 †），请核对输入点云的真实单位与 <code>scale.reference_diag</code>。")})
 
+        if m1.get("dense_source") == "laser_unverified":
+            out.append({"level": "info", "text": (
+                f"{_esc(item)}：00_raw 有几何，但本次<b>没有 SfM 稠密模型可交叉验证</b>"
+                "（<code>sfm_solve.dense=false</code> 或 S1 未产出稠密）。"
+                "「放了一个点云文件」不等于「有激光基准」——若该文件其实是本系统"
+                "照片重建的产物，配准/精度/覆盖率三项都会变成自证。"
+                "要判来源：把 <code>sfm_solve.dense</code> 打开重跑一次，"
+                "看 M1 的 <code>dense_novel_ratio</code> 是否低于 15%。")})
+
         if m5.get("metric_units") and m5.get("rmse_reliable") is False \
                 and _units_plausible(m5) is not False:
             out.append({"level": "info", "text": (
@@ -342,6 +405,15 @@ def _findings(items: list[str],
                 "耗时通常只有十几毫秒）。"
                 "配准节点（FPFH + RANSAC + ICP）在本件<b>没有被执行过</b>，"
                 "其精度无从判断——路由一口径验证需至少两份错位的同源几何。")})
+        if m2 and m2.get("low_confidence"):
+            out.append({"level": "warn", "text": (
+                f"{_esc(item)}：<b>配准可信度偏低</b>——ICP fitness="
+                f"{_num(m2.get('fitness'), 3)}（低于 0.55），所选初值 "
+                f"<code>{_esc(m2.get('icp_init') or '?')}</code>。"
+                "近似轴对称的造像在大角度错位时，RANSAC 容易解出"
+                "<b>翻转 180° 的版本</b>：点位对得上、方向反了，拼出来的模型是镜像的。"
+                "本版已对每个 ICP 初值分别收敛并取 fitness 最高者；"
+                "若仍偏低，请人工核对拼接方向，或提高两站重叠度后重扫。")})
     return out
 
 
@@ -477,19 +549,23 @@ _TEMPLATE = """<!DOCTYPE html>
 <h2>三、纹理质量（M4 贴图管线）</h2>
 <table>
   <tr><th>文物编号</th><th>图集</th><th>参与相机</th><th>图集像素利用率</th>
-      <th>UV 岛占比</th><th>岛内填充率</th><th>平均亮度</th><th>多视角色差</th>
+      <th>UV 岛占比</th><th>岛内填充率</th><th>画幅内可见</th><th>几何-位姿对齐</th>
+      <th>平均亮度</th><th>多视角色差</th>
       <th>法线校正</th><th>像素换算</th><th>判定</th></tr>
   {% for row in tex_rows %}
   <tr>
     <td>{{ row.item }}</td><td>{{ row.size }}</td><td class="num">{{ row.cameras }}</td>
     <td class="num">{{ row.coverage }}</td><td class="num">{{ row.utilization }}</td>
-    <td class="num">{{ row.fill }}</td><td class="num">{{ row.luma }}</td>
+    <td class="num">{{ row.fill }}</td>
+    <td class="num{{ ' fail' if row.frame_warn else '' }}">{{ row.in_frame }}</td>
+    <td class="{{ 'fail' if row.align_warn else '' }}">{{ row.align }}</td>
+    <td class="num">{{ row.luma }}</td>
     <td class="num">{{ row.consistency }}</td><td>{{ row.flipped }}</td>
     <td class="num">{{ row.pixel_scale }}</td>
     <td class="{{ row.cls }}">{{ row.verdict }}</td>
   </tr>
   {% else %}
-  <tr><td colspan="11">无贴图数据（M4 未执行）</td></tr>
+  <tr><td colspan="13">无贴图数据（M4 未执行）</td></tr>
   {% endfor %}
 </table>
 <p class="footnote">
@@ -767,6 +843,7 @@ def generate_html(manifest: RunManifest,
             continue
         fill = m4.get("island_fill_ratio")
         cov = m4.get("coverage_ratio")
+        in_frame_v = m4.get("in_frame_fraction")
         if isinstance(fill, (int, float)) and fill < 0.85:
             verdict, cls = "岛内偏空", "fail"
         elif isinstance(cov, (int, float)) and cov < 0.20:
@@ -782,6 +859,11 @@ def generate_html(manifest: RunManifest,
             "coverage": _pct(cov),
             "utilization": _pct(m4.get("atlas_utilization")),
             "fill": _pct(fill),
+            "in_frame": _pct(m4.get("in_frame_fraction")),
+            "frame_warn": isinstance(in_frame_v, (int, float)) and in_frame_v < 0.85,
+            "align": _align_text(m4.get("icp_align")),
+            "align_warn": bool(m4.get("icp_align")
+                               and m4["icp_align"].get("rejected")),
             "luma": _num(m4.get("texture_mean_luma"), 1),
             "consistency": _num(m4.get("multiview_color_std"), 2),
             "flipped": _yes(m4.get("normal_flipped")),

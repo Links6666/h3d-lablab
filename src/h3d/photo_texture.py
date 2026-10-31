@@ -284,10 +284,31 @@ def project_photos_to_texture(mesh, uv, faces, images, cameras, photo_dir,
     sub = np.linspace(0, n - 1, min(20000, n)).astype(np.int64)
     pos_s, nrm_s = pos[sub], nrm[sub]
     best_fwd = np.full(len(sub), -1.0)
+    # 「能被看到」要同时满足两件事：①视线与法线夹角 < 73°（cos>0.3）；
+    # ②这个点**真的投影在该相机的画幅内**。旧实现只判 ①，于是 1.1.12 真机
+    # 报出「92% 纹素可被正面看到」而岛内只有 57.5% 着色，把排查方向引向法线，
+    # 实际是几何被搬错后大面积投到画幅外。两个数分开落，谁低就查谁。
+    fwd_in = np.zeros(len(sub), dtype=bool)
+    rev_in = np.zeros(len(sub), dtype=bool)
     for k in range(len(images)):
         v = cam_centers[k] - pos_s
         d = np.maximum(np.linalg.norm(v, axis=1, keepdims=True), 1e-12)
-        best_fwd = np.maximum(best_fwd, ((v / d) * nrm_s).sum(axis=1))
+        cos_k = ((v / d) * nrm_s).sum(axis=1)
+        best_fwd = np.maximum(best_fwd, cos_k)
+        img = photos.get(names[k])
+        if img is None:
+            continue
+        pc_k = (pos_s - cam_centers[k]) @ cam_rots[k].T
+        z_k = pc_k[:, 2]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            u_k = (K4[k, 0] * pc_k[:, 0] / z_k + K4[k, 2]) * scales[k, 0]
+            v_k = (K4[k, 1] * pc_k[:, 1] / z_k + K4[k, 3]) * scales[k, 1]
+        h_k, w_k = img.shape[:2]
+        okp = (z_k < -1e-9) & (u_k >= 0) & (u_k < w_k) & (v_k >= 0) & (v_k < h_k)
+        if not okp.any():
+            continue
+        fwd_in |= okp & (cos_k > 0.3)
+        rev_in |= okp & (cos_k < -0.3)
     frac_fwd = float((best_fwd > 0.3).mean())
     frac_rev = float((-best_fwd > 0.3).mean())
     normal_flipped = bool(frac_rev > frac_fwd)
@@ -298,11 +319,19 @@ def project_photos_to_texture(mesh, uv, faces, images, cameras, photo_dir,
                     "（Poisson 生成的网格常是翻面的）",
                     frac_fwd * 100, frac_rev * 100)
     normal_visible_fraction = round(max(frac_fwd, frac_rev), 4)
+    in_frame_fraction = round(float(
+        (rev_in if normal_flipped else fwd_in).mean()), 4)
     if normal_visible_fraction < 0.90:
         log.warning("仅 %.0f%% 纹素能被任一台相机正面看到（不足 90%%）——"
                     "说明网格法线**局部方向不一致**（常见于碎块化重建），"
                     "剩余部分将按 -n 且要求深度可见后补色",
                     normal_visible_fraction * 100)
+    elif in_frame_fraction < 0.85:
+        log.warning("法线朝向正常（%.0f%% 可正面看到）但只有 %.0f%% 纹素"
+                    "落在任一图像画幅内——问题在**几何与位姿的尺度/平移对齐**，"
+                    "不在法线；请核对 M4 的 icp_align 结果（accepted）与 "
+                    "scale.reference_diag", normal_visible_fraction * 100,
+                    in_frame_fraction * 100)
     log.info("UV 光栅化：%d 面 -> %d 纹素（图集利用率 %.1f%%）",
              len(faces_a), n, utilization * 100)
 
@@ -324,6 +353,12 @@ def project_photos_to_texture(mesh, uv, faces, images, cameras, photo_dir,
 
     image = np.zeros((size * size, 3), dtype=np.float32)
     painted = np.zeros(size * size, dtype=bool)
+    # 去重口径：back_filled / occluded 是「相机×纹素」的事件计数（一台相机
+    # 判一次就 +1），30 台相机能把 7 万纹素刷成 200 万。报表若直接拿它当
+    # 纹素数，会读出「77.8% 靠反面填充」这种与事实相反的结论。这两个掩膜
+    # 给出去重后的真实纹素数。
+    back_mask = np.zeros(size * size, dtype=bool)
+    occl_mask = np.zeros(size * size, dtype=bool)
     usage = np.zeros(len(images), dtype=np.int64)
     cons_sum = 0.0
     cons_n = 0
@@ -379,6 +414,8 @@ def project_photos_to_texture(mesh, uv, faces, images, cameras, photo_dir,
             back = (~front) & (-cos > 0.3) & vis
             cos_eff = np.where(front, cos, np.where(back, -cos, 0.0))
             back_filled += int((back & ok).sum())
+            if (back & ok).any():
+                back_mask[flat[start:stop][back & ok]] = True
 
             ok = ok & (cos_eff > 0)
             if not ok.any():
@@ -386,6 +423,8 @@ def project_photos_to_texture(mesh, uv, faces, images, cameras, photo_dir,
             pen = 1.0
             if buf is not None:
                 occluded += int((ok & ~vis).sum())
+                if (ok & ~vis).any():
+                    occl_mask[flat[start:stop][ok & ~vis]] = True
                 # 遮挡只做**降权**，不做硬剔除：硬剔除实测把岛内着色率从
                 # 79.7% 打到 47.8%（Poisson 闭合壳的背面/凹陷纹素完全取不到
                 # 颜色 → 贴图重新出现黑斑）。降权等价于"优先可见视角、无可见
@@ -445,8 +484,11 @@ def project_photos_to_texture(mesh, uv, faces, images, cameras, photo_dir,
         "occlusion": bool(occlusion),
         "normal_flipped": normal_flipped,
         "normal_visible_fraction": normal_visible_fraction,
+        "in_frame_fraction": in_frame_fraction,
         "back_facing_filled": int(back_filled),
         "occlusion_rejected": int(occluded),
+        "back_facing_texels": int(back_mask.sum()),
+        "occluded_texels": int(occl_mask.sum()),
         "multiview_color_std": round(cons_sum / cons_n, 2) if cons_n else None,
         "texture_mean_luma": round(float(luma), 2),
         "camera_hist": {names[i]: int(usage[i]) for i in np.argsort(-usage)[:5]
@@ -607,7 +649,25 @@ def texture_mesh_from_photos(mesh, task_root: str, item_id: str, cfg,
         if os.path.exists(pts3d_path):
             sparse_pts = read_points3d(pts3d_path)
         ctrl_path = find_ctrl_file(task_root, item_id)
-        if ctrl_path and sparse_pts is not None:
+        # 同源预检（2026-10-31 真机 1.1.12）：几何与点云本来就同系同尺度时，
+        # 任何相似变换都是净损失。实测跳过对齐 98.87%、合格的两阶段 93.15%、
+        # 自动 ICP 57.5%——所以先问"要不要对齐"，再问"怎么对齐"。
+        skip_align = False
+        if sparse_pts is not None and len(sparse_pts) >= 8:
+            from h3d.geo_align import already_aligned
+            pre = already_aligned(np.asarray(mesh.vertices, dtype=np.float64),
+                                  sparse_pts)
+            if pre["aligned"]:
+                skip_align = True
+                align_metrics = {"status": "skipped",
+                                 "reason": "already_aligned"
+                                           "（几何与 SfM 点云同系，中位距离 "
+                                           f"{pre['norm_median'] * 100:.2f}% 对角线）",
+                                 "quality": pre}
+                log.info("照片纹理对齐跳过：几何已与 SfM 点云同系"
+                         "（中位距离 %.2f%% 对角线，阈值 %.0f%%）",
+                         pre["norm_median"] * 100, pre["tolerance"] * 100)
+        if ctrl_path and sparse_pts is not None and not skip_align:
             try:
                 controls = load_control_points(ctrl_path)
                 images_map = {im["name"]: im for im in images}
@@ -619,32 +679,44 @@ def texture_mesh_from_photos(mesh, task_root: str, item_id: str, cfg,
                 # 清空 method：失败必须回退自动 ICP（否则对齐被跳过）
                 align_metrics = {"error": str(exc)}
                 log.warning("控制点对齐失败，回退自动 ICP：%s", exc)
-        if "method" not in align_metrics:
+        if "method" not in align_metrics and not skip_align:
             from h3d.geo_align import align_points_to_mesh
             import open3d as _o3d
             if sparse_pts is not None and len(sparse_pts) >= 4:
                 s, R, T, align_metrics = align_points_to_mesh(
                     sparse_pts, mesh)
                 verts = np.asarray(mesh.vertices, dtype=np.float64)
-                new_verts = (R.T @ (verts - T).T).T / s
-                mesh.vertices = _o3d.utility.Vector3dVector(new_verts)
-                mesh.compute_vertex_normals()
-                log.info("照片纹理自动 ICP 对齐：%s", align_metrics)
-                # 自动导出有效控制点（创新点 2 实证）：激光系顶点 + 真实
-                # 照片 uv（对齐后投影）。占位/无效控制点时启用，下次运行
-                # 两阶段对齐使用（不再回退 ICP）。
-                try:
-                    from h3d.ctrl_auto import export_control_points_from_align
-                    out_ctrl = os.path.join(task_root, "00_ctrl", item_id,
-                                            "control_points.json")
-                    res = export_control_points_from_align(
-                        verts0, new_verts, images, cameras, out_ctrl, n=8)
-                    if res:
-                        align_metrics["auto_control_points"] = res["n_points"]
-                        log.info("自动控制点导出：%d 点 -> %s",
-                                 res["n_points"], out_ctrl)
-                except Exception as exc:  # noqa: BLE001
-                    log.warning("自动控制点导出失败（跳过）：%s", exc)
+                # 对齐质量闸门（2026-10-31 真机 1.1.12）：自动 ICP 会把网格搬到
+                # 一个"自洽但错误"的位置（包围盒剩 2.03 倍、几何离点云 50 倍），
+                # 肉眼看不出来，只在 M4 指标上表现为岛内着色率从 98.9% 掉到
+                # 57.5%。判为无效时**保持原坐标系不动**——位姿与几何哪怕都错，
+                # 只要还"相对一致"就能出纹理；搬错则必然大面积投到图像外。
+                if align_metrics.get("accepted") is False:
+                    log.warning(
+                        "照片纹理自动 ICP 对齐被判无效，保持原坐标系：%s",
+                        align_metrics.get("reject_reason", ""))
+                else:
+                    new_verts = (R.T @ (verts - T).T).T / s
+                    mesh.vertices = _o3d.utility.Vector3dVector(new_verts)
+                    mesh.compute_vertex_normals()
+                    log.info("照片纹理自动 ICP 对齐：%s", align_metrics)
+                    # 自动导出有效控制点（创新点 2 实证）：激光系顶点 + 真实
+                    # 照片 uv（对齐后投影）。占位/无效控制点时启用，下次运行
+                    # 两阶段对齐使用（不再回退 ICP）。
+                    # **只在这次对齐通过质量判定后导出**：把一次错位的对齐
+                    # 固化成控制点，会让后续每一次运行都从错误答案出发。
+                    try:
+                        from h3d.ctrl_auto import export_control_points_from_align
+                        out_ctrl = os.path.join(task_root, "00_ctrl", item_id,
+                                                "control_points.json")
+                        res = export_control_points_from_align(
+                            verts0, new_verts, images, cameras, out_ctrl, n=8)
+                        if res:
+                            align_metrics["auto_control_points"] = res["n_points"]
+                            log.info("自动控制点导出：%d 点 -> %s",
+                                     res["n_points"], out_ctrl)
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning("自动控制点导出失败（跳过）：%s", exc)
 
     # UV 展开 + 照片投影 + 泊松融合 + 导出
     #
