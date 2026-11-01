@@ -155,6 +155,12 @@ elif in_frame_fraction < 0.85:
 真机回归：`status: rejected`、`accepted: False`、投影覆盖 42.9% → 1.0%、
 `coverage_ratio` 21.22%。
 
+**报表端同步（同一片）**：`html_export._align_text` 原按布尔键
+`rejected`/`accepted` 分支，`status="rejected"` 会一路落到最后的 `N/A`——
+被拒绝的对齐在报表里印成空白，而这一列存在的唯一理由就是让人读懂对齐干了什么。
+现在三态优先，且拒绝时直接露出**前后投影覆盖**（D3 的判据本身）；
+`align_warn`（表格红字）同样改读三态。老 manifest 只有布尔键的仍能读懂。
+
 ## 未决
 
 - ~~`align_two_stage` 缺 `status` 键~~ → **已修（D4）**：见下。

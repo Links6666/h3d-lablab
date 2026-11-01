@@ -184,11 +184,20 @@ def _align_text(align: Any) -> str:
         if "geometry_from_sfm" in reason:
             return "跳过（几何来自 SfM，同坐标系）"
         return f"跳过（{reason[:24]}）"
-    if align.get("rejected"):
+    # 三态优先（ADR-0009 D4）：`status` 是唯一可靠判据。旧分支只认布尔键
+    # `rejected`/`accepted`，于是 `status="rejected"` 会一路落到最后的 N/A
+    # ——而这一列存在的唯一理由就是让人读懂「对齐到底干了什么」。
+    rejected = (status == "rejected" or align.get("rejected")
+                or align.get("accepted") is False)
+    if rejected:
+        before, after = align.get("in_frame_before"), align.get("in_frame_after")
+        if isinstance(before, (int, float)) and isinstance(after, (int, float)):
+            # 投影覆盖是 ADR-0009 D3 的判据本身，它最能说明「为什么判无效」
+            return f"无效已回退恒等（投影覆盖 {before:.1%} → {after:.1%}）"
         ratio = (align.get("quality") or {}).get("diag_ratio")
         extra = f"，尺度 {ratio:.2f}×" if isinstance(ratio, (int, float)) else ""
         return f"无效已回退恒等{extra}"
-    if align.get("accepted") is True:
+    if status == "applied" or align.get("accepted") is True:
         s = align.get("scale_s")
         method = align.get("method") or "ICP"
         if isinstance(s, (int, float)):
@@ -940,8 +949,10 @@ def generate_html(manifest: RunManifest,
             "in_frame": _pct(m4.get("in_frame_fraction")),
             "frame_warn": isinstance(in_frame_v, (int, float)) and in_frame_v < 0.85,
             "align": _align_text(m4.get("icp_align")),
-            "align_warn": bool(m4.get("icp_align")
-                               and m4["icp_align"].get("rejected")),
+            "align_warn": bool(m4.get("icp_align") and (
+                m4["icp_align"].get("status") == "rejected"
+                or m4["icp_align"].get("rejected")
+                or m4["icp_align"].get("accepted") is False)),
             "luma": _num(m4.get("texture_mean_luma"), 1),
             "consistency": _num(m4.get("multiview_color_std"), 2),
             "flipped": _yes(m4.get("normal_flipped")),
