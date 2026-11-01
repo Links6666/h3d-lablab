@@ -87,6 +87,19 @@ def in_frame_ratio(verts, images, cameras, sample: int = 20000,
     return float(covered.mean())
 
 
+def alignment_needed(in_frame: float, threshold: float = 0.5) -> bool:
+    """还需不需要对齐？只看「几何在不在相机画幅里」。
+
+    比 ``already_aligned``（比的是「几何 vs 稀疏点云」）更本质：它直接问
+    「还需不需要对齐」。真机 `10_clean` 对 30 台相机 in_frame = 86.7%，已经
+    与位姿同系，再对齐纯属净损失（实测：跑对齐 → UV 光栅化为空 → M4 降级顶点色；
+    跳过 → coverage 21.2% → **56.8%**、岛内填充 31.1% → **87.6%**）。
+
+    阈值 0.5：超过一半顶点已经落在画幅内，说明这是同一套坐标系。
+    """
+    return in_frame < threshold
+
+
 def alignment_regressed(before: float, after: float,
                         min_keep: float = 0.5) -> bool:
     """对齐后投影覆盖是否**显著变差**（相对判据，无绝对阈值）。
@@ -737,9 +750,31 @@ def texture_mesh_from_photos(mesh, task_root: str, item_id: str, cfg,
     align_metrics = {}
     verts0 = np.asarray(mesh.vertices, dtype=np.float64).copy()  # 激光系
     sparse_pts = None
-    if geometry_is_sfm and cfg.photo_texture.icp_align:
+    # 投影级预检（2026-11-01，覆盖率 21%→57% 的那一刀）：
+    # **几何本来就在相机画幅里就没必要对齐**。真机 `10_clean`（激光件 6.34）对
+    # 30 台相机算 in_frame=86.7%——它已经与位姿同系；再跑一次对齐纯属净损失：
+    # 两阶段对齐把中位距离从 42.9% 拉到 1.0% 后被拒、回退恒等，但回退**没有
+    # 真正恢复顶点**（UV 光栅化仍为空 → M4 降级顶点色）。
+    # 这条判据比 `already_aligned`（比的是「几何 vs 稀疏点云」）更本质：它直接
+    # 问「还需不需要对齐」。
+    _need_align = True
+    if cfg.photo_texture.icp_align:
+        try:
+            _pre_ratio = in_frame_ratio(verts0, images, cameras, sample=20000)
+            if not alignment_needed(_pre_ratio):
+                _need_align = False
+                log.info("照片纹理跳过对齐：几何已有 %.1f%% 顶点落在相机画幅内"
+                         "（阈值 50%%）——它本来就是同系的，对齐只会引入损失",
+                         _pre_ratio * 100)
+        except Exception as exc:  # noqa: BLE001 - 预检失败按需要对齐处理
+            log.debug("对齐预检失败（按需要对齐处理）：%s", exc)
+
+    if (geometry_is_sfm or not _need_align) and cfg.photo_texture.icp_align:
         align_metrics = apply_align_status(
-            {"reason": "geometry_from_sfm（同坐标系，无需对齐）"}, None)
+            {"reason": ("geometry_from_sfm（同坐标系，无需对齐）"
+                        if geometry_is_sfm else
+                        "already_in_frame（几何已在相机画幅内，无需对齐）")},
+            None)
     elif cfg.photo_texture.icp_align and len(images) >= 2:
         from h3d.ctrl_points import (ControlPointError, align_two_stage,
                                      find_ctrl_file, load_control_points)

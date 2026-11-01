@@ -156,3 +156,57 @@ class TestRegressionRule:
 
         assert alignment_regressed(0.0, 0.0) is False
         assert alignment_regressed(0.0, 0.4) is False
+
+
+class TestAlignmentNeeded:
+    """「还需不需要对齐」只问一件事：几何在不在相机画幅里。
+
+    真机教训（2026-11-01）：`10_clean` 对 30 台相机 in_frame = 86.7%，已经与位姿
+    同系，但对齐照样跑了——结果是 UV 光栅化为空、M4 降级顶点色。跳过对齐后
+    coverage 21.2% → 56.8%、岛内填充 31.1% → 87.6%。
+    """
+
+    def test_already_in_frame_does_not_need_alignment(self):
+        from h3d.photo_texture import alignment_needed
+
+        assert alignment_needed(0.8671) is False     # 真机实测值
+        assert alignment_needed(1.0) is False
+
+    def test_mostly_out_of_frame_needs_alignment(self):
+        from h3d.photo_texture import alignment_needed
+
+        assert alignment_needed(0.1454) is True      # 脏链路实测值
+        assert alignment_needed(0.0) is True
+
+    def test_threshold_boundary(self):
+        from h3d.photo_texture import alignment_needed
+
+        assert alignment_needed(0.5) is False        # 恰好一半：判为不需要
+        assert alignment_needed(0.49) is True
+
+
+class TestAlignmentNeeded:
+    """「还需不需要对齐」只问一件事：几何在不在相机画幅里。
+
+    真机教训（2026-11-01）：`10_clean` 对 30 台相机 in_frame = 86.7%，已经与位姿
+    同系，但对齐照样跑了——结果是 UV 光栅化为空、M4 降级顶点色。跳过对齐后
+    coverage 21.2% → 56.8%、岛内填充 31.1% → 87.6%。
+    """
+
+    def test_already_in_frame_does_not_need_alignment(self):
+        from h3d.photo_texture import alignment_needed
+
+        assert alignment_needed(0.8671) is False     # 真机实测值
+        assert alignment_needed(1.0) is False
+
+    def test_mostly_out_of_frame_needs_alignment(self):
+        from h3d.photo_texture import alignment_needed
+
+        assert alignment_needed(0.1454) is True      # 脏链路实测值
+        assert alignment_needed(0.0) is True
+
+    def test_threshold_boundary(self):
+        from h3d.photo_texture import alignment_needed
+
+        assert alignment_needed(0.5) is False        # 恰好一半：判为不需要
+        assert alignment_needed(0.49) is True
