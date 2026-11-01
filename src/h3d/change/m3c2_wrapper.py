@@ -26,23 +26,63 @@ log = get_logger("change.m3c2")
 
 
 def corepoint_grid(cloud1, cfg) -> np.ndarray:
-    """按第一时相点云 XY 包围盒生成规则核心点网格。
+    """核心点**取自点云本身**（无偏抽样 ``nx*ny`` 个），不铺 XY 平面网格。
 
-    参数
-    ----
-    cloud1: Open3D PointCloud（基准时相）。
-    cfg:    ChangeConfig（grid=[nx, ny]）。
+    为什么不能铺平面网格：``py4dgeo.regular_corepoint_grid`` 只在 XY 包围盒上
+    生成规则格，**Z 是常量**。那在「薄板 / 近平面」点云上没问题，但文物是立体
+    ——真机 1.1.12（1.8 米高的兵马俑）上，网格面与表面完全错开，M3C2 的圆柱里
+    一个点都没有，1024 个核心点**全部返回 NaN**（``max_change=nan``）。
 
-    返回
-    ----
-    (n_corepoints, 3) 核心点数组。
+    改成从点云抽样：
+    * 点必然落在表面上，圆柱内一定有点；
+    * 抽样用固定种子，结果可复现；
+    * 数量仍是 ``grid[0]*grid[1]``（点云更大时），保住原有契约。
+
+    点云本身少于 ``nx*ny`` 时返回全部点——宁可核心点稀，也不重复点。
     """
     pts = np.asarray(cloud1.points, dtype=np.float64)
-    lo = pts.min(axis=0)[:2]
-    hi = pts.max(axis=0)[:2]
     nx, ny = int(cfg.grid[0]), int(cfg.grid[1])
-    grid = _py4dgeo().regular_corepoint_grid(lo, hi, (nx, ny))
-    return np.asarray(grid, dtype=np.float64)
+    n = max(2, nx * ny)
+    if len(pts) == 0:
+        return np.zeros((0, 3), dtype=np.float64)
+    if len(pts) <= n:
+        return pts
+    rng = np.random.default_rng(0)
+    idx = rng.choice(len(pts), n, replace=False)
+    return pts[np.sort(idx)]
+
+
+def _corepoint_normals(cloud1, corepoints: np.ndarray,
+                       radius: float) -> np.ndarray:
+    """在核心点邻域内估法向（Open3D PCA）。
+
+    ``radius`` 用 M3C2 自己的法向搜索半径（``normal_radius_k × MPS``），保证
+    「估法向用的邻域」与「M3C2 认为的法向尺度」是同一个——两者不一致时，
+    圆柱会沿一个与真实表面不垂直的方向走。
+    """
+    import open3d as o3d
+
+    cp = o3d.geometry.PointCloud()
+    cp.points = o3d.utility.Vector3dVector(np.asarray(corepoints, np.float64))
+    # 参考点云本身参与邻域搜索：核心点是抽样来的，半径内一定有邻域点
+    merged = o3d.geometry.PointCloud()
+    merged.points = o3d.utility.Vector3dVector(
+        np.vstack([np.asarray(cloud1.points, np.float64),
+                   np.asarray(corepoints, np.float64)]))
+    kdt = o3d.geometry.KDTreeFlann(merged)
+    normals = np.zeros((len(corepoints), 3), np.float64)
+    for i, p in enumerate(np.asarray(corepoints, np.float64)):
+        k, idx, _ = kdt.search_radius_vector_3d(p, float(radius))
+        if k < 6:                       # 邻域太小，PCA 不可靠，留零向量
+            normals[i] = (0.0, 0.0, 0.0)
+            continue
+        nb = np.asarray(merged.points)[np.asarray(idx, np.int64)]
+        nb = nb - nb.mean(axis=0)
+        _, _, vt = np.linalg.svd(nb, full_matrices=False)
+        n = vt[-1]
+        norm = float(np.linalg.norm(n))
+        normals[i] = n / norm if norm > 1e-12 else (0.0, 0.0, 0.0)
+    return normals
 
 
 def compute_m3c2(cloud1, cloud2, cfg) -> dict[str, Any]:
@@ -82,11 +122,20 @@ def compute_m3c2(cloud1, cloud2, cfg) -> dict[str, Any]:
     epoch2 = py4dgeo.Epoch(np.asarray(cloud2.points, dtype=np.float64))
     corepoints = corepoint_grid(cloud1, cfg)
 
+    # **必须显式给核心点法向**。py4dgeo 的 ``orientation_vector`` 默认是
+    # ``[0, 0, 1]``，即把所有法向翻到 +Z 半球。那对地形/薄板是正确的，对**立体
+    # 文物是灾难**：侧壁的真实法向是水平的，被翻成 +Z 之后 M3C2 的圆柱就沿 Z 轴
+    # 斜穿物体、打到对面去——真机 1.1.12 上两期**同源**却报出 max_change=450mm，
+    # 就是这个原因（同源正确值应≈0）。
+    # 这里用 Open3D 在核心点邻域内估法向，不做定向：朝向正反只影响距离符号
+    # （堆积/侵蚀），不影响绝对值，而圆柱始终垂直于表面。
+    core_normals = _corepoint_normals(cloud1, corepoints, normal_radius)
     m3c2 = py4dgeo.M3C2(
         normal_radii=[float(normal_radius)],
         cyl_radius=float(cyl_radius),
         max_distance=float(max_distance),
         registration_error=float(cfg.registration_error),
+        corepoint_normals=core_normals,
     )
     m3c2.epochs = [epoch1, epoch2]
     m3c2.corepoints = corepoints

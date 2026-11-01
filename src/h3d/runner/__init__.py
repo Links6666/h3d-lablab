@@ -1036,6 +1036,66 @@ def _stage_photo_texture(task, cfg):
     return run_photo_texture(task, cfg)
 
 
+def _current_geometry(task) -> str | None:
+    """当期几何的候选路径，点云优先、网格兜底。没找到返回 ``None``。
+
+    **为什么不只认 ``10_dense/<件>/fused_dense.ply``**：那是 COLMAP 稠密点云
+    （场景②）的产物。激光件（场景①）的几何在 ``30_dense/<件>/<件>.ply``，
+    于是 X1 在真实激光项目上**永远是 skip**——1.1.12 就是这样，「X1 从未真机跑过」
+    不是没排期，是路径对不上。
+
+    顺序即优先级：配准后的点云（``20_registered``）比原始点云更该用；网格放最后，
+    因为从网格采样会引入一次重采样误差（M3C2 对点密度敏感）。
+    """
+    root = task.root
+    item = task.item_id
+    for rel in (("10_dense", item, "fused_dense.ply"),
+                ("99_runs", "sfm_tmp", item, "dense", "fused.ply")):
+        cand = os.path.join(root, *rel)
+        if os.path.isfile(cand):
+            return cand
+    for sub in ("20_registered", "10_clean", "00_raw"):
+        d = os.path.join(root, sub, item)
+        if not os.path.isdir(d):
+            continue
+        for name in sorted(os.listdir(d)):
+            if name.lower().endswith((".ply", ".pcd", ".xyz", ".pts")):
+                return os.path.join(d, name)
+    # 30_dense 的结构是 30_dense/<件>/<件>.ply（不是 30_dense/<件>.ply）
+    for name in (f"{item}.ply", f"{item}.obj"):
+        cand = os.path.join(root, "30_dense", item, name)
+        if os.path.isfile(cand):
+            return cand
+    return None
+
+
+def _load_any_as_cloud(path: str):
+    """读成点云；文件其实是网格时采样成点云。
+
+    激光件的 ``30_dense`` 是**网格**，``read_point_cloud`` 读它只会拿到顶点
+    （泊松重建后顶点分布极不均匀），直接喂 M3C2 会把「采样密度差」当成形变。
+    所以网格必须显式均匀采样。
+    """
+    from h3d.io import load_mesh, load_point_cloud
+
+    # **先当网格读**，不能靠「点数够就算点云」判断：
+    # `read_point_cloud` 读网格 PLY 不报错，只把**顶点**返回——泊松重建后的顶点
+    # 分布极不均匀，与参考期的均匀采样密度差一个量级，M3C2 会把这个差报成形变
+    # （真机 1.1.12 两期同源却报 max_change=1181mm）。
+    # 而「点数 ≥100」这条门槛拦不住：小球的网格顶点只有 114 个，刚好过关。
+    try:
+        mesh = load_mesh(path)
+    except Exception:  # noqa: BLE001 - 纯点云文件走这里
+        mesh = None
+    if mesh is None or len(mesh.triangles) == 0:
+        return load_point_cloud(path)
+    # 采样数按面数自适应：M3C2 的尺度全部是 MPS（平均点间距）的倍数，
+    # 固定 20 万点倒进一个几千面的小网格会把 MPS 压到亚毫米级，
+    # 与参考期点云的密度差两个量级 —— 那算出来的「形变」是采样密度差。
+    n = min(200_000, max(20_000, len(mesh.triangles) * 30))
+    return mesh.sample_points_uniformly(int(n))
+
+
 @register_stage("X1")
 def _stage_multitemporal(task, cfg):
     """X1 多时相形变检测（P3）：两期 dense 点云 M3C2 差分。
@@ -1054,17 +1114,20 @@ def _stage_multitemporal(task, cfg):
     ref_dir = os.path.join(task.root, "00_ref", task.item_id)
     ref_files = [f for f in os.listdir(ref_dir) if f.endswith(".ply")] \
         if os.path.isdir(ref_dir) else []
-    t2_path = os.path.join(task.root, "10_dense", task.item_id,
-                           "fused_dense.ply")
-    if not ref_files or not os.path.exists(t2_path):
+    if not ref_files:
         return StageResult("X1", TaskStatus.SKIPPED, [], {
-            "skip_reason": f"缺参考期 00_ref/{task.item_id}/*.ply "
-                           f"或当期 10_dense/{task.item_id}/fused_dense.ply"}, 0.0)
+            "skip_reason": f"缺参考期 00_ref/{task.item_id}/*.ply"
+                           f"（上期几何，需要用户放置）"}, 0.0)
+    t2_path = _current_geometry(task)
+    if t2_path is None:
+        return StageResult("X1", TaskStatus.SKIPPED, [], {
+            "skip_reason": f"缺当期几何（查过 10_dense/20_registered/"
+                           f"10_clean/30_dense 下 {task.item_id}）"}, 0.0)
     import time
     t0 = time.time()
     from h3d.change import run as change_run
     t1 = load_point_cloud(os.path.join(ref_dir, sorted(ref_files)[0]))
-    t2 = load_point_cloud(t2_path)
+    t2 = _load_any_as_cloud(t2_path)
     result = change_run(t1, t2, cfg.change)
     out = os.path.join(_paths.delivery_item_dir(task.root, task.item_id),
                        f"{task.item_id}_X1_m3c2.json")
@@ -1078,11 +1141,15 @@ def _stage_multitemporal(task, cfg):
                            "accuracy.csv")
     if os.path.exists(acc_csv):
         _append_x1_to_accuracy(acc_csv, task.item_id, result["metrics"])
-    log.info("X1 完成：%s（max_change=%.1fmm, changed=%.1f%%）",
-             task.item_id, result["metrics"].get("max_change_mm", 0.0),
-             result["metrics"].get("changed_ratio", 0.0) * 100)
-    return StageResult("X1", TaskStatus.DONE, [out],
-                       result["metrics"], time.time() - t0)
+    metrics = dict(result["metrics"])
+    # 尺度是否已标定（ADR-0005）：未标定时刻度是「能跑」而不是「准」，
+    # 报表与论文表据此印「未标定」，不把不可信的数当结论。
+    metrics["calibrated"] = bool(getattr(cfg.change, "calibrated", False))
+    log.info("X1 完成：%s（max_change=%.1fmm, changed=%.1f%%，%s）",
+             task.item_id, metrics.get("max_change_mm", 0.0),
+             metrics.get("changed_ratio", 0.0) * 100,
+             "已标定" if metrics["calibrated"] else "未标定·数值不可引用")
+    return StageResult("X1", TaskStatus.DONE, [out], metrics, time.time() - t0)
 
 
 @register_stage("X2")
@@ -1177,8 +1244,14 @@ def _append_x1_to_accuracy(acc_csv: str, item_id: str, metrics: dict) -> None:
         header, data = rows[0], rows[1]
         header += ["X1最大形变(mm)", "X1变化占比"]
         max_c = metrics.get("max_change_mm")
-        data += ["N/A" if max_c is None or (isinstance(max_c, float) and max_c != max_c) else f"{max_c:.2f}",
-                 f"{metrics.get('changed_ratio', 0.0) * 100:.1f}%"]
+        # 未标定（ADR-0005）→ 印文字而不是数字：论文表取自这里，
+        # 一个 177mm 的「同源两期形变」写进论文就是硬伤。
+        if not metrics.get("calibrated", False):
+            data += ["未标定", "未标定"]
+        else:
+            data += ["N/A" if max_c is None or (isinstance(max_c, float) and max_c != max_c)
+                     else f"{max_c:.2f}",
+                     f"{metrics.get('changed_ratio', 0.0) * 100:.1f}%"]
         with open(acc_csv, "w", encoding="utf-8-sig", newline="") as fh:
             _csv.writer(fh).writerows([header, data])
         log.info("X1 指标已并入 accuracy.csv：%s", item_id)

@@ -39,14 +39,22 @@ def estimate_mps(pcd, sample_limit: int = 20000) -> float:
     n = len(pcd.points)
     if n == 0:
         return 0.0
+    scale = 1.0
     if n > sample_limit:  # 抽样降规模
         rng = np.random.default_rng(0)
         idx = rng.choice(n, sample_limit, replace=False)
         pcd = pcd.select_by_index(idx)
+        # **抽样会把间距放大**：表面点云的单位面积点数为 n/A，抽到 m 点后
+        # 变成 m/A，平均间距 ∝ 1/sqrt(密度)，所以 d_sample = d_full·sqrt(n/m)。
+        # 不校正的话，MPS 测的是「抽样后的间距」而不是点云本身的间距。
+        # 真机 1.1.12：20 万点报 16.2mm，实际互最近邻中位 4.83mm，
+        # 比值 3.35 ≈ sqrt(200k/20k)=3.16 —— 就是这个放大的量级。
+        # M3C2 的尺度全是 MPS 的倍数，MPS 放大 3 倍会让圆柱抓到隔面的点。
+        scale = float(np.sqrt(sample_limit / n))
     dists = np.asarray(pcd.compute_nearest_neighbor_distance())
     if len(dists) == 0:
         return 0.0
-    mps = float(np.mean(dists))
+    mps = float(np.mean(dists)) * scale
     if mps <= 0:  # 完全重合 / 重复点退化（如两片相同点云合并）
         bbox = pcd.get_axis_aligned_bounding_box()
         diag = float(np.linalg.norm(

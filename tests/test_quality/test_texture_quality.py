@@ -104,8 +104,11 @@ class TestX1AccuracyAppend:
             w.writerow(["文物编号", "中误差(mm)", "判定"])
             w.writerow(["r1", "5.0", "pass"])
         from h3d.runner import _append_x1_to_accuracy
+        # calibrated=True：这两条测的是「追加列 + 格式」，不是标定口径
+        # （未标定印「未标定」由 test_stage_x1_inputs 覆盖）
         _append_x1_to_accuracy(str(acc), "r1",
-                               {"max_change_mm": 12.5, "changed_ratio": 0.03})
+                               {"max_change_mm": 12.5, "changed_ratio": 0.03,
+                                "calibrated": True})
         rows = list(csv.reader(open(acc, encoding="utf-8-sig")))
         assert rows[0][-2:] == ["X1最大形变(mm)", "X1变化占比"]
         assert rows[1][-2:] == ["12.50", "3.0%"]
@@ -120,6 +123,6 @@ class TestX1AccuracyAppend:
         from h3d.runner import _append_x1_to_accuracy
         _append_x1_to_accuracy(str(acc), "r1",
                                {"max_change_mm": float("nan"),
-                                "changed_ratio": 0.0})
+                                "changed_ratio": 0.0, "calibrated": True})
         rows = list(csv.reader(open(acc, encoding="utf-8-sig")))
         assert rows[1][-2] == "N/A"  # nan → N/A

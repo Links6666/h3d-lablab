@@ -108,7 +108,7 @@ def export_thesis_table(task_root: str, item_ids: Optional[List[str]] = None,
             # 一个 0.00% 会被当成"查过了、很干净"，与"没查"是两回事。
             _fmt_pct(a_ratio) if a_ratio is not None else "未筛查",
             str(a_regions) if a_regions is not None else "未筛查",
-            _fmt_x1(x1.get("max_change_mm")),
+            _fmt_x1(x1.get("max_change_mm"), x1.get("calibrated", True)),
             f"{x1.get('changed_ratio', 0.0) * 100:.1f}%" if x1 else "N/A",
             _fmt(x2.get("mean_de")),
             "通过" if m5.get("status") == "done" else ("N/A" if not m5 else "未通过"),
@@ -163,7 +163,14 @@ def _fmt_pct(v):
     return "N/A" if v is None else f"{float(v) * 100:.2f}%"
 
 
-def _fmt_x1(v):
+def _fmt_x1(v, calibrated: bool = True):
+    """X1 数值格式化。``calibrated=False`` 时印「未标定」（ADR-0005）。
+
+    X1 的 M3C2 尺度尚未标定：真机同源两期报 177mm，而两期点云实测互最近邻
+    中位只有 4.83mm。这类数字进论文表是硬伤，所以宁可印「未标定」。
+    """
+    if not calibrated:
+        return "未标定"
     if v is None:
         return "N/A"
     fv = float(v)
