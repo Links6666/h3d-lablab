@@ -39,6 +39,72 @@ def load_capture_meta(meta_path: str) -> tuple:
     return cameras, images
 
 
+def in_frame_ratio(verts, images, cameras, sample: int = 20000,
+                   seed: int = 0) -> float:
+    """有多少比例的顶点能投进**至少一台**相机的画幅（对齐验收用）。
+
+    为什么单独一个量（ADR-0009 D3）
+    ------------------------------
+    ``align_points_to_mesh`` 的 ``accepted`` 闸门看的是「包围盒剩几倍 / 几何离
+    点云多远」——量的是**几何之间的相似度**，量不到**几何还在不在相机视野里**。
+    真机 2026-11-01 上它就放过了一次：对齐后 coverage 从 21.22% 掉到 1.16%、
+    用上的相机从 20 台掉到 3 台，而闸门判「accepted」。
+
+    这个函数把顶点直接投到每台相机，问「落在画幅内吗」。它与
+    ``texture_mesh_from_photos`` 里的 ``in_frame_fraction`` 是同一个物理量，
+    区别只在这里用**顶点**（对齐前后都在顶点域比较，口径一致），那里用**纹素**。
+
+    相机约定与投影阶段严格一致：``pc = R @ (p - t)``，``z < 0`` 表示点在相机前方。
+    两处写反任何一处，判据就整体反号（ADR-0005 踩过同款）。
+
+    用内参的 ``w/h`` 当画幅尺寸，不读实际照片：这里只需**相对比较**（对齐前后
+    用同一把尺子），绝对像素尺寸被统一的尺度因子缩放，不影响两者之差。
+    """
+    pts = np.asarray(verts, dtype=np.float64)
+    n = len(pts)
+    if n == 0 or not images:
+        return 0.0
+    if n > sample:
+        idx = np.random.default_rng(seed).choice(n, sample, replace=False)
+        pts = pts[np.sort(idx)]
+
+    covered = np.zeros(len(pts), dtype=bool)
+    for im in images:
+        cam = cameras.get(im.get("cam_id"))
+        if not cam or not cam.get("w") or not cam.get("h"):
+            continue
+        R = np.asarray(im["R"], dtype=np.float64)
+        t = np.asarray(im["t"], dtype=np.float64)
+        pc = (pts - t) @ R.T
+        z = pc[:, 2]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            u = cam["fx"] * pc[:, 0] / z + cam["cx"]
+            v = cam["fy"] * pc[:, 1] / z + cam["cy"]
+        covered |= ((z < -1e-9) & (u >= 0) & (u < cam["w"])
+                    & (v >= 0) & (v < cam["h"]))
+        if covered.all():
+            break
+    return float(covered.mean())
+
+
+def alignment_regressed(before: float, after: float,
+                        min_keep: float = 0.5) -> bool:
+    """对齐后投影覆盖是否**显著变差**（相对判据，无绝对阈值）。
+
+    为什么用相对而不是绝对（ADR-0009 D3）
+    ------------------------------------
+    真机「不对齐」的基线只有 14.5%、旧版更低——任何绝对阈值在这个数据上都没有
+    可用门槛。而「拒绝」永远是安全侧：拒绝 = 保持原坐标系 = 等于不做对齐，
+    所以判据只要问「比不做好了多少」。
+
+    ``before <= 0`` 时不拦：基线为 0 说明几何本来就不在任何画幅里，此时没法比较，
+    而对齐可能是唯一的出路（拦掉等于永远禁止对齐）。
+    """
+    if before <= 0.0:
+        return False
+    return after < before * min_keep
+
+
 def _load_photos(images, photo_dir: str, budget: int = 2_000_000_000):
     """载入照片为 uint8 常驻（超预算等比缩小），返回 (photos, factor, scales)。
 
@@ -675,10 +741,29 @@ def texture_mesh_from_photos(mesh, task_root: str, item_id: str, cfg,
             try:
                 controls = load_control_points(ctrl_path)
                 images_map = {im["name"]: im for im in images}
+                _before_ts = in_frame_ratio(verts0, images, cameras)
                 mesh, align_metrics = align_two_stage(
                     mesh, controls, images_map, cameras, sparse_pts)
-                mesh.compute_vertex_normals()
-                log.info("照片纹理两阶段对齐：%s", align_metrics)
+                _after_ts = in_frame_ratio(
+                    np.asarray(mesh.vertices, dtype=np.float64), images, cameras)
+                align_metrics["in_frame_before"] = round(_before_ts, 4)
+                align_metrics["in_frame_after"] = round(_after_ts, 4)
+                # 控制点也可能点错（3D 坐标填反、点到相邻地物）。同一条验收：
+                # 投影覆盖掉一半以上就是把几何搬出了相机视野，回退恒等。
+                if alignment_regressed(_before_ts, _after_ts):
+                    import open3d as _o3d_ts
+                    mesh.vertices = _o3d_ts.utility.Vector3dVector(verts0)
+                    mesh.compute_vertex_normals()
+                    align_metrics["accepted"] = False
+                    align_metrics["reject_reason"] = (
+                        f"控制点对齐后投影覆盖 {_before_ts:.1%} -> {_after_ts:.1%}"
+                        f"（几何被搬出相机视野），已回退原坐标系")
+                    log.warning("照片纹理两阶段对齐被判无效，回退原坐标系："
+                                "投影覆盖 %.1f%% -> %.1f%%",
+                                _before_ts * 100, _after_ts * 100)
+                else:
+                    mesh.compute_vertex_normals()
+                    log.info("照片纹理两阶段对齐：%s", align_metrics)
             except ControlPointError as exc:
                 # 清空 method：失败必须回退自动 ICP（否则对齐被跳过）
                 align_metrics = {"error": str(exc)}
@@ -701,26 +786,48 @@ def texture_mesh_from_photos(mesh, task_root: str, item_id: str, cfg,
                         align_metrics.get("reject_reason", ""))
                 else:
                     new_verts = (R.T @ (verts - T).T).T / s
-                    mesh.vertices = _o3d.utility.Vector3dVector(new_verts)
-                    mesh.compute_vertex_normals()
-                    log.info("照片纹理自动 ICP 对齐：%s", align_metrics)
+                    # 投影级验收（ADR-0009 D3）：几何**之间**相似度合格 ≠ 几何
+                    # 还在**相机视野里**。真机 2026-11-01 实测：对齐后 coverage
+                    # 21.22% -> 1.16%、用上的相机 20 台 -> 3 台，而上面那个
+                    # accepted 闸门判「通过」。判据用相对值——拒绝 = 保持原坐标系
+                    # = 等于没做对齐，永远是安全侧。
+                    _before = in_frame_ratio(verts0, images, cameras)
+                    _after = in_frame_ratio(new_verts, images, cameras)
+                    align_metrics["in_frame_before"] = round(_before, 4)
+                    align_metrics["in_frame_after"] = round(_after, 4)
+                    applied = not alignment_regressed(_before, _after)
+                    if applied:
+                        mesh.vertices = _o3d.utility.Vector3dVector(new_verts)
+                        mesh.compute_vertex_normals()
+                        log.info("照片纹理自动 ICP 对齐：%s", align_metrics)
+                    else:
+                        align_metrics["accepted"] = False
+                        align_metrics["reject_reason"] = (
+                            f"对齐后投影覆盖 {_before:.1%} -> {_after:.1%}"
+                            f"（几何被搬出相机视野）")
+                        log.warning(
+                            "照片纹理自动 ICP 对齐被判无效，保持原坐标系："
+                            "投影覆盖 %.1f%% -> %.1f%%（相机数 %d）",
+                            _before * 100, _after * 100, len(images))
                     # 自动导出有效控制点（创新点 2 实证）：激光系顶点 + 真实
                     # 照片 uv（对齐后投影）。占位/无效控制点时启用，下次运行
                     # 两阶段对齐使用（不再回退 ICP）。
                     # **只在这次对齐通过质量判定后导出**：把一次错位的对齐
                     # 固化成控制点，会让后续每一次运行都从错误答案出发。
-                    try:
-                        from h3d.ctrl_auto import export_control_points_from_align
-                        out_ctrl = os.path.join(task_root, "00_ctrl", item_id,
-                                                "control_points.json")
-                        res = export_control_points_from_align(
-                            verts0, new_verts, images, cameras, out_ctrl, n=8)
-                        if res:
-                            align_metrics["auto_control_points"] = res["n_points"]
-                            log.info("自动控制点导出：%d 点 -> %s",
-                                     res["n_points"], out_ctrl)
-                    except Exception as exc:  # noqa: BLE001
-                        log.warning("自动控制点导出失败（跳过）：%s", exc)
+                    # 2026-11-01：加 `applied` —— 投影验收判无效时同样不能导出。
+                    if applied:
+                        try:
+                            from h3d.ctrl_auto import export_control_points_from_align
+                            out_ctrl = os.path.join(task_root, "00_ctrl", item_id,
+                                                    "control_points.json")
+                            res = export_control_points_from_align(
+                                verts0, new_verts, images, cameras, out_ctrl, n=8)
+                            if res:
+                                align_metrics["auto_control_points"] = res["n_points"]
+                                log.info("自动控制点导出：%d 点 -> %s",
+                                         res["n_points"], out_ctrl)
+                        except Exception as exc:  # noqa: BLE001
+                            log.warning("自动控制点导出失败（跳过）：%s", exc)
 
     # UV 展开 + 照片投影 + 泊松融合 + 导出
     #
