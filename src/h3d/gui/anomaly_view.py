@@ -143,13 +143,16 @@ class HeatCropView(QLabel):
 class AnomalyPanel(QWidget):
     """异常筛查页：摘要 + 图斑清单 + 局部热力图。"""
 
-    COLUMNS = ("#", "边界框", "纹素", "占岛内", "均分")
+    COLUMNS = ("#", "边界框", "纹素", "占岛内", "均分", "域")
     HEADER_TIPS = (
         "图斑序号（按面积降序）",
         "图集纹素坐标 (x0,y0)-(x1,y1)，含端点",
         "该图斑包含的纹素数",
         "占岛内面积的比例（分母 = 图集里所有岛的纹素总数）",
         "图斑内异常分的均值（k 是判异常的门限）",
+        "彩绘 = 这处异常落在残存彩绘上（掉彩/变色，要干预）；"
+        "胎体 = 落在无彩区（表面明暗起伏，只值观察）。"
+        "判据看的是图斑**外一圈**的色度——掉彩露胎本身是胎体色、周围才是彩绘",
     )
 
     def __init__(self, parent=None):
@@ -187,6 +190,10 @@ class AnomalyPanel(QWidget):
         for i in range(len(self.COLUMNS)):
             head.setSectionResizeMode(i, QHeaderView.Stretch if i == 1
                                       else QHeaderView.ResizeToContents)
+        # 表头文字的宽度不够撑出中文单元格：`ResizeToContents` 在**空表**上按
+        # 表头度量，「域」只有一个字 → 填完数据后列宽只有 31 px，「胎体」被
+        # 省略成「胎…」。给所有内容列一个下限（实测 44 px 够了）。
+        head.setMinimumSectionSize(44)
         for i, tip in enumerate(self.HEADER_TIPS):
             self.table.horizontalHeaderItem(i).setToolTip(tip)
         # 列宽：只有「边界框」拉伸，其余按内容收紧。不这样设的话坐标列只有
@@ -244,6 +251,7 @@ class AnomalyPanel(QWidget):
                                    QTableWidgetItem(f"{r.area_ratio * 100:.3f}%"))
                 self.table.setItem(row, 4,
                                    QTableWidgetItem(f"{r.score_mean:.2f}"))
+                self.table.setItem(row, 5, QTableWidgetItem(r.domain_text))
         finally:
             self._loading = False
 

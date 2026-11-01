@@ -38,10 +38,12 @@ def _regions():
     return [
         {"region_id": 1, "x0": 40, "y0": 60, "x1": 70, "y1": 90,
          "texels": 930, "area_ratio": 0.0058, "score_mean": 6.4,
-         "score_max": 7.1},
+         "score_max": 7.1, "chroma_in": 1.0, "chroma_ring": 2.9,
+         "domain": "bare"},
         {"region_id": 2, "x0": 300, "y0": 250, "x1": 330, "y1": 280,
          "texels": 860, "area_ratio": 0.0054, "score_mean": 5.8,
-         "score_max": 6.2},
+         "score_max": 6.2, "chroma_in": 1.2, "chroma_ring": 18.3,
+         "domain": "paint"},
     ]
 
 
@@ -69,7 +71,9 @@ def _project(tmp_path, *, products: bool = True):
         "metrics": {"anomalous_ratio": 0.002425, "n_regions": 2,
                     "island_count": 3690, "per_island": True,
                     "k": 3.5, "k_min": 3.5, "k_max": 3.5,
-                    "adaptive_k": False, "sigma_median": 12.17},
+                    "adaptive_k": False, "sigma_median": 12.17,
+                    "chroma_threshold": 15.0, "paint_ratio": 0.0189,
+                    "n_regions_paint": 1, "n_regions_bare": 1},
     }, ensure_ascii=False), encoding="utf-8")
     with open(out / "regions.csv", "w", newline="",
               encoding="utf-8-sig") as fh:
@@ -332,5 +336,80 @@ class TestReferenceImage:
             assert h > 0 and wd > 0
             # 左侧原图 + 分隔条 + 右侧热力图：总宽明显大于高
             assert wd > h * 1.5, (h, wd)
+        finally:
+            w.close()
+
+
+class TestDomainColumn:
+    """清单要能一眼看出「这处异常在彩绘上还是在胎体上」。
+
+    这是保护判断的第一分界：残存彩绘上的异常意味着掉彩/变色（要干预），
+    胎体上的明暗起伏只值观察。真机 1.1.12 的 7 处全在胎体区。
+    """
+
+    def _col(self, panel, name):
+        for c in range(panel.table.columnCount()):
+            if panel.table.horizontalHeaderItem(c).text() == name:
+                return c
+        raise AssertionError(f"没有「{name}」列")
+
+    def test_domain_column_present_and_readable(self, tmp_path, _qapp_session):
+        root, _ = _project(tmp_path)
+        w = _win(root)
+        try:
+            panel = w.anomaly_panel
+            c = self._col(panel, "域")
+            assert panel.table.item(0, c).text() == "胎体"
+            assert panel.table.item(1, c).text() == "彩绘"
+        finally:
+            w.close()
+
+    def test_domain_column_is_wide_enough_for_chinese(self, tmp_path,
+                                                     _qapp_session):
+        """「域」列必须放得下两个字。
+
+        `ResizeToContents` 在**空表**上的度量是按表头文字算的，而「域」只有一个
+        字宽 → 填完数据后列宽只有 31 px，中文「胎体」会被省略成「胎…」。这是在
+        截图上发现的（测试全绿、打印全对）。
+        """
+        root, _ = _project(tmp_path)
+        w = _win(root)
+        try:
+            panel = w.anomaly_panel
+            c = self._col(panel, "域")
+            assert panel.table.columnWidth(c) >= 44, (
+                panel.table.columnWidth(c))
+            # 单元格文本本身要完整（省略发生在绘制时，text() 仍是全文）
+            assert panel.table.item(0, c).text() == "胎体"
+        finally:
+            w.close()
+
+    def test_domain_column_is_wide_enough_for_chinese(self, tmp_path,
+                                                     _qapp_session):
+        """「域」列必须放得下两个字。
+
+        `ResizeToContents` 在**空表**上的度量是按表头文字算的，而「域」只有一个
+        字宽 → 填完数据后列宽只有 31 px，中文「胎体」会被省略成「胎…」。这是在
+        截图上发现的（测试全绿、打印全对）。
+        """
+        root, _ = _project(tmp_path)
+        w = _win(root)
+        try:
+            panel = w.anomaly_panel
+            c = self._col(panel, "域")
+            assert panel.table.columnWidth(c) >= 44, (
+                panel.table.columnWidth(c))
+            # 单元格文本本身要完整（省略发生在绘制时，text() 仍是全文）
+            assert panel.table.item(0, c).text() == "胎体"
+        finally:
+            w.close()
+
+    def test_summary_shows_paint_ratio(self, tmp_path, _qapp_session):
+        root, _ = _project(tmp_path)
+        w = _win(root)
+        try:
+            text = w.anomaly_panel.lbl_summary.text()
+            assert "残存彩绘 1.89%" in text, text
+            assert "其上 1 处" in text, text
         finally:
             w.close()

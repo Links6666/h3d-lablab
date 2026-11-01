@@ -162,6 +162,14 @@
   `OPTIONAL_STAGES`（坏图只降级）；**不进质量门**（「病害多」≠「建模失败」）。指标三出口同步：
   `manifest_metrics` → `accuracy.csv` → HTML/论文表，少一个就是 r16 那个坑。结论绑
   `anomaly_atlas_digest`（`atlas-vN` 只有档案继承时才有）。
+- **色度分域（D15）**：`chroma_in` / `chroma_ring` / `domain(paint|bare|unknown)`，**看环不看内部**
+  （掉彩露胎本身是胎体色、周围才是彩绘）。阈值 15、环宽 8。真机 paint_ratio **1.89%**、
+  7 处全 bare、彩绘区 0 处。**必须用原始 Lab 算色度**（归零后的 a/b 不在 128 中心 →
+  中性灰块算出 190）。**「图案边缘」判据被数据否决**：7 处 Lab a/b=127~130 全无彩，
+  而 chroma>15 只占 1.88% 面积——判据没有作用对象。几何也分不开（真机 10.8~17.1 宽、
+  密度 0.35~0.71 vs 方块 12~120 宽、密度 1.00，方向还相反）。
+- **图斑列顺序唯一来源 `REGION_FIELDS`**：`as_row()` 与 CSV 表头都读它。手写两份会漏列，
+  真机抛 `dict contains fields not in fieldnames`（r16 同构，已踩两次）。
 - **GUI「异常筛查」页（切片 12）**：读模型 `h3d/anomaly/summary.py`（无 Qt，三态
   ok/missing/corrupt）+ 面板薄装配。`missing` 必须印「未筛查」**绝不说成 0 处**。并排
   「原图｜热力图」（热力图说哪里、原图说是什么）；裁剪边距按 `max(w,h)` 给（长条裂隙

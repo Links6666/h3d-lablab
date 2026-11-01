@@ -536,3 +536,171 @@ class TestIslandAdaptiveThreshold:
         from h3d.anomaly import AnomalyConfig
 
         assert AnomalyConfig().adaptive_k is False
+
+
+def _coloured_base(size: int = 512, shift: float = 24.0) -> np.ndarray:
+    """把渐变底整体推到**有彩**区（a/b 各偏 ``shift``），模拟残存彩绘表面。
+
+    真机 1.1.12 的全岛色度 p95 只有 12.4、chroma>15 仅占 1.88% 面积——残存彩绘
+    极少。要在合成里造出「彩绘区」必须显式推 a/b，否则底本身就是无彩的。
+    """
+    import cv2
+
+    img = _gradient(size)
+    lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB).astype(np.float32)
+    lab[..., 1] = np.clip(lab[..., 1] + shift, 0, 255)
+    lab[..., 2] = np.clip(lab[..., 2] + shift * 0.6, 0, 255)
+    return cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2RGB)
+
+
+class TestChromaDomain:
+    """这处异常发生在**残存彩绘**上，还是在胎体/无彩区 —— 保护判断的第一分界。
+
+    真机 1.1.12 量出来的事实：7 处图斑的 Lab 中位 a/b 锁在 127~130（中性点 128），
+    周围环的色度中位也只有 2.9~10.2，而全岛 chroma>15 仅占 1.88% 面积。也就是说
+    这 7 处**没有一处在彩绘上**——它们是胎体表面的明暗差异，不是掉彩。
+
+    判据必须看**周围环**而不是斑块内部：掉彩露胎的特征是「斑块本身是胎体色（无彩）
+    + 周围是彩绘」，只看内部会把掉彩误判成「胎体区」，正好搞反。
+    """
+
+    def test_neutral_blob_on_bare_surface_is_bare(self):
+        from h3d.anomaly import detect_atlas_anomalies
+
+        img = _gradient(512)
+        _inject(img, 300, 200, 16, colour=(200, 200, 200))   # 中性灰
+        res = detect_atlas_anomalies(img, _round_island(512))
+        assert res.regions, "没检出图斑"
+        assert res.regions[0].domain == "bare", res.regions[0]
+
+    def test_neutral_blob_on_painted_surface_is_paint(self):
+        """**掉彩露胎的形态**：胎体色斑块出现在彩绘表面上。
+
+        这一条是这个名字的全部意义——若判据只看斑块内部色度，它会被判成「胎体区」，
+        而它恰恰是最要紧的一类真病害。
+        """
+        from h3d.anomaly import detect_atlas_anomalies
+
+        img = _coloured_base(512)
+        _inject(img, 300, 200, 16, colour=(205, 205, 205))
+        res = detect_atlas_anomalies(img, _round_island(512))
+        assert res.regions, "没检出图斑"
+        assert res.regions[0].domain == "paint", (
+            f"环色度 {res.regions[0].chroma_ring:.1f}，被判成 "
+            f"{res.regions[0].domain}——掉彩露胎被误判成胎体区")
+
+    def test_chroma_values_are_reported(self):
+        from h3d.anomaly import detect_atlas_anomalies
+
+        img = _coloured_base(512)
+        _inject(img, 300, 200, 16, colour=(205, 205, 205))
+        reg = detect_atlas_anomalies(img, _round_island(512)).regions[0]
+        # 斑块内部几乎无彩、环上有彩：两者必须都报出来，否则读者无法复核判定
+        assert reg.chroma_in < 8.0, reg.chroma_in
+        assert reg.chroma_ring >= 15.0, reg.chroma_ring
+
+    def test_metrics_carry_paint_ratio_and_counts(self):
+        from h3d.anomaly import detect_atlas_anomalies
+
+        res = detect_atlas_anomalies(_coloured_base(512), _round_island(512))
+        m = res.metrics
+        assert m["chroma_threshold"] == 15.0
+        # 合成有彩底的彩绘占比应接近全部；无彩底接近 0
+        assert m["paint_ratio"] > 0.9, m["paint_ratio"]
+        bare = detect_atlas_anomalies(_gradient(512), _round_island(512))
+        assert bare.metrics["paint_ratio"] < 0.1, bare.metrics["paint_ratio"]
+
+    def test_bare_surface_regions_are_counted_as_bare(self):
+        """真机形态：无彩底上的 7 处，全部计入 ``n_regions_bare``。"""
+        from h3d.anomaly import detect_atlas_anomalies
+
+        img = _gradient(512)
+        _inject(img, 300, 200, 16, colour=(200, 200, 200))
+        _inject(img, 180, 330, 12, colour=(70, 70, 70))
+        m = detect_atlas_anomalies(img, _round_island(512)).metrics
+        assert m["n_regions_bare"] == 2, m
+        assert m["n_regions_paint"] == 0, m
+
+
+def _coloured_base(size: int = 512, shift: float = 24.0) -> np.ndarray:
+    """把渐变底整体推到**有彩**区（a/b 各偏 ``shift``），模拟残存彩绘表面。
+
+    真机 1.1.12 的全岛色度 p95 只有 12.4、chroma>15 仅占 1.88% 面积——残存彩绘
+    极少。要在合成里造出「彩绘区」必须显式推 a/b，否则底本身就是无彩的。
+    """
+    import cv2
+
+    img = _gradient(size)
+    lab = cv2.cvtColor(img, cv2.COLOR_RGB2LAB).astype(np.float32)
+    lab[..., 1] = np.clip(lab[..., 1] + shift, 0, 255)
+    lab[..., 2] = np.clip(lab[..., 2] + shift * 0.6, 0, 255)
+    return cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2RGB)
+
+
+class TestChromaDomain:
+    """这处异常发生在**残存彩绘**上，还是在胎体/无彩区 —— 保护判断的第一分界。
+
+    真机 1.1.12 量出来的事实：7 处图斑的 Lab 中位 a/b 锁在 127~130（中性点 128），
+    周围环的色度中位也只有 2.9~10.2，而全岛 chroma>15 仅占 1.88% 面积。也就是说
+    这 7 处**没有一处在彩绘上**——它们是胎体表面的明暗差异，不是掉彩。
+
+    判据必须看**周围环**而不是斑块内部：掉彩露胎的特征是「斑块本身是胎体色（无彩）
+    + 周围是彩绘」，只看内部会把掉彩误判成「胎体区」，正好搞反。
+    """
+
+    def test_neutral_blob_on_bare_surface_is_bare(self):
+        from h3d.anomaly import detect_atlas_anomalies
+
+        img = _gradient(512)
+        _inject(img, 300, 200, 16, colour=(200, 200, 200))   # 中性灰
+        res = detect_atlas_anomalies(img, _round_island(512))
+        assert res.regions, "没检出图斑"
+        assert res.regions[0].domain == "bare", res.regions[0]
+
+    def test_neutral_blob_on_painted_surface_is_paint(self):
+        """**掉彩露胎的形态**：胎体色斑块出现在彩绘表面上。
+
+        这一条是这个名字的全部意义——若判据只看斑块内部色度，它会被判成「胎体区」，
+        而它恰恰是最要紧的一类真病害。
+        """
+        from h3d.anomaly import detect_atlas_anomalies
+
+        img = _coloured_base(512)
+        _inject(img, 300, 200, 16, colour=(205, 205, 205))
+        res = detect_atlas_anomalies(img, _round_island(512))
+        assert res.regions, "没检出图斑"
+        assert res.regions[0].domain == "paint", (
+            f"环色度 {res.regions[0].chroma_ring:.1f}，被判成 "
+            f"{res.regions[0].domain}——掉彩露胎被误判成胎体区")
+
+    def test_chroma_values_are_reported(self):
+        from h3d.anomaly import detect_atlas_anomalies
+
+        img = _coloured_base(512)
+        _inject(img, 300, 200, 16, colour=(205, 205, 205))
+        reg = detect_atlas_anomalies(img, _round_island(512)).regions[0]
+        # 斑块内部几乎无彩、环上有彩：两者必须都报出来，否则读者无法复核判定
+        assert reg.chroma_in < 8.0, reg.chroma_in
+        assert reg.chroma_ring >= 15.0, reg.chroma_ring
+
+    def test_metrics_carry_paint_ratio_and_counts(self):
+        from h3d.anomaly import detect_atlas_anomalies
+
+        res = detect_atlas_anomalies(_coloured_base(512), _round_island(512))
+        m = res.metrics
+        assert m["chroma_threshold"] == 15.0
+        # 合成有彩底的彩绘占比应接近全部；无彩底接近 0
+        assert m["paint_ratio"] > 0.9, m["paint_ratio"]
+        bare = detect_atlas_anomalies(_gradient(512), _round_island(512))
+        assert bare.metrics["paint_ratio"] < 0.1, bare.metrics["paint_ratio"]
+
+    def test_bare_surface_regions_are_counted_as_bare(self):
+        """真机形态：无彩底上的 7 处，全部计入 ``n_regions_bare``。"""
+        from h3d.anomaly import detect_atlas_anomalies
+
+        img = _gradient(512)
+        _inject(img, 300, 200, 16, colour=(200, 200, 200))
+        _inject(img, 180, 330, 12, colour=(70, 70, 70))
+        m = detect_atlas_anomalies(img, _round_island(512)).metrics
+        assert m["n_regions_bare"] == 2, m
+        assert m["n_regions_paint"] == 0, m

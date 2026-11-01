@@ -53,6 +53,8 @@ ACCURACY_HEADERS = [
     ("anomaly_ratio", "异常面积(岛内)"),
     ("anomaly_regions", "图斑数"),
     ("anomaly_sigma_median", "纹理尺度σ_L(Lab)"),
+    ("anomaly_paint_ratio", "残存彩绘占比"),
+    ("anomaly_regions_paint", "彩绘区图斑数"),
     ("status", "判定"),
 ]
 
@@ -159,6 +161,8 @@ def build_report(
         "anomaly_ratio": metrics.get("anomaly_ratio"),
         "anomaly_regions": metrics.get("anomaly_regions"),
         "anomaly_sigma_median": metrics.get("anomaly_sigma_median"),
+        "anomaly_paint_ratio": metrics.get("anomaly_paint_ratio"),
+        "anomaly_regions_paint": metrics.get("anomaly_regions_paint"),
         "thresholds": {
             "coverage_threshold": cfg.coverage_threshold,
             "rmse_threshold_mm": cfg.rmse_threshold_mm,
@@ -211,6 +215,11 @@ def _write_accuracy_csv(path: str, record: dict[str, Any]) -> None:
         else "未筛查",
         (record["anomaly_sigma_median"]
          if record.get("anomaly_sigma_median") is not None else "未筛查"),
+        (f"{float(record['anomaly_paint_ratio']) * 100:.2f}%"
+         if isinstance(record.get("anomaly_paint_ratio"), (int, float))
+         else "未筛查"),
+        (record.get("anomaly_regions_paint")
+         if record.get("anomaly_regions_paint") is not None else "未筛查"),
         record["status"],
     ]
     with open(path, "w", newline="", encoding="utf-8-sig") as fh:

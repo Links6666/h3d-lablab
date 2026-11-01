@@ -140,8 +140,10 @@ def write_outputs(out_dir: str, res, summary: dict) -> str:
     regions_csv = os.path.join(out_dir, "regions.csv")
     rows = [r.as_row() for r in res.regions]
     with open(regions_csv, "w", encoding="utf-8-sig", newline="") as fh:
-        fieldnames = ["region_id", "x0", "y0", "x1", "y1", "texels",
-                      "area_ratio", "score_mean", "score_max"]
+        # 表头跟着 REGION_FIELDS 走，不在这里手写第二份
+        from h3d.anomaly import REGION_FIELDS
+
+        fieldnames = list(REGION_FIELDS)
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)

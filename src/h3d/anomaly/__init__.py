@@ -111,6 +111,15 @@ class AnomalyConfig:
     #: 的邻域里，平均向量的模长趋近 0，拿它当「另一个方向」会让整片各向同性
     #: 纹理全部报警。
     texture_coherence_floor: float = 0.5
+    #: 色度阈值（Lab 的 a/b 偏离中性点 128 的欧氏距离之和）。高于它算**残存彩绘**，
+    #: 低于它算胎体/无彩区。默认 15：真机 1.1.12 的全岛色度 p99=16.8、`chroma>15`
+    #: 只占 1.88% 面积——正好切出这件文物剩下的一点点彩绘。
+    chroma_paint: float = 15.0
+    #: 判定「这块表面原本是彩绘还是胎体」时，向外看多少纹素（环宽）。默认 8，
+    #: 与真机图斑最粗宽（10.8~17.1）的一半同量级：太窄会被斑块自身的过渡带污染，
+    #: 太宽会跨到别的 UV 岛上去。
+    chroma_ring: int = 8
+
     #: 纹理特征的块边长（纹素）。结构张量的累加需要足够的样本，16 是实测下限
     #: （8 时一致性抖动 ±0.3，分不开条纹与噪点）。
     tex_block: int = 16
@@ -147,6 +156,13 @@ class AnomalyConfig:
     #: 岛内纹素少于此值时不参与自适应（分位数不可靠，直接用全局 k）。
     island_k_min_texels: int = 256
 
+#: 图斑落盘时的列顺序 —— **唯一来源**。``as_row()`` 与 ``atlas_io`` 的 CSV
+#: 表头都读它。手写两份的下场是实测过的：加了 ``domain`` 三列而 CSV 表头没跟，
+#: 真机直接抛 ``dict contains fields not in fieldnames``（r16「手写白名单」同构）。
+REGION_FIELDS = ("region_id", "x0", "y0", "x1", "y1", "texels", "area_ratio",
+                 "score_mean", "score_max", "chroma_in", "chroma_ring", "domain")
+
+
 @dataclass(frozen=True)
 class AnomalyRegion:
     """一处异常图斑（连通域）。报表按它回答「有几处、每处多大」。"""
@@ -159,6 +175,13 @@ class AnomalyRegion:
     area_ratio: float
     score_mean: float
     score_max: float
+    #: 图斑内部的色度中位（Lab 的 a/b 偏离中性点 128）。≈0 表示这块本身是无彩的。
+    chroma_in: float = 0.0
+    #: 图斑**周围环**的色度中位。它回答的是「这块表面原本是彩绘还是胎体」。
+    chroma_ring: float = 0.0
+    #: ``"paint"``（周围是残存彩绘）/ ``"bare"``（周围是无彩胎体）。
+    #: 只有看环才能把「掉彩露胎」判对——它本身是胎体色，周围才是彩绘。
+    domain: str = "bare"
 
     def as_row(self) -> dict:
         """报表行（CSV/JSON 用，键名稳定）。"""
@@ -166,7 +189,10 @@ class AnomalyRegion:
                 "y0": self.bbox[1], "x1": self.bbox[2], "y1": self.bbox[3],
                 "texels": self.texels, "area_ratio": round(self.area_ratio, 6),
                 "score_mean": round(self.score_mean, 3),
-                "score_max": round(self.score_max, 3)}
+                "score_max": round(self.score_max, 3),
+                "chroma_in": round(self.chroma_in, 2),
+                "chroma_ring": round(self.chroma_ring, 2),
+                "domain": self.domain}
 
 
 @dataclass(frozen=True)
@@ -762,8 +788,18 @@ def detect_atlas_anomalies(image: np.ndarray, island: np.ndarray, *,
     mask &= island
 
     score = np.maximum(score, 0.0).astype(np.float32)
+    # 色度分域：每处图斑落在这件文物**残存彩绘**上，还是无彩的胎体/无彩区。
+    # 判据看的是图斑**外一圈**的色度（见 _ring_domain）——掉彩露胎本身是胎体色、
+    # 周围才是彩绘，只看内部会把最要紧的一类真病害判反。
+    #
+    # **必须用原始 Lab（``raw``），不能用 ``lab``**：``lab`` 已经逐岛减过中位
+    # （D11 的按岛归一化），a/b 不再以 128 为中性点，算出来的「色度」是无意义的
+    # 大数（实测中性灰块算出 chroma=190、被判成「彩绘区」）。
+    chroma = _chroma_map(raw)
     regions = _collect_regions(mask, score, n_island, cfg.min_region_ratio,
-                               cfg.min_region_texels)
+                               cfg.min_region_texels, chroma=chroma,
+                               island=island, chroma_paint=cfg.chroma_paint,
+                               ring=cfg.chroma_ring)
 
     metrics = {
         "island_ratio": n_island / float(island.size),
@@ -797,15 +833,43 @@ def detect_atlas_anomalies(image: np.ndarray, island: np.ndarray, *,
         # 那要网格 + 尺度锚点（件号级），由调用方决定要不要做——无度量基准的
         # 照片重建件不得冒充物理面积（同「无度量基准不得缩放」一条纪律）。
         "area_units": "texel_ratio",
+        # 色度分域（D15）：这件文物还剩多少**残存彩绘**，以及图斑落在哪一侧。
+        # paint_ratio 是读结论的前提——一件 chroma>15 只占 1.88% 面积的文物，
+        # 「7 处异常都在胎体区」与「7 处都在彩绘上」是完全不同的两件事。
+        "chroma_threshold": float(cfg.chroma_paint),
+        "paint_ratio": (float((chroma[island] >= cfg.chroma_paint).mean())
+                        if n_island else 0.0),
+        "n_regions_paint": sum(1 for r in regions if r.domain == "paint"),
+        "n_regions_bare": sum(1 for r in regions if r.domain == "bare"),
     }
     return AnomalyResult(score=score, mask=mask, island=island,
                          regions=regions, metrics=metrics)
 
 
+def _chroma_map(lab: np.ndarray) -> np.ndarray:
+    """逐纹素色度：Lab 的 a/b 偏离中性点 128 的距离。
+
+    OpenCV 的 8 位 Lab 里**中性点是 128**（不是 0）。直接拿 a/b 的模长会把所有
+    纹素都算成「有彩」——那样「这块表面是彩绘还是胎体」就永远判成彩绘。
+    """
+    a = np.asarray(lab[..., 1], np.float32) - 128.0
+    b = np.asarray(lab[..., 2], np.float32) - 128.0
+    return np.sqrt(a * a + b * b)
+
+
 def _collect_regions(mask: np.ndarray, score: np.ndarray, n_island: int,
                      min_ratio: float,
-                     min_texels: int = 24) -> list[AnomalyRegion]:
-    """把掩膜切成连通域，丢掉小于 ``min_ratio`` 的噪点，按面积降序返回。"""
+                     min_texels: int = 24,
+                     chroma: np.ndarray | None = None,
+                     island: np.ndarray | None = None,
+                     chroma_paint: float = 15.0,
+                     ring: int = 8) -> list[AnomalyRegion]:
+    """把掩膜切成连通域，丢掉小于 ``min_ratio`` 的噪点，按面积降序返回。
+
+    ``chroma`` 给了就顺带判每处图斑的**域**（残存彩绘 / 胎体无彩）：看的是
+    **周围环**而不是图斑内部——掉彩露胎本身是胎体色、周围才是彩绘，只看内部
+    会把最要紧的一类真病害判反。
+    """
     from scipy import ndimage
 
     # 8 邻接：对角相邻的纹素算同一片。用 4 邻接时，一个方斑的角上会掉出
@@ -827,12 +891,50 @@ def _collect_regions(mask: np.ndarray, score: np.ndarray, n_island: int,
         vals = score[sl][sel]
         y0, y1 = sl[0].start, sl[0].stop - 1     # 换成含端点的像素坐标
         x0, x1 = sl[1].start, sl[1].stop - 1
+        c_in = c_ring = 0.0
+        domain = "bare"
+        if chroma is not None:
+            c_in = float(np.median(chroma[sl][sel]))
+            c_ring, domain = _ring_domain(labelled, idx, sl, chroma, island,
+                                          ring, chroma_paint, fallback=c_in)
         out.append(AnomalyRegion(
             region_id=0, bbox=(int(x0), int(y0), int(x1), int(y1)),
             texels=texels, area_ratio=texels / total,
-            score_mean=float(vals.mean()), score_max=float(vals.max())))
+            score_mean=float(vals.mean()), score_max=float(vals.max()),
+            chroma_in=c_in, chroma_ring=c_ring, domain=domain))
     out.sort(key=lambda r: r.texels, reverse=True)
     return [AnomalyRegion(region_id=i, bbox=r.bbox, texels=r.texels,
                           area_ratio=r.area_ratio, score_mean=r.score_mean,
-                          score_max=r.score_max)
+                          score_max=r.score_max, chroma_in=r.chroma_in,
+                          chroma_ring=r.chroma_ring, domain=r.domain)
             for i, r in enumerate(out, start=1)]
+
+
+def _ring_domain(labelled: np.ndarray, idx: int, sl, chroma: np.ndarray,
+                 island: np.ndarray | None, ring: int, chroma_paint: float,
+                 *, fallback: float) -> tuple[float, str]:
+    """看**图斑外一圈**的色度，判这块表面原本是彩绘还是胎体。
+
+    * 环只在岛内取（岛外是未着色的空隙，色度没有物理意义）；
+    * 环宽默认 8 纹素，与真机图斑最粗宽（10.8~17.1）的一半同量级；
+    * 环内一个岛内纹素都没有（图斑几乎占满整岛）时退回图斑内部的色度——
+      此时「周围」已经不存在，只能用它自己。
+    """
+    from scipy import ndimage
+
+    h, w = labelled.shape
+    pad = int(ring) + 1
+    y0 = max(0, sl[0].start - pad)
+    y1 = min(h, sl[0].stop + pad)
+    x0 = max(0, sl[1].start - pad)
+    x1 = min(w, sl[1].stop + pad)
+    sel = labelled[y0:y1, x0:x1] == idx
+    grown = ndimage.binary_dilation(sel, ndimage.generate_binary_structure(2, 1),
+                                    iterations=int(ring))
+    ring_mask = grown & ~sel
+    if island is not None:
+        ring_mask &= island[y0:y1, x0:x1]
+    if not ring_mask.any():
+        return float(fallback), ("paint" if fallback >= chroma_paint else "bare")
+    med = float(np.median(chroma[y0:y1, x0:x1][ring_mask]))
+    return med, ("paint" if med >= chroma_paint else "bare")

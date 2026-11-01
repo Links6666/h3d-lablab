@@ -51,6 +51,10 @@ def _summary_json(**over) -> dict:
             "n_regions": 2,
             "sigma_median": 12.17,
             "score_p99": 3.54,
+            "chroma_threshold": 15.0,
+            "paint_ratio": 0.0189,
+            "n_regions_paint": 1,
+            "n_regions_bare": 1,
         },
     }
     base["metrics"].update(over.pop("metrics", {}))
@@ -61,10 +65,12 @@ def _summary_json(**over) -> dict:
 REGIONS = [
     {"region_id": 1, "x0": 939, "y0": 1746, "x1": 983, "y1": 1816,
      "texels": 1103, "area_ratio": 0.000428, "score_mean": 4.06,
-     "score_max": 5.439},
+     "score_max": 5.439, "chroma_in": 6.0, "chroma_ring": 2.91,
+     "domain": "bare"},
     {"region_id": 2, "x0": 996, "y0": 31, "x1": 1018, "y1": 75,
      "texels": 529, "area_ratio": 0.000205, "score_mean": 4.253,
-     "score_max": 6.222},
+     "score_max": 6.222, "chroma_in": 1.0, "chroma_ring": 16.4,
+     "domain": "paint"},
 ]
 
 
@@ -252,3 +258,45 @@ class TestCropBox:
 
         x0, y0, x1, y1 = crop_box((100, 100, 900, 130), (2048, 2048))
         assert (x1 - x0) >= 800 and (y1 - y0) >= 200
+
+
+class TestChromaDomainReading:
+    """读模型要把「域」读出来，并在摘要里说清彩绘占比。
+
+    真机 1.1.12：paint_ratio 1.89%、7 处全 bare。摘要行必须能让人一眼看出
+    「残存彩绘里没有报警」——这句话是保护判断的直接依据。
+    """
+
+    def test_domain_and_chroma_are_parsed(self, tmp_path):
+        from h3d.anomaly.summary import load_summary
+
+        sm = load_summary(str(_project(tmp_path)), ITEM)
+        assert [r.domain for r in sm.regions] == ["bare", "paint"]
+        assert sm.regions[0].chroma_ring == pytest.approx(2.91)
+        assert sm.regions[1].chroma_in == pytest.approx(1.0)
+
+    def test_summary_line_mentions_paint_ratio(self, tmp_path):
+        from h3d.anomaly.summary import load_summary, summary_line
+
+        text = summary_line(load_summary(str(_project(tmp_path)), ITEM))
+        assert "1.89%" in text, text
+        assert "彩绘" in text, text
+
+    def test_old_products_without_domain_still_load(self, tmp_path):
+        """旧产物没有 domain 三列 —— 必须当成「未知」而不是崩或全判 bare。"""
+        import csv
+
+        from h3d.anomaly.summary import load_summary
+
+        stage = _project(tmp_path)
+        p = stage / "60_qc" / ITEM / "anomaly" / "regions.csv"
+        old = [{k: v for k, v in r.items() if k not in ("chroma_in", "chroma_ring",
+                                                       "domain")}
+               for r in REGIONS]
+        with open(p, "w", newline="", encoding="utf-8-sig") as fh:
+            w = csv.DictWriter(fh, fieldnames=list(old[0].keys()))
+            w.writeheader()
+            w.writerows(old)
+        sm = load_summary(str(stage), ITEM)
+        assert sm.status == "ok"
+        assert [r.domain for r in sm.regions] == ["unknown", "unknown"]

@@ -612,6 +612,11 @@ _TEMPLATE = """<!DOCTYPE html>
   80 texel 注入覆盖率同时从 0.92 掉到 0——被过滤的与该检出的强度是重叠的。
   代价是<b>岛内病变面积超过该岛一半时，归一化会把病变当成本底</b>而看不见——
   小岛（中位几十纹素）只适用「比岛内常见的起伏更明显」这一档。
+  <b>域（彩绘 / 胎体）</b>是保护判断的第一分界：落在<b>残存彩绘</b>上的异常意味着
+  掉彩或变色（要干预），落在<b>胎体</b>上的只值观察。判据看的是图斑<b>外一圈</b>的色度
+  ——掉彩露胎本身是胎体色、周围才是彩绘，只看斑块内部会把最要紧的一类判反。
+  报表同时给出<b>残存彩绘占比</b>：一件彩绘只剩 1.9% 的文物，「彩绘上 0 处」与
+  「这本来就没彩绘」是两件事，两个数必须一起读。
   异常面积格内的 <code>σ_L≈N</code> 是<b>本件</b>典型位置的局部纹理跨度（Lab 单位）——
   <b>同一个 ΔE，在这个数越大的地方越难检出</b>；比它小一个量级的差异不要指望
   能被查出来，那不等于「没有病害」。
@@ -626,7 +631,7 @@ _TEMPLATE = """<!DOCTYPE html>
     个 UV 岛，按岛比较），下列前 {{ row.anomaly_top|length }} 处（按面积降序）</summary>
   <table class="mini">
     <tr><th>#</th><th>边界框 (x0, y0)-(x1, y1)</th><th>纹素数</th>
-        <th>占岛内</th><th>均分</th></tr>
+        <th>占岛内</th><th>均分</th><th>域</th></tr>
     {% for r in row.anomaly_top %}
     <tr>
       <td class="num">{{ r.id }}</td>
@@ -634,6 +639,7 @@ _TEMPLATE = """<!DOCTYPE html>
       <td class="num">{{ r.texels }}</td>
       <td class="num">{{ r.ratio }}</td>
       <td class="num">{{ r.score }}</td>
+      <td>{{ r.domain }}</td>
     </tr>
     {% endfor %}
   </table>
@@ -967,7 +973,11 @@ def generate_html(manifest: RunManifest,
                          f"({r.get('x1')}, {r.get('y1')})",
                  "texels": r.get("texels"),
                  "ratio": _pct(r.get("area_ratio"), 3),
-                 "score": _num(r.get("score_mean"), 2)}
+                 "score": _num(r.get("score_mean"), 2),
+                 # 域：这处异常落在残存彩绘上还是胎体上。旧产物没有这一列，
+                 # 印「—」而不是替它猜一个——猜错会把结论正好反过来。
+                 "domain": {"paint": "彩绘", "bare": "胎体"}.get(
+                     r.get("domain") or "", "—")}
                 for r in (get(item, "M5").get("anomaly_top_regions") or [])
             ],
             "verdict": verdict, "cls": cls,

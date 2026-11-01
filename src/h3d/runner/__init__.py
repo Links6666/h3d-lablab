@@ -513,6 +513,8 @@ def _locate_texture_atlas(tex_dir: str, item_id: str,
 #: 几十处全塞进 manifest —— 那是日记不是指标。完整清单仍在 regions.csv。
 _ANOMALY_TOP_N = 10
 
+from h3d.anomaly import REGION_FIELDS as _REGION_FIELDS  # noqa: E402
+
 
 #: 带进 manifest 的图斑明细条数上限。报表要能「指着看第 1 处在哪」，但不能把
 #: 几十处全塞进 manifest —— 那是日记不是指标。完整清单仍在 regions.csv。
@@ -586,6 +588,14 @@ def _stage_anomaly_qc(task: Task, cfg) -> StageResult:
         # 与「看不出来」分开。
         "anomaly_sigma_median": (None if m.get("sigma_median") is None
                                  else round(float(m["sigma_median"]), 3)),
+        # 色度分域（D15）：这件还剩多少残存彩绘，以及有多少处异常落在它上面。
+        # 「彩绘上 0 处」与「这本来就没彩绘」是两件事，必须一起报。
+        "anomaly_paint_ratio": (None if m.get("paint_ratio") is None
+                                else round(float(m["paint_ratio"]), 6)),
+        "anomaly_chroma_threshold": (None if m.get("chroma_threshold") is None
+                                     else float(m["chroma_threshold"])),
+        "anomaly_regions_paint": (None if m.get("n_regions_paint") is None
+                                  else int(m["n_regions_paint"])),
         "island_ratio": round(float(m.get("island_ratio") or 0.0), 4),
         # 图集由多少个 UV 岛拼成，以及是否按岛比较。**1 与 3690 是两种东西**：
         # 单岛图集上「局部空间背景」成立，拼贴图集上只有按岛才成立。报表要能
@@ -594,9 +604,10 @@ def _stage_anomaly_qc(task: Task, cfg) -> StageResult:
         "per_island": bool(m.get("per_island")),
         # 前 N 处图斑的边界框（按面积降序，与 regions.csv 同序）。报表据此
         # 画出「第 1 处 (x0,y0)-(x1,y1)」，用户不用再翻 CSV。
+        # 键跟着 ``REGION_FIELDS`` 走，不在这里手写第二份——加了 domain 三列
+        # 而这里没跟，报表的明细块就永远看不到「这处在彩绘上还是胎体上」。
         "anomaly_top_regions": [
-            {k: r[k] for k in ("region_id", "x0", "y0", "x1", "y1",
-                               "texels", "area_ratio", "score_mean")}
+            {k: r[k] for k in _REGION_FIELDS if k in r}
             for r in (summary.get("regions") or [])[:_ANOMALY_TOP_N]
         ],
     }
@@ -740,6 +751,9 @@ def _stage_quality(task: Task, cfg) -> StageResult:
         metrics["anomaly_adaptive_k"] = x3.get("anomaly_adaptive_k")
         metrics["anomaly_top_regions"] = x3.get("anomaly_top_regions") or []
         metrics["anomaly_island_count"] = x3.get("island_count")
+        metrics["anomaly_paint_ratio"] = x3.get("anomaly_paint_ratio")
+        metrics["anomaly_chroma_threshold"] = x3.get("anomaly_chroma_threshold")
+        metrics["anomaly_regions_paint"] = x3.get("anomaly_regions_paint")
         metrics["anomaly_per_island"] = x3.get("per_island")
 
     # 先落盘报告（失败也有据可查），再判定
@@ -823,6 +837,10 @@ def _stage_quality(task: Task, cfg) -> StageResult:
         # 按岛归一化的口径（岛数 + 是否按岛）。异常面积脱离口径就没法读：
         # 「3690 个岛按岛比较」与「一整块按空间邻域比较」是两套数。
         "anomaly_island_count": metrics.get("anomaly_island_count"),
+        # 色度分域：彩绘占比 / 阈值 / 彩绘上的图斑数
+        "anomaly_paint_ratio": metrics.get("anomaly_paint_ratio"),
+        "anomaly_chroma_threshold": metrics.get("anomaly_chroma_threshold"),
+        "anomaly_regions_paint": metrics.get("anomaly_regions_paint"),
         "anomaly_per_island": metrics.get("anomaly_per_island"),
     }
     return StageResult("M5", TaskStatus.DONE, reports, manifest_metrics)

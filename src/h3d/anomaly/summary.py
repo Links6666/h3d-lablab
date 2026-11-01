@@ -31,6 +31,11 @@ STATUS_OK = "ok"
 STATUS_MISSING = "missing"
 STATUS_CORRUPT = "corrupt"
 
+#: 图斑的「域」：它所在的那块表面原本是残存彩绘，还是无彩的胎体。
+#: ``unknown`` 给旧产物（没有这三列的 regions.csv），**不能**当成 ``bare``——
+#: 那等于替一件没测过的文物下结论。
+DOMAIN_LABEL = {"paint": "彩绘", "bare": "胎体", "unknown": "未知"}
+
 STATUS_LABEL = {
     STATUS_OK: "已筛查",
     STATUS_MISSING: "未筛查",
@@ -48,6 +53,16 @@ class RegionRow:
     area_ratio: float
     score_mean: float
     score_max: float
+    #: 图斑内部色度（Lab 的 a/b 偏离 128）、周围环色度。环才是「这块表面原来
+    #: 是什么」——掉彩露胎本身是胎体色、周围才是彩绘。
+    chroma_in: float = 0.0
+    chroma_ring: float = 0.0
+    #: ``"paint"`` / ``"bare"`` / ``"unknown"``（旧产物缺列）。
+    domain: str = "unknown"
+
+    @property
+    def domain_text(self) -> str:
+        return DOMAIN_LABEL.get(self.domain, "未知")
 
     @property
     def label(self) -> str:
@@ -113,6 +128,7 @@ def _read_regions(path: str) -> tuple[list[RegionRow], str]:
     except (OSError, UnicodeDecodeError, csv.Error) as exc:
         return [], f"图斑清单读不出来（regions.csv：{type(exc).__name__}）"
     regions: list[RegionRow] = []
+    has_domain = bool(rows) and "domain" in rows[0]
     for r in rows:
         try:
             regions.append(RegionRow(
@@ -123,6 +139,12 @@ def _read_regions(path: str) -> tuple[list[RegionRow], str]:
                 area_ratio=float(r["area_ratio"]),
                 score_mean=float(r["score_mean"]),
                 score_max=float(r["score_max"]),
+                chroma_in=(float(r.get("chroma_in") or 0.0)
+                           if has_domain else 0.0),
+                chroma_ring=(float(r.get("chroma_ring") or 0.0)
+                             if has_domain else 0.0),
+                domain=(r.get("domain") or "unknown") if has_domain
+                else "unknown",
             ))
         except (KeyError, TypeError, ValueError):
             # 单行坏掉不该让整张表消失：跳过并累计，下面统一提示
@@ -248,6 +270,15 @@ def summary_line(s: ItemSummary) -> str:
     if isinstance(m.get("island_count"), int):
         how = "按岛比较" if m.get("per_island", True) else "跨岛比较"
         parts.append(f"图集 {m['island_count']} 个 UV 岛（{how}）")
+    # 残存彩绘占多少、图斑落在哪一侧 —— 保护判断的第一分界。
+    # 一件 chroma>15 只占 1.89% 的文物，「7 处都在胎体区」与「7 处都在彩绘上」
+    # 是完全不同的两件事，前者可以说「彩绘未受损报警」。
+    if m.get("paint_ratio") is not None:
+        seg = f"残存彩绘 {float(m['paint_ratio']) * 100:.2f}%"
+        n_paint = m.get("n_regions_paint")
+        if isinstance(n_paint, int):
+            seg += f"（其上 {n_paint} 处）"
+        parts.append(seg)
     return " · ".join(parts)
 
 

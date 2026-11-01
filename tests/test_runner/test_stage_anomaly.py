@@ -330,6 +330,9 @@ def _m5_project(tmp_path) -> object:
         "anomaly_atlas": "50_tex/r1/r1_L1.0_diffuse.png",
         "anomaly_atlas_digest": "0123456789ab",
         "anomaly_sigma_median": 30.3,
+        "anomaly_paint_ratio": 0.0189,
+        "anomaly_chroma_threshold": 15.0,
+        "anomaly_regions_paint": 0,
         "anomaly_top_regions": [
             {"region_id": 1, "x0": 445, "y0": 5, "x1": 487, "y1": 26,
              "texels": 590, "area_ratio": 0.000229, "score_mean": 6.404},
@@ -362,6 +365,10 @@ class TestMetricsReachTheReport:
         assert m5["anomaly_atlas_digest"] == "0123456789ab"
         # 「可检下限」必须跟着走：没有它，漏检只能被读成「没有病害」
         assert m5["anomaly_sigma_median"] == pytest.approx(30.3)
+        # 残存彩绘占比与「彩绘上的图斑数」：没有它，读者无法判断「0 处」
+        # 到底是「彩绘完好」还是「这件本来就没彩绘」
+        assert m5["anomaly_paint_ratio"] == pytest.approx(0.0189)
+        assert m5["anomaly_regions_paint"] == 0
         # 明细也要过白名单：否则报表只能看到「35 处」却指不出任何一处
         assert len(m5["anomaly_top_regions"]) == 2
         assert m5["anomaly_top_regions"][0]["x0"] == 445
@@ -461,9 +468,11 @@ class TestMetricsReachTheReport:
 
         regions = [
             {"region_id": 1, "x0": 445, "y0": 5, "x1": 487, "y1": 26,
-             "texels": 590, "area_ratio": 0.000229, "score_mean": 6.404},
+             "texels": 590, "area_ratio": 0.000229, "score_mean": 6.404,
+             "domain": "bare"},
             {"region_id": 2, "x0": 1777, "y0": 1291, "x1": 1827, "y1": 1316,
-             "texels": 964, "area_ratio": 0.000374, "score_mean": 5.816},
+             "texels": 964, "area_ratio": 0.000374, "score_mean": 5.816,
+             "domain": "paint"},
         ]
         cfg = PipelineConfig()
         cfg.runner.manifest = os.path.join(str(tmp_path), "90_meta", "m.json")
@@ -486,6 +495,66 @@ class TestMetricsReachTheReport:
         assert "(445, 5)-(487, 26)" in html, "第 1 处的边界框没画出来"
         assert "共 35 处" in html, "只列了前 2 处，必须写明总数"
         assert "regions.csv" in html, "要指出去哪里看完整清单"
+        # 域：这处在残存彩绘上还是胎体上 —— 保护判断的第一分界，必须在明细里
+        assert "<th>域</th>" in html, "明细缺「域」列"
+        assert "胎体" in html and "彩绘" in html
+
+    def test_html_shows_domain_caveat(self, tmp_path):
+        """脚注必须说清「彩绘上 0 处」与「这本来就没彩绘」是两件事。
+
+        只印「彩绘区 0 处」会让读者以为彩绘完好；而一件彩绘只剩 1.9% 的文物，
+        这句话的意思弱得多。两个数必须一起读。
+        """
+        from h3d.core import PipelineConfig, RunManifest
+        from h3d.report.html_export import generate_html
+
+        cfg = PipelineConfig()
+        cfg.runner.manifest = os.path.join(str(tmp_path), "90_meta", "m.json")
+        os.makedirs(os.path.dirname(cfg.runner.manifest), exist_ok=True)
+        m = RunManifest(config_sha256="abc123")
+        m.record("r1/M4", "done", [], 70.0, texture_size=2048,
+                 atlas_utilization=0.615, texture_coverage=0.55)
+        m.record("r1/M5", "done", [], 1.0, coverage=0.9, rmse_mm=2.0,
+                 mps_m=0.001, anomaly_ratio=0.0024, anomaly_regions=7,
+                 anomaly_paint_ratio=0.0189, anomaly_regions_paint=0)
+        m.save(cfg.runner.manifest)
+        out = os.path.join(str(tmp_path), "r.html")
+        generate_html(RunManifest.load(cfg.runner.manifest), out_path=out,
+                      project="t")
+        with open(out, encoding="utf-8") as fh:
+            html = fh.read()
+        assert "残存彩绘占比" in html
+        assert "这本来就没彩绘" in html
+        # 域：这处在残存彩绘上还是胎体上 —— 保护判断的第一分界，必须在明细里
+        assert "<th>域</th>" in html, "明细缺「域」列"
+        assert "胎体" in html and "彩绘" in html
+
+    def test_html_shows_domain_caveat(self, tmp_path):
+        """脚注必须说清「彩绘上 0 处」与「这本来就没彩绘」是两件事。
+
+        只印「彩绘区 0 处」会让读者以为彩绘完好；而一件彩绘只剩 1.9% 的文物，
+        这句话的意思弱得多。两个数必须一起读。
+        """
+        from h3d.core import PipelineConfig, RunManifest
+        from h3d.report.html_export import generate_html
+
+        cfg = PipelineConfig()
+        cfg.runner.manifest = os.path.join(str(tmp_path), "90_meta", "m.json")
+        os.makedirs(os.path.dirname(cfg.runner.manifest), exist_ok=True)
+        m = RunManifest(config_sha256="abc123")
+        m.record("r1/M4", "done", [], 70.0, texture_size=2048,
+                 atlas_utilization=0.615, texture_coverage=0.55)
+        m.record("r1/M5", "done", [], 1.0, coverage=0.9, rmse_mm=2.0,
+                 mps_m=0.001, anomaly_ratio=0.0024, anomaly_regions=7,
+                 anomaly_paint_ratio=0.0189, anomaly_regions_paint=0)
+        m.save(cfg.runner.manifest)
+        out = os.path.join(str(tmp_path), "r.html")
+        generate_html(RunManifest.load(cfg.runner.manifest), out_path=out,
+                      project="t")
+        with open(out, encoding="utf-8") as fh:
+            html = fh.read()
+        assert "残存彩绘占比" in html
+        assert "这本来就没彩绘" in html
 
     def test_accuracy_csv_has_anomaly_columns(self, tmp_path):
         """``accuracy.csv``（论文表的取数口）要带异常两列。
@@ -507,6 +576,7 @@ class TestMetricsReachTheReport:
         assert row[header.index("异常面积(岛内)")] == "2.18%"
         assert row[header.index("图斑数")] == "35"
         assert row[header.index("纹理尺度σ_L(Lab)")] == "30.3"
+        assert row[header.index("彩绘区图斑数")] == "0"
 
         # 再来一遍但不带 X3 结果：同一列必须写「未筛查」
         task2, cfg2 = _m5_project(tmp_path / "no_x3")
