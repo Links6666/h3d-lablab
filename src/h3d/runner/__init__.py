@@ -1324,24 +1324,36 @@ def _stage_colour_quality(task, cfg):
     from h3d.core.media import list_images as _list_images
     checker_photos = [os.path.basename(p) for p in _list_images(photo_dir)]
     if checker_photos:
-        from h3d.colour.checker_locator import locate_colorchecker
+        # 用带亮框回退的版本：真实采集常常没贴 ArUco，只靠白边也能定；
+        # 只有 ArUco 的 locate_colorchecker 在这两种情况下都是 None。
+        from h3d.colour.checker_locator import locate_colorchecker_robust
         for ph in checker_photos[:6]:
             try:
-                p = locate_colorchecker(os.path.join(photo_dir, ph))
+                p = locate_colorchecker_robust(os.path.join(photo_dir, ph))
                 if p is not None:
                     patches = p
                     break
             except Exception:  # noqa: BLE001
                 continue
     if patches is None:
-        h, w = img.shape[:2]
-        rng = np.random.default_rng(0)
-        patches = img[rng.integers(0, h, 24), rng.integers(0, w, 24)]
-        checker_source = "texture-random"   # 未在照片中定位到色卡
-    else:
-        checker_source = "photo"
+        # **没有色卡就不出数**（2026-11-01）。原实现在这里退回
+        # ``texture-random``：从纹理图随机采 24 个像素，跟 ColorChecker24 的
+        # 标准值算 ΔE。那测的不是「色彩保真度」，是「文物颜色与色卡颜色的差」
+        # ——真机 30 张照片一个色卡都没有，它照样 DONE 并报 mean ΔE=21.42。
+        # 而那个 21.42 的真相是：纹理值是 0~255，``colour.run`` 期望 0~1，
+        # 全部越界值被钳成纯白，纯白对 24 个标准色的 ΔE 恰好 ≈21.4
+        # （见 tests/test_colour/test_stage_x2_units.py）。
+        # 一个看起来正常、还能进报表的假数，比没有数更糟。
+        return StageResult("X2", TaskStatus.SKIPPED, [], {
+            "skip_reason": "00_photo 中未定位到 ColorChecker（无 ArUco 角标、"
+                           "无白色边框）——ΔE 需要「实测色块 vs 标准色卡」的"
+                           "对应关系，缺色卡无法评估；请在采集时把 "
+                           "ColorChecker24 与文物同框拍摄"}, 0.0)
+    checker_source = "photo"
+    # 定位函数返回 sRGB 0~255，``colour.run`` 要 0~1。不除会全被钳成纯白。
     from h3d.colour import run as colour_run
-    result = colour_run(patches, cfg=cfg.colour)
+    result = colour_run(np.asarray(patches, dtype=np.float64) / 255.0,
+                        cfg=cfg.colour)
     out = os.path.join(_paths.delivery_item_dir(task.root, task.item_id),
                        f"{task.item_id}_X2_deltaE.json")
     os.makedirs(os.path.dirname(out), exist_ok=True)

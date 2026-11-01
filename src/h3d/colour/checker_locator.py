@@ -80,9 +80,6 @@ def locate_colorchecker(image_path: str, grid: tuple = (4, 6),
     return np.clip(np.array(patches), 0, 255)
 
 
-__all__ = ["locate_colorchecker"]
-
-
 def locate_colorchecker_robust(image_path: str, grid: tuple = (4, 6),
                                aruco_ids: tuple = (1, 2, 3, 4),
                                min_aruco: int = 3) -> Optional[np.ndarray]:

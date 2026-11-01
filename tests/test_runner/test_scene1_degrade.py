@@ -359,16 +359,21 @@ class TestX2PhotoDir:
         cfg = _cfg(tmp_path)
         cfg.runner.x2_enabled = True
 
-        # 打桩：色卡定位必然命中 → 若目录找错了，桩不会被调用
+        # 打桩：色卡定位被调用就记下路径 → 若目录找错了，桩不会被调用。
+        # 2026-11-01：改为打 robust 版（X2 现在用它，带亮框回退）。
         hits = []
         import h3d.colour.checker_locator as cl
-        orig = cl.locate_colorchecker
-        cl.locate_colorchecker = lambda p: (hits.append(p), None)[1]
+        orig = cl.locate_colorchecker_robust
+        cl.locate_colorchecker_robust = lambda p: (hits.append(p), None)[1]
         try:
             res = _stage_colour_quality(task, cfg)
         finally:
-            cl.locate_colorchecker = orig
+            cl.locate_colorchecker_robust = orig
 
         assert hits, "X2 没有遍历到任何照片 —— 照片目录定位错误"
         assert os.path.basename(os.path.dirname(hits[0])) == "r1"
-        assert res.metrics["checker_source"] == "texture-random"  # 桩返回 None
+        # 桩返回 None = 照片里没有色卡 → 现在必须 SKIPPED（ADR-0008），
+        # 不再退回 texture-random 去报一个没有物理意义的 ΔE。
+        from h3d.runner.task import TaskStatus
+        assert res.status == TaskStatus.SKIPPED
+        assert "mean_de" not in res.metrics
