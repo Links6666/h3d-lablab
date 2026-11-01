@@ -318,3 +318,97 @@ class TestUncalibratedNumbersStayOutOfTheTables:
         assert _fmt_x1(177.3, False) == "未标定"
         assert _fmt_x1(177.3, True) == "177.30"
         assert _fmt_x1(None, True) == "N/A"
+
+
+def _shift_cloud(src, dst, offset):
+    """把点云整体平移后另存（造「不同源」的几何）。"""
+    import open3d as o3d
+
+    p = o3d.io.read_point_cloud(src)
+    p.translate(tuple(offset))
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    o3d.io.write_point_cloud(dst, p)
+
+
+class TestEpochConsistencyGate:
+    """两期**同源闸门**：候选链挑出来的两份几何必须是同一件的两期。
+
+    真机 ``D:/h3d_relic_test`` 上 ``10_dense/fused_dense.ply``（照片重建稠密）
+    与 ``00_raw`` 的激光件互最近邻中位 **5541mm**——两个坐标系。M3C2 对这样的
+    输入照样成功返回，报出的「最大形变」是坐标系间距而不是形变，而且看起来
+    完全正常。ADR-0005 那个 177mm 就是这么来的。
+    """
+
+    def test_foreign_candidate_is_skipped_and_next_one_wins(self, tmp_path):
+        """10_dense 不同源 → 拒绝它，回落到 30_dense（同源）。"""
+        root = tmp_path / "阶段成果"
+        _sphere_cloud(str(root / "00_ref" / ITEM / "t1.ply"))
+        # 10_dense：同一个球平移到 3 米外（对角线比仍≈1，靠距离判据才抓得住）
+        _sphere_cloud(str(root / "10_dense" / ITEM / "fused_dense.ply"), seed=2)
+        _shift_cloud(str(root / "10_dense" / ITEM / "fused_dense.ply"),
+                     str(root / "10_dense" / ITEM / "fused_dense.ply"),
+                     (3.0, 0.0, 0.0))
+        _sphere_mesh(str(root / "30_dense" / ITEM / f"{ITEM}.ply"))
+
+        from h3d.runner import _stage_multitemporal
+        from h3d.runner.task import TaskStatus
+
+        res = _stage_multitemporal(_task(root), _cfg(root))
+        assert res.status == TaskStatus.DONE, res.metrics.get("skip_reason")
+        assert "30_dense" in res.metrics["epoch_source"]
+        assert res.metrics["epoch_median_mm"] < 10.0, res.metrics
+
+    def test_all_candidates_foreign_skips_with_evidence(self, tmp_path):
+        """全部候选都不同源 → 不出数，并把每个候选的实测差距留下来。"""
+        root = tmp_path / "阶段成果"
+        _sphere_cloud(str(root / "00_ref" / ITEM / "t1.ply"))
+        _sphere_cloud(str(root / "10_dense" / ITEM / "fused_dense.ply"), seed=2)
+        _shift_cloud(str(root / "10_dense" / ITEM / "fused_dense.ply"),
+                     str(root / "10_dense" / ITEM / "fused_dense.ply"),
+                     (3.0, 0.0, 0.0))
+
+        from h3d.runner import _stage_multitemporal
+        from h3d.runner.task import TaskStatus
+
+        res = _stage_multitemporal(_task(root), _cfg(root))
+        assert res.status == TaskStatus.SKIPPED
+        assert "同源" in res.metrics["skip_reason"]
+        checked = res.metrics["epoch_checked"]
+        assert checked and checked[0]["ok"] is False
+        assert checked[0]["median_mm"] > 1000.0, checked
+        assert "fused_dense.ply" in checked[0]["path"]
+
+    def test_scale_mismatch_is_caught_by_bbox_ratio(self, tmp_path):
+        """尺度差 2 倍（单位错 / 不是同一件）先被对角线比挡下，不算距离。"""
+        root = tmp_path / "阶段成果"
+        _sphere_cloud(str(root / "00_ref" / ITEM / "t1.ply"))
+        _sphere_cloud(str(root / "10_dense" / ITEM / "fused_dense.ply"),
+                      radius=0.10, seed=2)   # 半径翻倍 → 对角线比 2.0
+
+        from h3d.runner import _stage_multitemporal
+        from h3d.runner.task import TaskStatus
+
+        res = _stage_multitemporal(_task(root), _cfg(root))
+        assert res.status == TaskStatus.SKIPPED
+        first = res.metrics["epoch_checked"][0]
+        assert first["ok"] is False
+        assert "尺度不符" in first["reason"], first
+
+    def test_gate_numbers_reach_metrics(self, tmp_path):
+        """同源核对的两个数要写进 metrics（报表据此解释「这数能不能用」）。"""
+        root = tmp_path / "阶段成果"
+        mesh = _sphere_mesh(str(root / "30_dense" / ITEM / f"{ITEM}.ply"))
+        import open3d as o3d
+
+        ref = mesh.sample_points_uniformly(20000)
+        os.makedirs(str(root / "00_ref" / ITEM), exist_ok=True)
+        o3d.io.write_point_cloud(str(root / "00_ref" / ITEM / "t1.ply"), ref)
+
+        from h3d.runner import _stage_multitemporal
+        from h3d.runner.task import TaskStatus
+
+        res = _stage_multitemporal(_task(root), _cfg(root))
+        assert res.status == TaskStatus.DONE
+        assert res.metrics["epoch_bbox_ratio"] == pytest.approx(1.0, abs=0.15)
+        assert res.metrics["epoch_median_mm"] >= 0.0
+        assert res.metrics["epoch_source"].endswith(".ply")

@@ -1036,8 +1036,8 @@ def _stage_photo_texture(task, cfg):
     return run_photo_texture(task, cfg)
 
 
-def _current_geometry(task) -> str | None:
-    """当期几何的候选路径，点云优先、网格兜底。没找到返回 ``None``。
+def _geometry_candidates(task) -> list[str]:
+    """当期几何的**候选路径列表**，按优先级排列。空列表 = 一个都没有。
 
     **为什么不只认 ``10_dense/<件>/fused_dense.ply``**：那是 COLMAP 稠密点云
     （场景②）的产物。激光件（场景①）的几何在 ``30_dense/<件>/<件>.ply``，
@@ -1046,27 +1046,114 @@ def _current_geometry(task) -> str | None:
 
     顺序即优先级：配准后的点云（``20_registered``）比原始点云更该用；网格放最后，
     因为从网格采样会引入一次重采样误差（M3C2 对点密度敏感）。
+
+    **返回列表而不是第一个命中**（2026-11-01）：真机 ``D:/h3d_relic_test`` 上
+    ``10_dense/fused_dense.ply`` 存在，于是它稳居第一顺位——但那是**照片重建**
+    的稠密点云，与 ``00_raw`` 里的激光件互最近邻中位 **5541mm**（五米，两个
+    坐标系）。首个命中即用等于把「两种传感器」当「同一件的两期」，M3C2 报出的
+    任何数都没有意义。改由 :func:`_stage_multitemporal` 逐个候选过同源闸门。
     """
     root = task.root
     item = task.item_id
+    out: list[str] = []
     for rel in (("10_dense", item, "fused_dense.ply"),
                 ("99_runs", "sfm_tmp", item, "dense", "fused.ply")):
         cand = os.path.join(root, *rel)
         if os.path.isfile(cand):
-            return cand
+            out.append(cand)
     for sub in ("20_registered", "10_clean", "00_raw"):
         d = os.path.join(root, sub, item)
         if not os.path.isdir(d):
             continue
         for name in sorted(os.listdir(d)):
             if name.lower().endswith((".ply", ".pcd", ".xyz", ".pts")):
-                return os.path.join(d, name)
+                out.append(os.path.join(d, name))
     # 30_dense 的结构是 30_dense/<件>/<件>.ply（不是 30_dense/<件>.ply）
     for name in (f"{item}.ply", f"{item}.obj"):
         cand = os.path.join(root, "30_dense", item, name)
         if os.path.isfile(cand):
-            return cand
-    return None
+            out.append(cand)
+    return out
+
+
+def _current_geometry(task) -> str | None:
+    """首个候选（保留给不需要同源校验的调用方）。"""
+    cands = _geometry_candidates(task)
+    return cands[0] if cands else None
+
+
+#: 两期包围盒对角线之比的可接受区间。配准成功必≈1，超出说明不是同一件 / 尺度错。
+_EPOCH_BBOX_RATIO = (0.9, 1.1)
+#: 两期互最近邻中位距离的上限（占对角线比例）。同源小变形应远小于它。
+_EPOCH_MEDIAN_RATIO = 0.02
+#: 一致性检查前降采样到多少点（双向点云距离建 KDTree 的成本）
+_EPOCH_SAMPLE = 50_000
+
+
+def _epoch_consistency(t1, t2) -> dict:
+    """两期输入是否「同一件的两期」——**在算 M3C2 之前**判，不通过就不出数。
+
+    为什么必须挡在这里：M3C2 对任何两份点云都会吐出一堆距离，返回码永远成功。
+    真机 ``D:/h3d_relic_test`` 上候选链首选 ``10_dense/fused_dense.ply``（照片
+    重建）与 ``00_raw/test111.ply``（激光件）**差 5541mm**，那种输入下报出的
+    「最大形变」是两套坐标系的间距，与形变毫无关系——而它看起来完全正常，
+    还能进报表（ADR-0005 的 177mm 就是这么来的）。
+
+    判据沿用配准模块那套**外部可核对量**（自报 rmse 不可信）：
+    1. 两期包围盒对角线之比须在 :data:`_EPOCH_BBOX_RATIO` 内；
+    2. 两期互最近邻**中位**距离（取双向较大者）须 ≤ 对角线的
+       :data:`_EPOCH_MEDIAN_RATIO`。
+
+    返回 dict：``ok`` / ``reason`` / ``bbox_ratio`` / ``median_mm`` / ``limit_mm``。
+    """
+    import open3d as o3d
+
+    def prep(pcd):
+        pts = np.asarray(pcd.points, dtype=np.float64)
+        if len(pts) > _EPOCH_SAMPLE:
+            idx = np.random.default_rng(0).choice(len(pts), _EPOCH_SAMPLE, replace=False)
+            pts = pts[np.sort(idx)]
+        c = o3d.geometry.PointCloud()
+        c.points = o3d.utility.Vector3dVector(pts)
+        return c
+
+    a, b = prep(t1), prep(t2)
+    if len(a.points) < 10 or len(b.points) < 10:
+        return {"ok": False, "reason": "点太少（<10），无法核对同源",
+                "bbox_ratio": float("nan"), "median_mm": float("nan"),
+                "limit_mm": float("nan")}
+    diag_a = float(np.linalg.norm(np.asarray(a.get_max_bound())
+                                 - np.asarray(a.get_min_bound())))
+    diag_b = float(np.linalg.norm(np.asarray(b.get_max_bound())
+                                 - np.asarray(b.get_min_bound())))
+    if min(diag_a, diag_b) <= 0:
+        return {"ok": False, "reason": "包围盒退化为零（点云重合）",
+                "bbox_ratio": float("nan"), "median_mm": float("nan"),
+                "limit_mm": float("nan")}
+    ratio = diag_a / diag_b
+    lo, hi = _EPOCH_BBOX_RATIO
+    diag = 0.5 * (diag_a + diag_b)
+    limit_mm = diag * _EPOCH_MEDIAN_RATIO * 1000.0
+    if not (lo <= ratio <= hi):
+        return {"ok": False,
+                "reason": f"两期尺度不符（包围盒对角线比 {ratio:.2f}，"
+                          f"应在 {lo}~{hi}）——不是同一件或单位不同",
+                "bbox_ratio": ratio, "median_mm": float("nan"),
+                "limit_mm": limit_mm}
+    fwd = np.asarray(a.compute_point_cloud_distance(b))
+    bwd = np.asarray(b.compute_point_cloud_distance(a))
+    # 取双向较大者：单向小可能是「一份点云整个落在另一份的覆盖范围里」，
+    # 那恰恰是两期不同源的表现（真机 30_dense 正向 25mm、反向 6895mm）。
+    median_mm = float(max(np.median(fwd), np.median(bwd))) * 1000.0
+    if median_mm > limit_mm:
+        return {"ok": False,
+                "reason": f"两期几何不重合（互最近邻中位 {median_mm:.0f}mm > "
+                          f"上限 {limit_mm:.0f}mm = 对角线 {diag * 1000:.0f}mm 的 "
+                          f"{_EPOCH_MEDIAN_RATIO:.0%}）——大概率不是同一件 / 未配准",
+                "bbox_ratio": ratio, "median_mm": median_mm,
+                "limit_mm": limit_mm}
+    return {"ok": True, "reason": "", "bbox_ratio": ratio,
+            "median_mm": median_mm, "limit_mm": limit_mm}
 
 
 def _load_any_as_cloud(path: str):
@@ -1100,12 +1187,13 @@ def _load_any_as_cloud(path: str):
 def _stage_multitemporal(task, cfg):
     """X1 多时相形变检测（P3）：两期 dense 点云 M3C2 差分。
 
-    输入：00_ref/<item>/*.ply（用户放置的上期 dense/模型，参考时相 t1）
-        vs 当期 10_dense/<item>/fused_dense.ply（t2，S1 dense 产物）。
-    无参考期/输入缺失时 SKIPPED。输出 80_export/<item>_X1 差分指标。
+    输入：00_ref/<item>/*.ply（用户放置的上期几何，参考时相 t1）vs **当期几何**。
+    当期不是「第一个存在的候选」——:func:`_geometry_candidates` 的候选逐个过
+    :func:`_epoch_consistency` 的同源闸门，选第一个真同源的；全不过则 SKIPPED
+    并列出每个候选的实测差距。无参考期/输入缺失时 SKIPPED。
+    输出 80_export（或交付目录）下的 ``<件>_X1_m3c2.json``。
     """
     from h3d.core import RecoverableError
-    from h3d.io import load_point_cloud
     from h3d.runner.task import StageResult, TaskStatus
 
     if not cfg.runner.x1_enabled:
@@ -1118,16 +1206,41 @@ def _stage_multitemporal(task, cfg):
         return StageResult("X1", TaskStatus.SKIPPED, [], {
             "skip_reason": f"缺参考期 00_ref/{task.item_id}/*.ply"
                            f"（上期几何，需要用户放置）"}, 0.0)
-    t2_path = _current_geometry(task)
-    if t2_path is None:
+    t2_paths = _geometry_candidates(task)
+    if not t2_paths:
         return StageResult("X1", TaskStatus.SKIPPED, [], {
             "skip_reason": f"缺当期几何（查过 10_dense/20_registered/"
-                           f"10_clean/30_dense 下 {task.item_id}）"}, 0.0)
+                           f"10_clean/00_raw/30_dense 下 {task.item_id}）"}, 0.0)
     import time
     t0 = time.time()
     from h3d.change import run as change_run
-    t1 = load_point_cloud(os.path.join(ref_dir, sorted(ref_files)[0]))
-    t2 = _load_any_as_cloud(t2_path)
+    # 参考期也要按网格采样读：00_ref 里放网格 PLY 时 read_point_cloud 只拿顶点
+    t1 = _load_any_as_cloud(os.path.join(ref_dir, sorted(ref_files)[0]))
+
+    # 逐个候选过同源闸门，选**第一个真同源**的。全部不过就不出数——
+    # M3C2 对任何两份点云都会成功返回，错配输入下的数看起来完全正常，
+    # 只有「两期差几米」这种外部可核对量能把它挡下来（ADR-0005）。
+    tried: list[dict] = []
+    chosen = None
+    for cand in t2_paths:
+        t2 = _load_any_as_cloud(cand)
+        chk = _epoch_consistency(t1, t2)
+        tried.append({"path": os.path.relpath(cand, task.root),
+                      **{k: chk[k] for k in ("ok", "reason", "bbox_ratio",
+                                             "median_mm", "limit_mm")}})
+        log.info("X1 同源核对 %s：%s（对角线比 %.3f，互最近邻中位 %.1fmm / 上限 %.1fmm）",
+                 os.path.relpath(cand, task.root), "通过" if chk["ok"] else "拒绝",
+                 chk["bbox_ratio"], chk["median_mm"], chk["limit_mm"])
+        if chk["ok"]:
+            chosen = (cand, t2, chk)
+            break
+    if chosen is None:
+        return StageResult("X1", TaskStatus.SKIPPED, [], {
+            "skip_reason": "两期几何不同源：所有当期候选都没通过同源核对"
+                           "（需把上期几何放 00_ref/，且与当期同源同尺度）",
+            "epoch_checked": tried}, 0.0)
+
+    t2_path, t2, chk = chosen
     result = change_run(t1, t2, cfg.change)
     out = os.path.join(_paths.delivery_item_dir(task.root, task.item_id),
                        f"{task.item_id}_X1_m3c2.json")
@@ -1142,11 +1255,16 @@ def _stage_multitemporal(task, cfg):
     if os.path.exists(acc_csv):
         _append_x1_to_accuracy(acc_csv, task.item_id, result["metrics"])
     metrics = dict(result["metrics"])
-    # 尺度是否已标定（ADR-0005）：未标定时刻度是「能跑」而不是「准」，
+    # 尺度是否已标定（ADR-0005 / ADR-0006）：未标定时刻度是「能跑」而不是「准」，
     # 报表与论文表据此印「未标定」，不把不可信的数当结论。
     metrics["calibrated"] = bool(getattr(cfg.change, "calibrated", False))
-    log.info("X1 完成：%s（max_change=%.1fmm, changed=%.1f%%，%s）",
-             task.item_id, metrics.get("max_change_mm", 0.0),
+    # 两期同源核对的痕迹：数字能不能引用，先看输入是不是同一件的两期。
+    metrics["epoch_source"] = os.path.relpath(t2_path, task.root)
+    metrics["epoch_median_mm"] = round(float(chk["median_mm"]), 3)
+    metrics["epoch_bbox_ratio"] = round(float(chk["bbox_ratio"]), 4)
+    log.info("X1 完成：%s（当期取自 %s，同源中位 %.1fmm，max_change=%.1fmm, "
+             "changed=%.1f%%，%s）", task.item_id, metrics["epoch_source"],
+             metrics["epoch_median_mm"], metrics.get("max_change_mm", 0.0),
              metrics.get("changed_ratio", 0.0) * 100,
              "已标定" if metrics["calibrated"] else "未标定·数值不可引用")
     return StageResult("X1", TaskStatus.DONE, [out], metrics, time.time() - t0)

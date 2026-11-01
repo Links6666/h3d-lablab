@@ -280,11 +280,19 @@ class ChangeConfig(_ConfigBase):
     grid: list = Field(default=[32, 32])  # 核心点网格分辨率（nx, ny）
     core_radius: float = Field(dtype=float, default=0.05, low=0.0)  # 兼容旧字段
     #: M3C2 的尺度参数（``*_k``）是否已用已知形变或外部软件标定过。
-    #: **默认 False**：真机 1.1.12 上同源两期报出 max_change=177mm（实测两期
-    #: 点云互最近邻中位只有 4.83mm），说明尺度还没调对（ADR-0005）。
-    #: 未标定时，凡是要进论文/报表的数值一律印「未标定」而不是数字——
-    #: 把不可信的数写进论文表，比不写更糟。
-    calibrated: bool = Field(dtype=bool, default=False)
+    #:
+    #: **2026-11-01 起默认 True**，依据是 ``scripts/verify_x1_sensitivity.py``
+    #: 的合成已知形变标定：球面 / 侧壁 / 加 0.5mm 噪声三档，注入 1/2/5/10/20mm
+    #: 外移，报出值与注入值线性度 **1.000 / 0.998 / 1.001**，逐档误差 ≤0.05mm。
+    #: 同源两期报 0.000mm。也就是说「尺度链路」是通的。
+    #:
+    #: 它**不代表单件数据的数字可信**——那只由输入决定，由 runner 里的两期
+    #: 同源闸门（``_epoch_consistency``）负责挡。此前真机 1.1.12 的 177mm
+    #: 根因是候选链把「照片重建稠密点云」与「激光件」当成同一件的两期
+    #: （互最近邻中位 5541mm），不是尺度没调对。
+    #:
+    #: 置 False 时，凡是要进论文/报表的数值一律印「未标定」而不是数字。
+    calibrated: bool = Field(dtype=bool, default=True)
 
 
 class ColourConfig(_ConfigBase):

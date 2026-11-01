@@ -54,11 +54,23 @@ def corepoint_grid(cloud1, cfg) -> np.ndarray:
 
 def _corepoint_normals(cloud1, corepoints: np.ndarray,
                        radius: float) -> np.ndarray:
-    """在核心点邻域内估法向（Open3D PCA）。
+    """在核心点邻域内估法向（Open3D PCA），并**定向到朝外**。
 
     ``radius`` 用 M3C2 自己的法向搜索半径（``normal_radius_k × MPS``），保证
     「估法向用的邻域」与「M3C2 认为的法向尺度」是同一个——两者不一致时，
     圆柱会沿一个与真实表面不垂直的方向走。
+
+    为什么要定向（2026-11-01 合成标定推翻旧注释）：旧实现只算未定向法向，注释
+    写「朝向正反只影响距离符号，不影响绝对值」。前半句对，后半句的结论错了——
+    ``detect_changes`` 正是拿符号判**堆积（正）/ 风化侵蚀（负）**，符号反了文物
+    监测的结论就反。合成球面上注入 +1/+2/+5/+10/+20mm 外移，旧实现逐档报
+    **-1.000/-2.004/-5.003/-10.002/-20.010**：绝对值精确、符号全反。
+
+    定向分两步，都不能省：
+    1. ``orient_normals_consistent_tangent_plane`` 让相邻核心点法向在**局部**
+       一致（PCA 单点解出的正负号是随机的，直接逐点翻会翻出一堆锯齿）；
+    2. 再把**整体**符号对齐到「远离点云重心」的方向。只做整体翻转、不做逐点
+       翻转是刻意的：逐点用重心判据会在凹陷处（衣袖内侧）把正确法向翻错。
     """
     import open3d as o3d
 
@@ -82,7 +94,41 @@ def _corepoint_normals(cloud1, corepoints: np.ndarray,
         n = vt[-1]
         norm = float(np.linalg.norm(n))
         normals[i] = n / norm if norm > 1e-12 else (0.0, 0.0, 0.0)
-    return normals
+    return _orient_outward(np.asarray(corepoints, np.float64), normals)
+
+
+def _orient_outward(corepoints: np.ndarray, normals: np.ndarray) -> np.ndarray:
+    """把未定向法向翻成「朝外」（见 :func:`_corepoint_normals` 的两步说明）。
+
+    只对非零法向参与定向：零向量（邻域点不足）没有方向可言，混进去会让
+    ``orient_normals_consistent_tangent_plane`` 的 MST 传播出错。
+    """
+    import open3d as o3d
+
+    out = np.array(normals, dtype=np.float64, copy=True)
+    valid = np.linalg.norm(out, axis=1) > 0.5
+    if valid.sum() < 10:                    # 太少，定向不可靠，保留原样
+        return out
+
+    idx = np.flatnonzero(valid)
+    sub = o3d.geometry.PointCloud()
+    sub.points = o3d.utility.Vector3dVector(corepoints[idx])
+    sub.normals = o3d.utility.Vector3dVector(out[idx])
+    k = int(min(30, len(idx) - 1))
+    try:
+        sub.orient_normals_consistent_tangent_plane(k)
+        oriented = np.asarray(sub.normals, dtype=np.float64)
+    except Exception:  # pragma: no cover - 退化点集（全共面/重复点）
+        log.warning("核心点法向定向失败（退化点集），退回全局符号判定")
+        oriented = out[idx]
+
+    # 第 2 步：整体符号对齐「远离重心」。用点积之和而不是逐点判定——
+    # 逐点在凹陷处会把正确法向翻错，整体翻转不会破坏第 1 步的局部一致性。
+    radial = corepoints[idx] - corepoints[idx].mean(axis=0)
+    if np.sum(np.einsum("ij,ij->i", oriented, radial)) < 0:
+        oriented = -oriented
+    out[idx] = oriented
+    return out
 
 
 def compute_m3c2(cloud1, cloud2, cfg) -> dict[str, Any]:
