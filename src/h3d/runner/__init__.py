@@ -189,6 +189,43 @@ def _stage_preprocess(task: Task, cfg) -> StageResult:
                 log.warning("dense 新信息占比评估失败（按 0 处理）：%s", exc)
             metrics["dense_novel_ratio"] = round(novel, 4)
 
+        # ---- 合并前先问「同不同系」（2026-11-01，覆盖率 21% 的根因）----
+        #
+        # `novel` 问的是「dense 点距既有几何有多远」，用来识别**冗余**。但两源
+        # 坐标系不同时它整个失效：真机 `00_raw` 是激光件（对角 6.5、中心
+        # (2.6,-0.1,-4.8)），`10_dense/fused_dense.ply` 是照片重建（对角 13.7、
+        # 中心 (-0.1,3.1,0.6)），**每个 dense 点都"远离"激光件** → Otsu 切出
+        # novel=27.19% > 15% 阈值 → 判「有增量信息」→ 合并。
+        # 后果链：10_clean 对角 6.5→13.8 → 30_dense 泊松包成 20.97 的壳 →
+        # M4 `in_frame_fraction` 45.8%、coverage 21%。
+        # 干净输入重跑同一条链：30_dense 对角 6.78、in_frame **100%**。
+        #
+        # 所以判据要换成「是不是同一个坐标系」——`already_aligned` 对真机两源
+        # 给出 aligned=False / 中位距离 91.56% 对角线，一判就准。
+        same_epoch = True
+        if outputs:
+            try:
+                from h3d.geo_align import already_aligned
+                _base = np.asarray(load_point_cloud(outputs[0]).points)
+                _dp = np.asarray(pcd.points)
+                _idx = np.random.default_rng(0).choice(
+                    len(_dp), min(50000, len(_dp)), replace=False)
+                _pre = already_aligned(_base, _dp[_idx])
+                # 用**最近邻中位距离的数值**，不用它的 `aligned` 布尔——那个
+                # 布尔容差是 1% 对角线，只回答「是否已经严丝合缝」，会把合法的
+                # 双源互补（上半球 + 下半球，中位 19% 对角线）也判成异源。
+                # 数值本身区分度很好（实测）：
+                #   互补半球 0.19 / 真机异源 0.92 / 平移 20 m 5.58
+                # 阈值 0.5：半个对角线以外就是两个物体，不是同一件的两面。
+                _rel = float(_pre["norm_median"])
+                same_epoch = (_rel <= 0.5)
+                metrics["dense_same_epoch"] = same_epoch
+                metrics["dense_nn_median_rel"] = round(_rel, 3)
+            except Exception as exc:  # noqa: BLE001 - 判不出来就不拦（保守）
+                same_epoch = True
+                metrics["dense_same_epoch"] = None
+                log.warning("M1 双源同系判定失败（按可合并处理）：%s", exc)
+
         # 场景①：dense 与激光几何高度重叠时**不合并**。
         #
         # 实机教训（2026-10-17，合成椭球 + 16 视角）：场景① 勾选「稠密重建」后
@@ -197,13 +234,23 @@ def _stage_preprocess(task: Task, cfg) -> StageResult:
         # M5 rmse 27.52→36.78 mm（+34%）、M4 纹理覆盖 5.87%→2.32%。
         # SfM 稠密点云精度低于激光且存在尺度/坐标系差异，冗余合并只会污染
         # 精确几何。判定与动作必须一致：novel 低于阈值 → 只记指标，不合并。
-        if outputs and novel < _DENSE_MERGE_MIN_NOVEL:
+        if outputs and (not same_epoch or novel < _DENSE_MERGE_MIN_NOVEL):
             metrics["dense_merged"] = False
-            log.warning(
-                "M1 跳过 dense 合并：%s 与激光几何重叠度 %.0f%%（新信息 %.1f%% "
-                "< %.0f%% 阈值），SfM 稠密点云无增量信息，不并入以免污染几何",
-                task.item_id, (1.0 - novel) * 100, novel * 100,
-                _DENSE_MERGE_MIN_NOVEL * 100)
+            if not same_epoch:
+                metrics["dense_reject"] = "different_epoch"
+                log.warning(
+                    "M1 跳过 dense 合并：%s 的 SfM 稠密几何与激光件**不在同一"
+                    "坐标系**（最近邻中位距离 %.2f 倍对角线，阈值 0.5）——合并会把"
+                    "几何撑成两个物体的壳，M4 投影会大面积落到画幅外",
+                    task.item_id,
+                    float(metrics.get("dense_nn_median_rel") or 0.0))
+            else:
+                metrics["dense_reject"] = "redundant"
+                log.warning(
+                    "M1 跳过 dense 合并：%s 与激光几何重叠度 %.0f%%（新信息 %.1f%% "
+                    "< %.0f%% 阈值），SfM 稠密点云无增量信息，不并入以免污染几何",
+                    task.item_id, (1.0 - novel) * 100, novel * 100,
+                    _DENSE_MERGE_MIN_NOVEL * 100)
         else:
             points_in += len(pcd.points)
             # 双源融合自适应加权（P2+P3）：novel_ratio 驱动 dense 合并权重——

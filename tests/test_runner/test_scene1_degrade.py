@@ -220,21 +220,27 @@ class TestDenseMergeGate:
         assert res.metrics["points_in"] == len(base)
         assert res.metrics.get("dense_weight") is None
 
-    def test_disjoint_dense_is_merged(self, tmp_path):
-        """dense 提供新区域（远距离）→ 照常合并。"""
+    def test_complementary_dense_is_merged(self, tmp_path):
+        """dense 覆盖激光件没有的那一面（同球心、互补）→ 照常合并。
+
+        2026-11-01 改：原用例把球平移到 20 m 外当作「新区域」——那不是覆盖
+        互补，是**另一个物体**，M1 现在会（正确地）拦住它（ADR-0011）。真正的
+        互补是同一物体的不同面：上半球（激光）+ 下半球（dense），最近邻中位
+        距离只有 0.19 倍对角线，远低于 0.5 的异源阈值。
+        """
         task = _laser_item(tmp_path)
-        _write_cloud(task.raw_paths[0], _sphere(1500, radius=1.0))
-        # 平移 20 m：完全在激光几何之外 → novel 高
+        up = _sphere(1500, radius=1.0)
+        _write_cloud(task.raw_paths[0], up[up[:, 2] > 0])
+        down = _sphere(1500, radius=1.0)
         _write_cloud(os.path.join(str(tmp_path), "10_dense", "r1",
-                                  "fused_dense.ply"),
-                     _sphere(1500, radius=1.0, offset=(20.0, 0.0, 0.0)))
+                                  "fused_dense.ply"), down[down[:, 2] < 0] + 1e-6)
 
         cfg = _cfg(tmp_path)
         cfg.preprocess.voxel_down_sample = 0.05
         res = _stage_preprocess(task, cfg)
 
-        assert res.metrics["dense_merged"] is True
-        assert res.metrics["points_in"] > 1500     # dense 点计入
+        assert res.metrics["dense_merged"] is True, res.metrics
+        assert res.metrics["points_in"] > 700      # dense 点计入
 
     def test_photo_only_item_always_merges_dense(self, tmp_path):
         """场景②：无激光几何时 dense 是唯一几何来源，必须合并。"""
