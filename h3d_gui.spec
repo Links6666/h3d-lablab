@@ -43,6 +43,11 @@ a = Analysis(
         'h3d.sfm_solve', 'h3d.runner', 'h3d.runner.batch_processor',
         'h3d.runner.task', 'h3d.io', 'h3d.core', 'h3d.core.config',
         'h3d.core.scale', 'h3d.core.media',
+        # 2026-11-01：阶段清单的唯一真源（ADR-0007）。report/gui 三处都在**模块
+        # 顶层** import 它，静态分析本该抓得到；登记是因为这个模块还以
+        # `from h3d.core.stages import STAGE_ORDER` 的形式被 h3d.core 之外引用，
+        # 漏登记的代价是打包版起来就 ImportError（与 lockfile 同类，宁多勿少）。
+        'h3d.core.stages',
         # r6.2：数据根单实例锁。run() 里是**函数内延迟 import**
         # （from h3d.core.lockfile import acquire_run_lock），PyInstaller 静态
         # 分析抓不到；不显式声明则打包版调用时 ModuleNotFoundError，表现是

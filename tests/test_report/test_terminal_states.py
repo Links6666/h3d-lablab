@@ -123,10 +123,18 @@ def _html(tmp_path, stages: dict) -> str:
     return open(path, encoding="utf-8").read()
 
 
-class TestReportFiveStates:
-    #: 报表状态表的全部阶段（与 html_export._STAGE_ORDER 一致）
-    _ALL = ("S1", "M1", "M2", "M3", "M4", "P1", "M5", "M6")
+def _ext_disabled() -> dict:
+    """X3/X1/X2 的「配置关闭」终态。
 
+    这三个阶段从 2026-11-01 起在报表状态表里成行（`h3d.core.stages.STAGE_ORDER`），
+    本组测试若要断言**精确计数**，就必须把它们的终态一并给出——否则它们会以
+    「未执行」出现，把「通过」拉成「部分完成」，测的就不是原来那件事了。
+    """
+    return {f"r1/{s}": {"status": "disabled", "skip_reason": "配置关闭"}
+            for s in ("X3", "X1", "X2")}
+
+
+class TestReportFiveStates:
     @staticmethod
     def _stages(done=(), extra=None) -> dict:
         st = {f"r1/{s}": {"status": "done", "outputs": ["x"], "elapsed_s": 1.0}
@@ -141,10 +149,11 @@ class TestReportFiveStates:
             extra={"r1/S1": {"status": "disabled",
                              "skip_reason": "配置关闭：sfm_solve.enabled=false"},
                    "r1/P1": {"status": "disabled",
-                             "skip_reason": "配置关闭：photo_texture.enabled=false"}}))
+                             "skip_reason": "配置关闭：photo_texture.enabled=false"},
+                   **_ext_disabled()}))
         assert "整体判定：通过" in txt
         assert "部分完成" not in txt, "配置关闭不得把结论拉成『部分完成』"
-        assert "未启用 2" in txt
+        assert "未启用 5" in txt
         assert "未执行 0" in txt
         # 分母 = 1 件 × 8 阶段 − 2 未启用 = 6
         assert "分母 6" in txt
@@ -156,9 +165,10 @@ class TestReportFiveStates:
             extra={"r1/M4": {"status": "skipped", "skip_kind": "condition",
                              "skip_reason": "无位姿元数据"},
                    "r1/P1": {"status": "disabled",
-                             "skip_reason": "配置关闭：photo_texture.enabled=false"}}))
+                             "skip_reason": "配置关闭：photo_texture.enabled=false"},
+                   **_ext_disabled()}))
         assert "跳过·条件不满足" in txt
-        assert "未启用 1" in txt
+        assert "未启用 4" in txt
         assert "跳过 1" in txt
         assert "整体判定：通过（含跳过）" in txt
         assert "无位姿元数据" in txt   # 原因必须出现在备注列
@@ -176,10 +186,11 @@ class TestReportFiveStates:
         """完全没有记录的阶段仍是「未执行」，结论为部分完成——与未启用区分。"""
         txt = _html(tmp_path, self._stages(
             done=("S1", "M1", "M2", "M3", "M4", "M5"),   # M6 无记录
-            extra={"r1/P1": {"status": "disabled", "skip_reason": "配置关闭"}}))
+            extra={"r1/P1": {"status": "disabled", "skip_reason": "配置关闭"},
+                   **_ext_disabled()}))
         assert "未执行 1" in txt
         assert "整体判定：部分完成" in txt
-        assert "未启用 1" in txt
+        assert "未启用 4" in txt
 
     def test_fail_still_wins(self, tmp_path):
         txt = _html(tmp_path, self._stages(

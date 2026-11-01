@@ -26,10 +26,13 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QGridLayout, QLabel, QSizePolicy, QVBoxLayout,
                                QWidget)
 
+from h3d.core.stages import STAGE_ORDER as _CORE_STAGE_ORDER
 from h3d.gui.widgets import ElidedLabel
 
-#: 阶段名的展示顺序（与 gui.runner.STAGE_ORDER 一致，此处不 import 以免循环）
-DEFAULT_STAGES = ("S1", "M1", "M2", "M3", "M4", "P1", "M5", "M6", "X1", "X2")
+#: 阶段名的展示顺序。**唯一真源在** :mod:`h3d.core.stages` —— core 是零依赖底座，
+#: 从这里 import 不会形成循环（原先注释写的「不论 import 以免循环」不成立，代价是
+#: 这份手写清单缺了 X3）。
+DEFAULT_STAGES = _CORE_STAGE_ORDER
 
 _STATUS_COLOR = {
     "waiting": ("#3a4150", "#9aa4b2"),

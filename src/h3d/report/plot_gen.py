@@ -17,6 +17,7 @@ import os
 from typing import Any, Optional, Sequence
 
 from h3d.core import ExportError, RunManifest, get_logger
+from h3d.core.stages import STAGE_ORDER
 
 log = get_logger("report.plot_gen")
 
@@ -93,8 +94,9 @@ def plot_bar(
     return os.path.abspath(path)
 
 
-#: 图表里的阶段顺序（与 HTML 报表一致：S1 在前，P1 紧跟 M4）
-_STAGE_ORDER = ("S1", "M1", "M2", "M3", "M4", "P1", "M5", "M6", "X1", "X2")
+#: 图表里的阶段顺序。**唯一真源在** :mod:`h3d.core.stages` —— 这里原先是第四份
+#: 手写清单，缺 X3。
+_STAGE_ORDER = STAGE_ORDER
 
 
 def _human_seconds(v: float) -> str:

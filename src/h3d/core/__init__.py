@@ -43,6 +43,7 @@ from .config import (
 from .logging import setup_logging, get_logger
 from .proc import no_window_kwargs, resolve_cwd, run_external
 from .scale import bbox_diagonal, resolve_factor, scaled_config, describe
+from .stages import STAGE_ORDER
 from .media import IMAGE_EXTS, is_image_file, list_images, count_images
 from .metadata import (
     sha256_file,

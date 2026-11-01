@@ -55,6 +55,10 @@ ACCURACY_HEADERS = [
     ("anomaly_sigma_median", "纹理尺度σ_L(Lab)"),
     ("anomaly_paint_ratio", "残存彩绘占比"),
     ("anomaly_regions_paint", "彩绘区图斑数"),
+    # X1 多时相形变（可选阶段）。2026-11-01 起由本表直接写，不再事后追加——
+    # X1 已移到 M5 之前，那时 accuracy.csv 还不存在，追加等于不写。
+    ("x1_max_change_mm", "X1最大形变(mm)"),
+    ("x1_changed_ratio", "X1变化占比"),
     ("status", "判定"),
 ]
 
@@ -163,6 +167,10 @@ def build_report(
         "anomaly_sigma_median": metrics.get("anomaly_sigma_median"),
         "anomaly_paint_ratio": metrics.get("anomaly_paint_ratio"),
         "anomaly_regions_paint": metrics.get("anomaly_regions_paint"),
+        # X1 多时相形变（参考信息；缺键时 None → 报表印 N/A，不能印 0）
+        "x1_max_change_mm": metrics.get("x1_max_change_mm"),
+        "x1_changed_ratio": metrics.get("x1_changed_ratio"),
+        "x1_calibrated": metrics.get("x1_calibrated"),
         "thresholds": {
             "coverage_threshold": cfg.coverage_threshold,
             "rmse_threshold_mm": cfg.rmse_threshold_mm,
@@ -220,6 +228,8 @@ def _write_accuracy_csv(path: str, record: dict[str, Any]) -> None:
          else "未筛查"),
         (record.get("anomaly_regions_paint")
          if record.get("anomaly_regions_paint") is not None else "未筛查"),
+        _fmt_x1(record.get("x1_max_change_mm"), record.get("x1_calibrated")),
+        _fmt_x1_ratio(record.get("x1_changed_ratio"), record.get("x1_calibrated")),
         record["status"],
     ]
     with open(path, "w", newline="", encoding="utf-8-sig") as fh:
@@ -233,6 +243,29 @@ def _fmt_tex(v):
     if v is None:
         return "N/A"
     return round(float(v), 4)
+
+
+def _fmt_x1(v, calibrated) -> str:
+    """X1 形变量（mm）。
+
+    三种「不给数字」的理由必须分开印，否则读者会把它们当成同一件事：
+    * ``未标定`` —— 尺度没标定过，数字不可引用（ADR-0005/0006 口径）；
+    * ``N/A``    —— X1 没跑（可选阶段关闭 / 两期不同源被闸门挡下）；
+    * 数字       —— 可引用。
+    """
+    if calibrated is False:
+        return "未标定"
+    if not isinstance(v, (int, float)) or math.isnan(float(v)):
+        return "N/A"
+    return f"{float(v):.2f}"
+
+
+def _fmt_x1_ratio(v, calibrated) -> str:
+    if calibrated is False:
+        return "未标定"
+    if not isinstance(v, (int, float)) or math.isnan(float(v)):
+        return "N/A"
+    return f"{float(v) * 100:.1f}%"
 
 
 __all__ = ["ACCURACY_HEADERS", "check_quality", "build_report"]

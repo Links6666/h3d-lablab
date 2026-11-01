@@ -86,7 +86,9 @@ class TestRunnerParsing:
         # 数字的断言，测的其实是「有没有人记得改测试」。
         assert len(STAGE_ORDER) == len(STAGE_REGISTRY), (STAGE_ORDER,
                                                         list(STAGE_REGISTRY))
-        assert STAGE_ORDER[0] == "S1" and STAGE_ORDER[-1] == "X2"
+        # 2026-11-01：X1/X2 移到 M5 之前，最后一步改成 M6（发布收尾，它之后跑的
+        # 阶段都进不了交付包）。顺序本身由 core 常量统一，这条只锁两端。
+        assert STAGE_ORDER[0] == "S1" and STAGE_ORDER[-1] == "M6"
 
 
 class TestExportPackage:

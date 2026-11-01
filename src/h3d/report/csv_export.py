@@ -21,6 +21,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from h3d.core import ExportError, RunManifest, get_logger
+from h3d.core.stages import STAGE_ORDER
 
 log = get_logger("report.csv_export")
 
@@ -105,8 +106,9 @@ def export_failures_csv(failures: list[dict[str, Any]], path: str) -> str:
     return write_csv(rows, path, fieldnames=FAILURE_FIELDS)
 
 
-#: 阶段排序（CSV 行序与报表一致，便于 Excel 里按阶段透视）
-_STAGE_ORDER = ("S1", "M1", "M2", "M3", "M4", "P1", "M5", "M6", "X1", "X2")
+#: 阶段排序（CSV 行序与报表一致）。**唯一真源在** :mod:`h3d.core.stages` ——
+#: 这里原先是第三份手写清单，缺 X3。
+_STAGE_ORDER = STAGE_ORDER
 
 #: 五态终态的中文（与 HTML 报表同一口径，两处必须一致）
 _STATUS_TEXT = {

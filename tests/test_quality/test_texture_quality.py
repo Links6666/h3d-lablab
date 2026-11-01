@@ -94,35 +94,6 @@ class TestCoverageMinLinkage:
         assert r["texture_ok"] is True
 
 
-class TestX1AccuracyAppend:
-    def test_append_x1_columns(self, tmp_path):
-        """X1 指标并入 accuracy.csv（追加列）。"""
-        import csv
-        acc = tmp_path / "accuracy.csv"
-        with open(acc, "w", encoding="utf-8-sig", newline="") as fh:
-            w = csv.writer(fh)
-            w.writerow(["文物编号", "中误差(mm)", "判定"])
-            w.writerow(["r1", "5.0", "pass"])
-        from h3d.runner import _append_x1_to_accuracy
-        # calibrated=True：这两条测的是「追加列 + 格式」，不是标定口径
-        # （未标定印「未标定」由 test_stage_x1_inputs 覆盖）
-        _append_x1_to_accuracy(str(acc), "r1",
-                               {"max_change_mm": 12.5, "changed_ratio": 0.03,
-                                "calibrated": True})
-        rows = list(csv.reader(open(acc, encoding="utf-8-sig")))
-        assert rows[0][-2:] == ["X1最大形变(mm)", "X1变化占比"]
-        assert rows[1][-2:] == ["12.50", "3.0%"]
-
-    def test_append_nan_safe(self, tmp_path):
-        import csv
-        acc = tmp_path / "accuracy.csv"
-        with open(acc, "w", encoding="utf-8-sig", newline="") as fh:
-            w = csv.writer(fh)
-            w.writerow(["文物编号", "判定"])
-            w.writerow(["r1", "pass"])
-        from h3d.runner import _append_x1_to_accuracy
-        _append_x1_to_accuracy(str(acc), "r1",
-                               {"max_change_mm": float("nan"),
-                                "changed_ratio": 0.0, "calibrated": True})
-        rows = list(csv.reader(open(acc, encoding="utf-8-sig")))
-        assert rows[1][-2] == "N/A"  # nan → N/A
+# X1 进 accuracy.csv 的两条已迁到 tests/test_quality/test_accuracy_x1.py。
+# 原因：X1 从 M6 之后移到 M5 之前，改用 build_report 一次写全，不再事后追加列
+# （追加时 accuracy.csv 还不存在，`if exists` 直接跳过 → 数字反而进不了表）。

@@ -275,42 +275,9 @@ class TestUncalibratedNumbersStayOutOfTheTables:
     同一套纪律：**能引用才给数，否则给文字**。
     """
 
-    def _acc_csv(self, tmp_path):
-        import csv
-
-        path = tmp_path / "accuracy.csv"
-        with open(path, "w", newline="", encoding="utf-8-sig") as fh:
-            w = csv.writer(fh)
-            w.writerow(["item_id", "coverage"])
-            w.writerow(["relic_001", "0.9"])
-        return str(path)
-
-    def test_accuracy_csv_prints_uncalibrated(self, tmp_path):
-        import csv
-
-        from h3d.runner import _append_x1_to_accuracy
-
-        path = self._acc_csv(tmp_path)
-        _append_x1_to_accuracy(path, "relic_001",
-                               {"max_change_mm": 177.3, "changed_ratio": 0.159,
-                                "calibrated": False})
-        with open(path, encoding="utf-8-sig") as fh:
-            header, row = list(csv.reader(fh))[:2]
-        assert row[header.index("X1最大形变(mm)")] == "未标定"
-        assert row[header.index("X1变化占比")] == "未标定"
-
-    def test_accuracy_csv_prints_number_when_calibrated(self, tmp_path):
-        import csv
-
-        from h3d.runner import _append_x1_to_accuracy
-
-        path = self._acc_csv(tmp_path)
-        _append_x1_to_accuracy(path, "relic_001",
-                               {"max_change_mm": 2.5, "changed_ratio": 0.01,
-                                "calibrated": True})
-        with open(path, encoding="utf-8-sig") as fh:
-            header, row = list(csv.reader(fh))[:2]
-        assert row[header.index("X1最大形变(mm)")] == "2.50"
+    # accuracy.csv 那两条已迁到 ``tests/test_quality/test_accuracy_x1.py``：
+    # X1 从 M6 之后移到 M5 之前，改用 build_report 一次写全，不再事后追加
+    # （追加时文件还不存在）。论文表的格式化仍是本层职责，留在下面。
 
     def test_thesis_table_prints_uncalibrated(self):
         from h3d.thesis_tables import _fmt_x1

@@ -18,15 +18,17 @@ from __future__ import annotations
 
 import re
 
-#: 阶段显示顺序（含 P1）。
-#: 2026-10-18：原先漏了 P1（内核 STAGE_REGISTRY 里有 S1/P1/X1/X2 四个
-#: 可选阶段），P1 一旦执行，界面既没有灯、正则也不解析，
-#: 而 _on_stage 会因 self.lamps["P1"] KeyError（Qt 吞掉异常）→
-#: 状态行与灯全部停在上一阶段，看着像卡死。
-#: 2026-10-31：加 X3（单期异常筛查）。位置必须与内核 ``_reorder_ext_stages``
-#: 完全一致——它排在 M5 之前，因为报表在 M5 里生成。
-STAGE_ORDER = ["S1", "M1", "M2", "M3", "M4", "P1", "X3", "M5", "M6",
-               "X1", "X2"]
+from h3d.core.stages import STAGE_ORDER as _CORE_STAGE_ORDER
+
+#: 阶段显示顺序。**唯一真源在** :mod:`h3d.core.stages`（2026-11-01）。
+#:
+#: 这里原先是第六份手写清单，历史两次踩坑都记在下面，改成 import 就是为了让它们
+#: 不再复发：
+#: 2026-10-18：漏了 P1（内核 STAGE_REGISTRY 里有 S1/P1/X1/X2 四个可选阶段），
+#: P1 一旦执行，界面既没有灯、正则也不解析，而 _on_stage 会因 self.lamps["P1"]
+#: KeyError（Qt 吞掉异常）→ 状态行与灯全部停在上一阶段，看着像卡死。
+#: 2026-10-31：加 X3（单期异常筛查），它排在 M5 之前，因为报表在 M5 里生成。
+STAGE_ORDER = list(_CORE_STAGE_ORDER)
 
 _STAGE_DONE = re.compile(
     r"\[(INFO|WARNING|ERROR)\].*\[h3d\.(?:runner|sfm_solve|quality|"
@@ -234,7 +236,7 @@ class ProgressModel:
 
     * ``stages_done`` 是按**阶段 id** 去重的集合，没有件这个维度 —— 第 1 件
       跑完 7 个阶段就集满 7 个 id，后面 4 件无论跑多久都不会再加一个；
-    * ``STAGE_ORDER`` 有 10 个阶段，含 P1/X1/X2 —— 本项目从未启用，
+    * ``STAGE_ORDER`` 当时有 10 个阶段，含 P1/X1/X2 —— 本项目从未启用，
       于是硬上限就是 7/10 = **70%**。
 
     实测：5 件批处理在 18:39:55 就跳到 70%，之后 40 分钟一动不动，

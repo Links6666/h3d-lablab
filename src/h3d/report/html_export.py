@@ -38,12 +38,14 @@ from typing import Any, Callable, Optional
 from jinja2 import Environment
 
 from h3d.core import RunManifest, get_logger
+from h3d.core.stages import STAGE_ORDER
 
 log = get_logger("report.html")
 
-#: 报表状态表的阶段顺序（S1 必须在列：纯照片模式下它是第一个执行的阶段；
-#: P1 紧跟 M4 而不是排在最后——它是对 M4 的增强，不是独立收尾）
-_STAGE_ORDER = ("S1", "M1", "M2", "M3", "M4", "P1", "M5", "M6")
+#: 报表状态表的阶段顺序。**唯一真源在** :mod:`h3d.core.stages` —— 这里原先有第二份
+#: 手写清单，只有 8 项、缺 X3/X1/X2，而它正是完成率分母 ``len(items)*len(_STAGE_ORDER)``
+#: 的来源：X3 从 r19 起默认启用，分母却一直少算一个阶段（2026-11-01）。
+_STAGE_ORDER = STAGE_ORDER
 
 #: 状态中文名 + CSS 类（**五态**，2026-10-26）
 #: 完成 / 失败 / 跳过（已启用但没跑）/ 未启用（配置关闭）/ 未执行（无记录）

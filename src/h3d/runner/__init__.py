@@ -34,6 +34,7 @@ import numpy as np
 
 from h3d.core import get_logger
 from h3d.core import paths as _paths
+from h3d.core.stages import STAGE_ORDER
 
 from .task import Task, TaskStatus, StageResult
 from .batch_processor import BatchProcessor, BatchResult, discover_items
@@ -756,6 +757,18 @@ def _stage_quality(task: Task, cfg) -> StageResult:
         metrics["anomaly_regions_paint"] = x3.get("anomaly_regions_paint")
         metrics["anomaly_per_island"] = x3.get("per_island")
 
+    # X1 多时相形变（可选阶段，2026-11-01 起排在 M5 **之前**——它的输入只到 M3，
+    # 而报表在 M5 生成，排在后面等于本轮结果永远进不了表）。
+    # 与 X3 同一条纪律：进报表、进论文表，但**不进** ``metrics["ok"]``
+    # ——「有形变」是监测到的事实，不是「建模失败」。
+    x1 = task.metrics_of("X1") if hasattr(task, "metrics_of") else {}
+    if x1:
+        metrics["x1_max_change_mm"] = x1.get("max_change_mm")
+        metrics["x1_changed_ratio"] = x1.get("changed_ratio")
+        metrics["x1_calibrated"] = x1.get("calibrated")
+        metrics["x1_epoch_median_mm"] = x1.get("epoch_median_mm")
+        metrics["x1_epoch_source"] = x1.get("epoch_source")
+
     # 先落盘报告（失败也有据可查），再判定
     qc_dir = os.path.join(task.root, "60_qc", task.item_id)
     rpt_dir = os.path.join(task.root, "70_report", task.item_id)
@@ -1248,12 +1261,10 @@ def _stage_multitemporal(task, cfg):
     import json
     with open(out, "w", encoding="utf-8") as fh:
         json.dump(result["metrics"], fh, ensure_ascii=False, indent=2)
-    # X1 形变指标并入 accuracy.csv（P2，论文实验表格）：
-    # M5 生成的 accuracy.csv 追加「最大形变/变化占比」列（容错：缺失则跳过）
-    acc_csv = os.path.join(task.root, "70_report", task.item_id,
-                           "accuracy.csv")
-    if os.path.exists(acc_csv):
-        _append_x1_to_accuracy(acc_csv, task.item_id, result["metrics"])
+    # X1 的形变指标由 **M5 的 build_report 直接写进 accuracy.csv**（2026-11-01）。
+    # 原先这里是「事后追加列」：X1 排在 M6 之后，跑完时 accuracy.csv 早由 M5 生成。
+    # X1 移到 M5 之前后这个前提反了——追加时文件还不存在，`if exists` 直接跳过，
+    # X1 数字反而进不了表。数据流要单向：manifest 是唯一来源，报表读它。
     metrics = dict(result["metrics"])
     # 尺度是否已标定（ADR-0005 / ADR-0006）：未标定时刻度是「能跑」而不是「准」，
     # 报表与论文表据此印「未标定」，不把不可信的数当结论。
@@ -1349,38 +1360,16 @@ def _stage_colour_quality(task, cfg):
 
 
 # 执行顺序重排：S1 位姿解算最先（M4 photo / P1 消费其产物），
-# P1 纹理投影在 M5 质检之前，X1/X2 评估在 M6 交付之后；
-# M1~M6 主链顺序保持不变。
-def _append_x1_to_accuracy(acc_csv: str, item_id: str, metrics: dict) -> None:
-    """X1 形变指标并入 accuracy.csv（追加列，论文实验表格）。"""
-    import csv as _csv
-    try:
-        with open(acc_csv, "r", encoding="utf-8-sig", newline="") as fh:
-            rows = list(_csv.reader(fh))
-        if not rows:
-            return
-        header, data = rows[0], rows[1]
-        header += ["X1最大形变(mm)", "X1变化占比"]
-        max_c = metrics.get("max_change_mm")
-        # 未标定（ADR-0005）→ 印文字而不是数字：论文表取自这里，
-        # 一个 177mm 的「同源两期形变」写进论文就是硬伤。
-        if not metrics.get("calibrated", False):
-            data += ["未标定", "未标定"]
-        else:
-            data += ["N/A" if max_c is None or (isinstance(max_c, float) and max_c != max_c)
-                     else f"{max_c:.2f}",
-                     f"{metrics.get('changed_ratio', 0.0) * 100:.1f}%"]
-        with open(acc_csv, "w", encoding="utf-8-sig", newline="") as fh:
-            _csv.writer(fh).writerows([header, data])
-        log.info("X1 指标已并入 accuracy.csv：%s", item_id)
-    except Exception as exc:  # noqa: BLE001 - 报表追加失败不阻断 X1
-        log.warning("X1 并入 accuracy.csv 失败（跳过）：%s", exc)
-
-
+# P1 纹理投影在 M5 质检之前，X1/X2 的输入只到 M3/M4 故夹在 P1 与 M5 之间，
+# M6 交付收尾。顺序的唯一真源是 h3d.core.stages.STAGE_ORDER。
 def _reorder_ext_stages() -> None:
-    # X3 必须在 M5 之前：报表在 M5 里生成，排在后面等于报表永远读不到异常指标。
-    for stage_id in ("S1", "M1", "M2", "M3", "M4", "P1", "X3", "M5", "M6",
-                     "X1", "X2"):
+    """按 :data:`h3d.core.stages.STAGE_ORDER` 重排寄存器——顺序的唯一真源在 core。
+
+    原先这里是**第二份手写清单**（``("S1",...,"M6","X1","X2")``），与报表侧三份
+    ``_STAGE_ORDER`` 各自维护；X3 加进来时这里改了、报表三份没改，于是 X3 一直在跑
+    但报表既不列它、分母也不算它（2026-11-01）。
+    """
+    for stage_id in STAGE_ORDER:
         if stage_id in STAGE_REGISTRY:
             STAGE_REGISTRY.move_to_end(stage_id, last=True)
 
