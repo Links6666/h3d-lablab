@@ -308,8 +308,18 @@ def _shift(a: np.ndarray, dy: int, dx: int) -> np.ndarray:
     return out
 
 
-def _bleed(image: np.ndarray, painted: np.ndarray, iterations: int = 3):
-    """UV 岛外缘色彩外扩（gutter）：消除双线性采样在岛边界取到黑色的接缝。"""
+def _bleed(image: np.ndarray, painted: np.ndarray, iterations: int = 3,
+           limit: np.ndarray | None = None):
+    """迭代四邻域均值扩散：岛外缘外扩（gutter）+ 岛内空洞填充。
+
+    传 ``limit`` 时**只在给定掩膜内扩散**。这是「填岛内洞」与「补岛外 gutter」
+    的分界：岛外空白不是表面，填了等于伪造纹理；岛内空洞是没拍到的表面，可以填。
+
+    为什么需要（2026-11-01）：真机 `island_fill_ratio` 87.64%，岛内还有 12.4%
+    纹素没着色（黑色空洞），而 X3 的 9 处图斑全落在这些空洞边缘——「异常」里
+    一大半是洞的边界。原来的 `iterations=pad`（3）只够 gutter，够不到岛内部；
+    不限范围地加迭代又会把岛外空白一起填满。
+    """
     img = image.astype(np.float32)
     m = painted.copy()
     for _ in range(max(0, iterations)):
@@ -321,6 +331,8 @@ def _bleed(image: np.ndarray, painted: np.ndarray, iterations: int = 3):
             acc += si * sm[:, :, None]
             cnt += sm
         new = (~m) & (cnt > 0)
+        if limit is not None:
+            new &= limit
         if not new.any():
             break
         img[new] = acc[new] / cnt[new][:, None]
@@ -331,7 +343,7 @@ def _bleed(image: np.ndarray, painted: np.ndarray, iterations: int = 3):
 def project_photos_to_texture(mesh, uv, faces, images, cameras, photo_dir,
                               size=1024, top_k=3, samples_per_tri=4,
                               pad=3, occlusion=True, chunk=60_000,
-                              want_mask=False):
+                              want_mask=False, hole_fill_px: int = 0):
     """照片投影纹理：UV 光栅化 → 逐纹素多视角加权采样 → 纹理图。
 
     与验证版一致的核心判据（正面 cos>0.3 + cos²/距离加权 + top-k 平均抗接缝），
@@ -577,6 +589,19 @@ def project_photos_to_texture(mesh, uv, faces, images, cameras, photo_dir,
     pmap = pre_mask.copy()
     tmap, pmap = _bleed(tmap, pmap, iterations=pad)
 
+    # ---- 岛内空洞填充（2026-11-01）------------------------------------------
+    # 岛外空白不是表面，填了等于伪造纹理；岛内没拍到的纹素是**真表面**，留黑
+    # 会让 X3 把「洞的边界」当成异常（真机 9 处图斑全在空洞边缘）。
+    # 只填 `hole_fill_px` 半径内的小洞：大洞填出来是猜测，宁可留黑并报数。
+    island_flat = np.zeros(size * size, dtype=bool)
+    island_flat[flat] = True
+    island_2d = island_flat.reshape(size, size)
+    hole_px = int(hole_fill_px or 0)
+    hole_before = int((island_2d & ~pre_mask).sum())
+    if hole_px > 0 and hole_before:
+        tmap, pmap = _bleed(tmap, pmap, iterations=hole_px, limit=island_2d)
+    hole_left = int((island_2d & ~pmap).sum())
+
     painted_ratio = float(pre_mask.mean())
     fill_ratio = (painted_ratio / utilization) if utilization > 0 else 0.0
     luma = float(tmap[pre_mask].mean()) if pre_mask.any() else 0.0
@@ -590,6 +615,11 @@ def project_photos_to_texture(mesh, uv, faces, images, cameras, photo_dir,
         "coverage_ratio": round(painted_ratio, 4),
         "atlas_utilization": round(float(utilization), 4),
         "island_fill_ratio": round(float(min(fill_ratio, 1.0)), 4),
+        # 岛内空洞：`_before` 是填充前的黑纹素数，`_left` 是填完还剩多少（大洞
+        # 不填）。两个数一起看才知道「洞被填了多少、还剩多少是猜不得的」。
+        "hole_texels_before": hole_before,
+        "hole_texels_left": hole_left,
+        "hole_fill_px": hole_px,
         "texels": int(n),
         "texture_size": size,
         "triangles": len(faces_a),
@@ -968,6 +998,7 @@ def texture_mesh_from_photos(mesh, task_root: str, item_id: str, cfg,
             new_mesh, uv, faces, images, cameras, photo_dir,
             size=cfg.photo_texture.texture_size,
             top_k=cfg.photo_texture.top_k,
+            hole_fill_px=int(getattr(cfg.photo_texture, "hole_fill_px", 0) or 0),
             samples_per_tri=cfg.photo_texture.samples_per_tri,
             want_mask=True)
         if cfg.photo_texture.poisson_blend:

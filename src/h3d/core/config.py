@@ -560,6 +560,10 @@ class PhotoTextureConfig(_ConfigBase):
     export_formats: list = Field(default=["obj", "glb"])
     reuse_atlas: bool = Field(dtype=bool, default=True)
     auto_textured_format: bool = Field(dtype=bool, default=True)
+    # 岛内空洞填充半径（像素，0=关闭）。岛内没拍到的纹素留黑会让 X3 把「洞的
+    # 边界」当成异常——真机 9 处图斑全在空洞边缘。只填小洞（默认 4 px）：大洞
+    # 填出来的是猜测，宁可留黑并在 metrics 里报出来（`hole_texels_left`）。
+    hole_fill_px: int = Field(dtype=int, default=4, low=0, high=64)
 
 
 class PipelineConfig(_ConfigBase):
