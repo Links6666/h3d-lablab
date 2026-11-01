@@ -105,6 +105,39 @@ def alignment_regressed(before: float, after: float,
     return after < before * min_keep
 
 
+def apply_align_status(metrics: dict | None, applied: bool | None) -> dict:
+    """把对齐结论收敛成**三态** ``status``，并让 ``accepted`` 与它自洽。
+
+    为什么需要（2026-11-01）
+    ----------------------
+    M4 有四条对齐路径，各自往外吐不同形状的 metrics：``geometry_is_sfm`` 和
+    ``already_aligned`` 给 ``status="skipped"``；控制点两阶段只给
+    ``method/n_control_points/scale_s/rmse_after``；自动 ICP 只给
+    ``accepted/reject_reason``。报表按 ``status`` 取结论，于是**两条真跑过的路
+    都印成空值**——读者无法区分「没对齐」「对齐了」「对齐了但被拒」。
+
+    这与 ADR-0009 D3 的投影验收直接冲突：验收写进 ``accepted`` 和
+    ``reject_reason``，报表却看不到。
+
+    三态（与项目其它终态同一套词汇）：``applied`` / ``rejected`` / ``skipped``。
+
+    参数
+    ----
+    metrics: 对齐函数返回的 metrics（不就地修改，返回副本）。
+    applied: True=已应用；False=判无效、保持/回退原坐标系；
+             None=**没有尝试对齐**（already_aligned / geometry_from_sfm），
+             此时保留原有的 ``skipped`` 语义，不写 ``accepted``——没尝试过就
+             没有「接受/拒绝」这回事。
+    """
+    out = dict(metrics or {})
+    if applied is None:
+        out.setdefault("status", "skipped")
+        return out
+    out["status"] = "applied" if applied else "rejected"
+    out["accepted"] = bool(applied)
+    return out
+
+
 def _load_photos(images, photo_dir: str, budget: int = 2_000_000_000):
     """载入照片为 uint8 常驻（超预算等比缩小），返回 (photos, factor, scales)。
 
@@ -705,8 +738,8 @@ def texture_mesh_from_photos(mesh, task_root: str, item_id: str, cfg,
     verts0 = np.asarray(mesh.vertices, dtype=np.float64).copy()  # 激光系
     sparse_pts = None
     if geometry_is_sfm and cfg.photo_texture.icp_align:
-        align_metrics = {"status": "skipped",
-                         "reason": "geometry_from_sfm（同坐标系，无需对齐）"}
+        align_metrics = apply_align_status(
+            {"reason": "geometry_from_sfm（同坐标系，无需对齐）"}, None)
     elif cfg.photo_texture.icp_align and len(images) >= 2:
         from h3d.ctrl_points import (ControlPointError, align_two_stage,
                                      find_ctrl_file, load_control_points)
@@ -729,11 +762,11 @@ def texture_mesh_from_photos(mesh, task_root: str, item_id: str, cfg,
                                   sparse_pts)
             if pre["aligned"]:
                 skip_align = True
-                align_metrics = {"status": "skipped",
-                                 "reason": "already_aligned"
-                                           "（几何与 SfM 点云同系，中位距离 "
-                                           f"{pre['norm_median'] * 100:.2f}% 对角线）",
-                                 "quality": pre}
+                align_metrics = apply_align_status(
+                    {"reason": "already_aligned"
+                               "（几何与 SfM 点云同系，中位距离 "
+                               f"{pre['norm_median'] * 100:.2f}% 对角线）",
+                     "quality": pre}, None)
                 log.info("照片纹理对齐跳过：几何已与 SfM 点云同系"
                          "（中位距离 %.2f%% 对角线，阈值 %.0f%%）",
                          pre["norm_median"] * 100, pre["tolerance"] * 100)
@@ -754,15 +787,16 @@ def texture_mesh_from_photos(mesh, task_root: str, item_id: str, cfg,
                     import open3d as _o3d_ts
                     mesh.vertices = _o3d_ts.utility.Vector3dVector(verts0)
                     mesh.compute_vertex_normals()
-                    align_metrics["accepted"] = False
                     align_metrics["reject_reason"] = (
                         f"控制点对齐后投影覆盖 {_before_ts:.1%} -> {_after_ts:.1%}"
                         f"（几何被搬出相机视野），已回退原坐标系")
+                    align_metrics = apply_align_status(align_metrics, False)
                     log.warning("照片纹理两阶段对齐被判无效，回退原坐标系："
                                 "投影覆盖 %.1f%% -> %.1f%%",
                                 _before_ts * 100, _after_ts * 100)
                 else:
                     mesh.compute_vertex_normals()
+                    align_metrics = apply_align_status(align_metrics, True)
                     log.info("照片纹理两阶段对齐：%s", align_metrics)
             except ControlPointError as exc:
                 # 清空 method：失败必须回退自动 ICP（否则对齐被跳过）
@@ -784,6 +818,7 @@ def texture_mesh_from_photos(mesh, task_root: str, item_id: str, cfg,
                     log.warning(
                         "照片纹理自动 ICP 对齐被判无效，保持原坐标系：%s",
                         align_metrics.get("reject_reason", ""))
+                    align_metrics = apply_align_status(align_metrics, False)
                 else:
                     new_verts = (R.T @ (verts - T).T).T / s
                     # 投影级验收（ADR-0009 D3）：几何**之间**相似度合格 ≠ 几何
@@ -799,12 +834,13 @@ def texture_mesh_from_photos(mesh, task_root: str, item_id: str, cfg,
                     if applied:
                         mesh.vertices = _o3d.utility.Vector3dVector(new_verts)
                         mesh.compute_vertex_normals()
+                        align_metrics = apply_align_status(align_metrics, True)
                         log.info("照片纹理自动 ICP 对齐：%s", align_metrics)
                     else:
-                        align_metrics["accepted"] = False
                         align_metrics["reject_reason"] = (
                             f"对齐后投影覆盖 {_before:.1%} -> {_after:.1%}"
                             f"（几何被搬出相机视野）")
+                        align_metrics = apply_align_status(align_metrics, False)
                         log.warning(
                             "照片纹理自动 ICP 对齐被判无效，保持原坐标系："
                             "投影覆盖 %.1f%% -> %.1f%%（相机数 %d）",

@@ -130,10 +130,34 @@ elif in_frame_fraction < 0.85:
 **实际被拦下的是控制点两阶段对齐**（`00_ctrl` 里有占位控制点），不是自动 ICP——
 说明两条路都需要这道验收。
 
+### D4（已实装）：对齐结论收敛成三态 `status`
+
+四条对齐路径原来各吐各的：`geometry_is_sfm` / `already_aligned` 给
+`status="skipped"`，控制点两阶段只给 `method/n_control_points/scale_s/rmse_after`，
+自动 ICP 只给 `accepted/reject_reason`。报表按 `status` 取结论，**两条真跑过的路
+都印成空值**——读者无法区分「没对齐」「对齐了」「对齐了但被拒」，D3 加的那道
+投影验收也传不到报表。
+
+`apply_align_status(metrics, applied)` 统一：
+
+| `applied` | `status` | `accepted` |
+|---|---|---|
+| `True` | `applied` | `True` |
+| `False` | `rejected` | `False` |
+| `None`（没尝试） | 保持 `skipped` | 不写 |
+
+`None` 分支刻意不写 `accepted`：没尝试过就没有「接受/拒绝」这回事，写个
+`False` 会让读者以为试过并失败了。
+
+职责划分：**`photo_texture` 是唯一决定「应用没应用」的地方**，几何库
+（`ctrl_points` / `geo_align`）只报告自己的度量，不臆断是否生效。
+
+真机回归：`status: rejected`、`accepted: False`、投影覆盖 42.9% → 1.0%、
+`coverage_ratio` 21.22%。
+
 ## 未决
 
-- **`align_two_stage` 返回的 metrics 缺 `status` 键**（只有 `accepted`/`method`）。
-  报表按 `status` 取对齐结论时会印 None，应统一成 `applied/rejected/skipped`。
+- ~~`align_two_stage` 缺 `status` 键~~ → **已修（D4）**：见下。
 - 真机 `rmse_mm=6940`（6.9 米）而 `status=pass` —— 与 `units_plausible` 有关，
   是另一条线的问题，本 ADR 不处理。
 - UV 图集里 `_L1.0_mask.png` 缺失（旧产物）已由 ADR-0008 那批的 X3 修复记录在案。
