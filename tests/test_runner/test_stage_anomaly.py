@@ -98,6 +98,35 @@ class TestStageContract:
         reason = str(res.metrics.get("skip_reason") or "")
         assert "50_tex" in reason, reason
 
+    def test_missing_mask_names_the_mask_not_the_atlas(self, tmp_path):
+        """有 diffuse 但缺掩膜 → 原因必须说「缺掩膜」，不能说「缺图集」。
+
+        2026-11-01 真机实测：``50_tex/relic_001/`` 里 diffuse 明明在（还有
+        obj/mtl/glb），X3 却报「缺图集 …_L1.0_diffuse.png（M4 未产出或未启用）」。
+        那句是**假的**——真正缺的是 ``_L1.0_mask.png``（旧版 M4 产物没有它）。
+        按假原因去查会一直查不到，这是「跳过要带原因」这条纪律的反面。
+        """
+        import numpy as np
+        from PIL import Image
+
+        from h3d.runner import _stage_anomaly_qc
+        from h3d.runner.task import TaskStatus
+
+        rgb, _ = _atlas(96)
+        d = os.path.join(str(tmp_path), "50_tex", "r1")
+        os.makedirs(d, exist_ok=True)
+        Image.fromarray(rgb).save(os.path.join(d, "r1_L1.0_diffuse.png"))
+        # 故意不写 _L1.0_mask.png
+
+        res = _stage_anomaly_qc(_item(tmp_path), _cfg(tmp_path))
+        assert res.status == TaskStatus.SKIPPED
+        reason = str(res.metrics.get("skip_reason") or "")
+        assert "mask" in reason.lower() or "掩膜" in reason, reason
+        assert "diffuse" not in reason, (
+            f"diffuse 明明存在，原因里不该说缺它：{reason}")
+        assert "重跑" in reason or "M4" in reason, (
+            f"要告诉用户怎么办（重跑 M4）：{reason}")
+
     def test_atlas_produces_four_artifacts_and_metrics(self, tmp_path):
         """有图集 → DONE，``60_qc/<件>/anomaly/`` 下四件齐，指标键齐。
 

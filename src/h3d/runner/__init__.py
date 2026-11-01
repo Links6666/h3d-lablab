@@ -549,10 +549,19 @@ def _stage_anomaly_qc(task: Task, cfg) -> StageResult:
     tex_dir = os.path.join(task.root, "50_tex", task.item_id)
     atlas = os.path.join(tex_dir, f"{task.item_id}_L1.0_diffuse.png")
     mask = os.path.join(tex_dir, f"{task.item_id}_L1.0_mask.png")
-    if not (os.path.isfile(atlas) and os.path.isfile(mask)):
+    # 缺哪样说哪样。2026-11-01 真机：diffuse/obj/mtl/glb 都在，只缺 mask，而原来的
+    # 原因写成「缺图集 …_L1.0_diffuse.png」——按那句话去查永远查不到（那文件就在那儿）。
+    missing = []
+    if not os.path.isfile(atlas):
+        missing.append(f"diffuse 图集 {task.item_id}_L1.0_diffuse.png（M4 未产出）")
+    if not os.path.isfile(mask):
+        # mask 是 M4 的「着色掩膜」（photo_texture.py 写 _L1.0_mask.png）。
+        # 它晚于 diffuse 加入，旧版 M4 产物没有它 → 只能重跑 M4 才有。
+        missing.append(f"岛内掩膜 {task.item_id}_L1.0_mask.png"
+                       f"（旧版 M4 产物没有，需重跑 M4）")
+    if missing:
         return StageResult("X3", TaskStatus.SKIPPED, [], {
-            "skip_reason": (f"缺图集 50_tex/{task.item_id}/"
-                            f"{task.item_id}_L1.0_diffuse.png（M4 未产出或未启用）")
+            "skip_reason": f"缺 50_tex/{task.item_id}/：" + "；".join(missing)
         }, 0.0)
 
     t0 = time.time()
