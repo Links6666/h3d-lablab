@@ -168,9 +168,13 @@ def _rasterize_uv(verts, normals, uv, faces, size):
     flat = np.concatenate(idx_parts)
     tri_idx = np.concatenate(tri_parts)
     lam = np.concatenate(lam_parts)
-    utilization = float(len(flat)) / float(size * size)
     # 后写覆盖：同一纹素可能被相邻岛/退化三角形重复覆盖，保留首个即可
     uniq, first = np.unique(flat, return_index=True)
+    # **利用率必须用去重后的纹素数**（ADR-0009）：`flat` 含重复覆盖，重复面
+    # 或共边三角形会让它偏大——铺满 UV 的正方形会算出 1.0156、重复面算出 2.03
+    # （比值 >1 显然是算错了）。这个数是 island_fill_ratio 的分母，虚高会让人
+    # 误判为「岛内没填满」，把排查引去法线/遮挡。
+    utilization = float(len(uniq)) / float(size * size)
     tri_u = tri_idx[first]
     w = lam[first].astype(np.float64)
     vv = np.asarray(verts, dtype=np.float64)[tri[tri_u]]        # (n,3,3)
