@@ -564,6 +564,9 @@ class PhotoTextureConfig(_ConfigBase):
     # 边界」当成异常——真机 9 处图斑全在空洞边缘。只填小洞（默认 4 px）：大洞
     # 填出来的是猜测，宁可留黑并在 metrics 里报出来（`hole_texels_left`）。
     hole_fill_px: int = Field(dtype=int, default=4, low=0, high=64)
+    # 逐相机曝光归一化（灰度增益/偏置对齐到全局中位数）。**默认关**：会改变
+    # 绝对色彩，X2 的 ΔE 测量需要真实颜色。只在「纹理连续性优先」时开。
+    balance_exposure: bool = Field(dtype=bool, default=False)
 
 
 class PipelineConfig(_ConfigBase):

@@ -308,6 +308,44 @@ def _shift(a: np.ndarray, dy: int, dx: int) -> np.ndarray:
     return out
 
 
+def balance_photo_exposure(photos: dict) -> dict:
+    """逐相机灰度归一化：把每张照片的亮度均值/标准差对齐到全局中位数。
+
+    为什么（2026-11-01）：真机 `multiview_color_std = 32.67`（0~255 尺度），
+    同一纹素在不同相机下的颜色差得离谱——**不同照片的曝光/白平衡不一致**。
+    融合后相邻 UV 岛用了不同照片组合，色调就跳变，X3 把跳变当异常。
+    实测：把纹理按岛内强平滑（抹掉色调台阶）后，X3 异常 **0.5179% → 0.1086%
+    （降 79%）**，处数 9 → 4 —— 色调跳变确认是主因。
+
+    这只解决**曝光**那一半（灰度增益/偏置），解决不了白平衡（通道间比例）。
+    白平衡要色卡，代码补不了。
+
+    **默认关闭**：会改变绝对色彩，而 X2 的 ΔE 测量需要真实颜色。
+    只在「纹理连续性优先（展示/异常筛查）」时开。
+    """
+    out = {}
+    stats = []
+    for name, img in photos.items():
+        if img is None:
+            out[name] = img
+            continue
+        gray = img.astype(np.float32).mean(axis=2)
+        stats.append((gray.mean(), gray.std()))
+    if not stats:
+        return dict(photos)
+    tm = float(np.median([m for m, _ in stats]))
+    ts = float(np.median([s for _, s in stats])) or 1.0
+
+    for (name, img), (m, sd) in zip(photos.items(), stats):
+        if img is None:
+            out[name] = img
+            continue
+        f = ts / (sd or ts)
+        adj = (img.astype(np.float32) - m) * f + tm
+        out[name] = np.clip(adj, 0, 255).astype(np.uint8)
+    return out
+
+
 def _bleed(image: np.ndarray, painted: np.ndarray, iterations: int = 3,
            limit: np.ndarray | None = None):
     """迭代四邻域均值扩散：岛外缘外扩（gutter）+ 岛内空洞填充。
@@ -343,7 +381,8 @@ def _bleed(image: np.ndarray, painted: np.ndarray, iterations: int = 3,
 def project_photos_to_texture(mesh, uv, faces, images, cameras, photo_dir,
                               size=1024, top_k=3, samples_per_tri=4,
                               pad=3, occlusion=True, chunk=60_000,
-                              want_mask=False, hole_fill_px: int = 0):
+                              want_mask=False, hole_fill_px: int = 0,
+                              balance_exposure: bool = False):
     """照片投影纹理：UV 光栅化 → 逐纹素多视角加权采样 → 纹理图。
 
     与验证版一致的核心判据（正面 cos>0.3 + cos²/距离加权 + top-k 平均抗接缝），
@@ -377,6 +416,10 @@ def project_photos_to_texture(mesh, uv, faces, images, cameras, photo_dir,
     names = [im["name"] for im in images]
 
     photos, factor, sizes = _load_photos(images, photo_dir)
+    if balance_exposure:
+        photos = balance_photo_exposure(photos)
+        log.info("照片曝光已逐相机归一化：%d 张（解决融合后岛间亮度跳变；"
+                 "绝对色彩会变，做色差测量时请关掉）", len(photos))
 
     # 逐图「实际像素尺寸 / 内参坐标系尺寸」比例（==1 时无副作用）
     scales = []
@@ -999,6 +1042,8 @@ def texture_mesh_from_photos(mesh, task_root: str, item_id: str, cfg,
             size=cfg.photo_texture.texture_size,
             top_k=cfg.photo_texture.top_k,
             hole_fill_px=int(getattr(cfg.photo_texture, "hole_fill_px", 0) or 0),
+            balance_exposure=bool(
+                getattr(cfg.photo_texture, "balance_exposure", False)),
             samples_per_tri=cfg.photo_texture.samples_per_tri,
             want_mask=True)
         if cfg.photo_texture.poisson_blend:

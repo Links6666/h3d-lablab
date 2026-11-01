@@ -128,9 +128,14 @@ def photo_fingerprint(photo_dir: str) -> str:
 def params_fingerprint(cfg) -> str:
     """影响纹理像素的采样/融合参数。改任一项都必须重算。"""
     p = cfg.photo_texture
+    # 影响纹理像素的**每一个**参数都必须在这里，漏一个就是「改了配置但结果不变
+    # 且不报错」（2026-11-01 实测：balance_exposure 改了，缓存命中，color_std
+    # 纹丝不动 32.67→32.67）。新增参数时先加这里，再加配置字段。
     key = "|".join(str(v) for v in (
         CACHE_VERSION, p.texture_size, p.top_k, p.samples_per_tri,
-        int(bool(p.poisson_blend))))
+        int(bool(p.poisson_blend)),
+        int(bool(getattr(p, "balance_exposure", False))),
+        int(getattr(p, "hole_fill_px", 0))))
     return hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
 
 
