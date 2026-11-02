@@ -52,7 +52,11 @@ log = get_logger("texture.atlas_cache")
 
 #: 缓存格式版本。几何/纹理语义一旦改动（例如换了 UV 展开算法、改了加权公式）
 #: 必须 +1，否则旧缓存会把"上一版算法"的结果伪装成当前算法的产出。
-CACHE_VERSION = 1
+# 升到 2（2026-11-02）：M4 的 metrics 新增 cameras_blind / cameras_total。
+# 缓存会复用**首件 metrics**，旧缓存里没有这些键 → 新键永远是 None，
+# 而且不报错。**凡是产出 metrics 的键集合变了，就必须升这个版本号**——
+# 这比「记得清 99_runs/atlas_cache」可靠。
+CACHE_VERSION = 2
 
 _CACHE_REL = os.path.join("99_runs", "atlas_cache")
 

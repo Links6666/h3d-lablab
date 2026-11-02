@@ -531,6 +531,10 @@ def project_photos_to_texture(mesh, uv, faces, images, cameras, photo_dir,
     back_mask = np.zeros(size * size, dtype=bool)
     occl_mask = np.zeros(size * size, dtype=bool)
     usage = np.zeros(len(images), dtype=np.int64)
+    # 每台相机"看到多少纹素"。全 0 = 它没投影到模型上（位姿无效 / 没拍到）。
+    # 2026-11-02 真机：30 台里 19 台的 R/t 在任何一张照片上都投不出模型，
+    # 权重恒为 0；但系统只报 projected_cameras=11，看不出"19 台白拍了"。
+    seen_per_cam = np.zeros(len(images), dtype=np.int64)
     cons_sum = 0.0
     cons_n = 0
     occluded = 0
@@ -554,6 +558,7 @@ def project_photos_to_texture(mesh, uv, faces, images, cameras, photo_dir,
                 v = (K4[k, 1] * pc[:, 1] / z + K4[k, 3]) * scales[k, 1]
             h, wd = img.shape[:2]
             ok = (z < -1e-9) & (u >= 0) & (u < wd) & (v >= 0) & (v < h)
+            seen_per_cam[k] += int(ok.sum())
             if not ok.any():
                 continue
             # 视线方向必须是「点 -> 相机」（= C - X）。写成 (X - C) 会整体反号，
@@ -654,6 +659,10 @@ def project_photos_to_texture(mesh, uv, faces, images, cameras, photo_dir,
                     fill_ratio * 100, utilization * 100)
     metrics = {
         "projected_cameras": int((usage > 0).sum()),
+        # 一台都没投影到的相机数。>0 说明这些条目的位姿与照片不对应——
+        # 权重虽然为 0（不污染颜色），但等于这部分视角白拍了，覆盖会变差。
+        "cameras_blind": int((seen_per_cam < 50).sum()),
+        "cameras_total": int(len(images)),
         # coverage_ratio 保留旧键名，语义收敛为「图集有效像素占比」
         "coverage_ratio": round(painted_ratio, 4),
         "atlas_utilization": round(float(utilization), 4),
