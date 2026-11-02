@@ -327,7 +327,8 @@ def _findings(items: list[str],
             if isinstance(in_frame, (int, float)) and in_frame < 0.85:
                 out.append({"level": "warn", "text": (
                     f"{_esc(item)}：UV 岛内仅 {_pct(fill)} 纹素采到颜色（阈值 85%），"
-                    f"而<b>落在任一图像画幅内</b>的纹素也只有 {_pct(in_frame)}——"
+                    f"而<b>既能被正面看到、又落在画幅内</b>的纹素也只有 "
+                    f"{_pct(in_frame)}——"
                     "问题不在法线朝向，在<b>几何与位姿的尺度/平移对齐</b>："
                     "三角形算出了位置，投影却掉到照片外的空白处。"
                     "查 M4 的 <code>icp_align</code> 结果（<code>accepted</code> 是否为 "
@@ -578,10 +579,15 @@ _TEMPLATE = """<!DOCTYPE html>
 <h2>三、纹理质量（M4 贴图管线）</h2>
 <table>
   <tr><th>文物编号</th><th>图集</th><th>参与相机</th><th>图集像素利用率</th>
-      <th>UV 岛占比</th><th>岛内填充率</th><th>画幅内可见</th><th>几何-位姿对齐</th>
+      <th>UV 岛占比</th><th>岛内填充率</th><th>正面可见且入画</th><th>几何-位姿对齐</th>
       <th>平均亮度</th><th>多视角色差</th>
       <th>法线校正</th><th>像素换算</th>
       <th>异常面积（岛内）</th><th>图斑数</th><th>图集摘要</th><th>判定</th></tr>
+  <tr><td colspan="16" class="note">
+    <b>口径</b>：「正面可见且入画」= 至少一台相机与法线夹角 &lt;73°（cos&gt;0.3）
+    <b>且</b>投影落在该图像幅内，两个条件都满足才算。它和「只看画幅」、
+    「只看夹角」是三个不同的量，数值会差很多，引用时别混用。
+  </td></tr>
   {% for row in tex_rows %}
   <tr>
     <td>{{ row.item }}</td><td>{{ row.size }}</td><td class="num">{{ row.cameras }}</td>
