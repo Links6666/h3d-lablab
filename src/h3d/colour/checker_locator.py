@@ -20,7 +20,8 @@ log = get_logger("colour.checker")
 
 
 def locate_colorchecker(image_path: str, grid: tuple = (4, 6),
-                        aruco_ids: tuple = (1, 2, 3, 4)) -> Optional[np.ndarray]:
+                        aruco_ids: tuple = (1, 2, 3, 4),
+                        marker_margin: float = -0.5) -> Optional[np.ndarray]:
     """在照片中定位色卡并提取 4×6=24 色块平均色（sRGB 0~255）。
 
     返回 (24,3) 数组；定位失败返回 None。
@@ -57,14 +58,21 @@ def locate_colorchecker(image_path: str, grid: tuple = (4, 6),
     bl = centers[np.argmax(centers[:, 0] - centers[:, 1])]
     src = np.float32([tl, tr, bl, br])
     rows, cols = grid
-    dst = np.float32([[0, 0], [cols - 1, 0], [0, rows - 1],
-                      [cols - 1, rows - 1]])
+    # 标记中心 → 格坐标。**不能默认 0**（2026-11-01）：`0` 等于假定「标记的
+    # 几何中心正好踩在色卡外框角上」，而标记是独立贴的，两者不重合；若按角色块
+    # 中心贴，又会遮掉 4 个色块（ColorChecker24 就不完整了）。
+    # 约定：标记中心在**色卡外框外** `|marker_margin|` 格处，默认 0.5 格。
+    m = float(marker_margin)
+    dst = np.float32([[m, m], [cols - 1 - m, m],
+                      [m, rows - 1 - m], [cols - 1 - m, rows - 1 - m]])
     H = cv2.getPerspectiveTransform(src, dst)
     patches = []
     for r in range(rows):
         for c in range(cols):
-            # 色块中心（格点间 0.5 偏移），再透视反投回图像坐标
-            x, y = c, r
+            # **格中心 = (c+0.5, r+0.5)**（2026-11-01 修）。原来用 (c, r) 取的是
+            # 网格线交点——在 4×6 卡上正好偏半个色块，取到的是色块边缘或相邻块
+            # 的过渡带。注释早就写着「格点间 0.5 偏移」，代码却没加。
+            x, y = c + 0.5, r + 0.5
             inv = np.linalg.inv(H)
             v = np.array([x, y, 1.0])
             u = inv @ v
@@ -82,7 +90,8 @@ def locate_colorchecker(image_path: str, grid: tuple = (4, 6),
 
 def locate_colorchecker_robust(image_path: str, grid: tuple = (4, 6),
                                aruco_ids: tuple = (1, 2, 3, 4),
-                               min_aruco: int = 3) -> Optional[np.ndarray]:
+                               min_aruco: int = 3,
+                               marker_margin: float = -0.5) -> Optional[np.ndarray]:
     """色卡定位鲁棒化（P3）：ArUco 不足时亮框回退 + 单应条件校验。
 
     分层策略：
@@ -128,7 +137,9 @@ def locate_colorchecker_robust(image_path: str, grid: tuple = (4, 6),
     bl = centers[np.argmax(centers[:, 0] - centers[:, 1])]
     src = np.float32([tl, tr, bl, br])
     rows, cols = grid
-    dst = np.float32([[0, 0], [cols - 1, 0], [0, rows - 1], [cols - 1, rows - 1]])
+    m = float(marker_margin)
+    dst = np.float32([[m, m], [cols - 1 - m, m],
+                      [m, rows - 1 - m], [cols - 1 - m, rows - 1 - m]])
     try:
         H = cv2.getPerspectiveTransform(src, dst)
     except cv2.error:
@@ -140,7 +151,7 @@ def locate_colorchecker_robust(image_path: str, grid: tuple = (4, 6),
     inv = np.linalg.inv(H)
     for r in range(rows):
         for ccol in range(cols):
-            u = inv @ np.array([ccol, r, 1.0])
+            u = inv @ np.array([ccol + 0.5, r + 0.5, 1.0])
             u = u[:2] / u[2]
             u0, v0 = int(u[0]), int(u[1])
             roi = img[max(0, v0 - 4):v0 + 5, max(0, u0 - 4):u0 + 5]
