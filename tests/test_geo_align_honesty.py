@@ -247,3 +247,26 @@ class TestNormalConsistency:
         r = normal_consistency(o3d.geometry.TriangleMesh())
         assert r["flip_fraction"] is None
         assert r["n_pairs"] == 0
+
+
+def test_quality_gate_still_rejects_catastrophic_drift() -> None:
+    """放宽带宽之后，灾难级的两个实测值（2.03 / 0.43）必须仍被拒。
+
+    0.30 → 0.45 是为了放过 0.66 这种「点云与网格覆盖范围本来就不同」的正常
+    偏差；闸门的职责始终是拦灾难，不是做细粒度取舍（那交给 choose_alignment）。
+    """
+    mesh = _sphere(radius=1.0)
+    verts = np.asarray(mesh.vertices)
+    for factor in (2.03, 0.43):
+        q = alignment_quality(verts, verts * factor, verts)
+        assert q["accepted"] is False, (factor, q)
+        assert q["diag_ratio"] == pytest.approx(factor, rel=0.15)
+
+
+def test_quality_gate_accepts_moderate_extent_mismatch() -> None:
+    """0.66 这种（真机实测）不该被拒——它只是覆盖范围差异，不是尺度崩了。"""
+    mesh = _sphere(radius=1.0)
+    verts = np.asarray(mesh.vertices)
+    q = alignment_quality(verts, verts * 0.66, verts)
+    assert q["diag_ratio"] == pytest.approx(0.66, rel=0.02)
+    assert "包围盒" not in (q["reason"] or ""), q

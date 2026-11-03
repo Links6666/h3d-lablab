@@ -131,6 +131,76 @@ def normalise_pose_convention(images: list, cameras: dict, probe_points,
     return metrics
 
 
+def visible_score(verts, tris, images, cameras, sample: int = 6000,
+                  seed: int = 0) -> float:
+    """对齐候选的判据：有多少比例的**面**能被任一相机正面看到。
+
+    为什么不用 ``in_frame_ratio`` 判断对齐好坏（2026-11-03）
+    ------------------------------------------------------
+    真机：激光系里根本没有相机，对齐前 `in_frame` 恒为 0；对齐后**任何**把物体
+    搬到相机前方的解都报 1.0——它区分不了 0° 和 90°。而控制点那条实际解出了
+    约 90° 的旋转错（与自动 ICP 的形状主轴 |cos|=0.001），照样被判通过。
+
+    「能不能被正面看到」才有区分度：真机同一次对齐，自动 ICP 0.98、控制点 0.69。
+
+    口径取 ``max(正向, 反向)``：网格法线可能整体朝内（Poisson 常见），那只是一种
+    符号约定，不该被择优惩罚——真正要罚的是**朝向错**，那种情况两个方向都不行。
+    """
+    pts_v = np.asarray(verts, dtype=np.float64)
+    t = np.asarray(tris)
+    if len(pts_v) == 0 or len(t) == 0 or not images:
+        return 0.0
+    if len(t) > sample:
+        idx = np.random.default_rng(seed).choice(len(t), sample, replace=False)
+        t = t[idx]
+    a, b, c = pts_v[t[:, 0]], pts_v[t[:, 1]], pts_v[t[:, 2]]
+    fn = np.cross(b - a, c - a)
+    ln = np.linalg.norm(fn, axis=1, keepdims=True)
+    if not np.all(ln > 0):
+        ln = np.maximum(ln, 1e-12)
+    fn = fn / ln
+    cen = (a + b + c) / 3.0
+
+    best = np.full(len(t), -1.0)
+    for im in images:
+        C = np.asarray(im["t"], dtype=np.float64)
+        vec = C - cen
+        d = np.maximum(np.linalg.norm(vec, axis=1, keepdims=True), 1e-12)
+        best = np.maximum(best, ((vec / d) * fn).sum(axis=1))
+    fwd = float((best > 0.3).mean())
+    rev = float((-best > 0.3).mean())
+    return max(fwd, rev)
+
+
+def choose_alignment(candidates, images, cameras):
+    """在多个对齐候选里按 :func:`visible_score` 取优。
+
+    ``candidates`` 是 ``[(name, verts, tris, metrics), ...]``。
+    返回 ``(name, verts, metrics)``：metrics 是**选中候选**那份，外加
+    ``align_candidates``（每个候选的名字与分数）——把落选的分数也留下，
+    否则下次争论"为什么没选另一条"就没有依据。
+
+    2026-11-03 之前 M4 的策略是「控制点优先、失败才回退自动 ICP」。判据换成
+    择优之后，两条都跑（各几秒），谁把几何摆对了用谁。
+    """
+    if not candidates:
+        raise ValueError("choose_alignment 需要至少一个候选")
+    scored = []
+    for name, verts, tris, metrics in candidates:
+        scored.append((float(visible_score(verts, tris, images, cameras)),
+                       name, verts, dict(metrics or {})))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    best_score, best_name, best_verts, best_metrics = scored[0]
+    best_metrics["align_candidates"] = [
+        {"name": n, "visible": round(sc, 4)} for sc, n, _v, _m in scored]
+    best_metrics["align_chosen"] = best_name
+    if len(scored) > 1:
+        log.info("对齐择优：%s（%s）—— 候选得分 %s",
+                 best_name, "%.3f" % best_score,
+                 "，".join("%s=%.3f" % (n, sc) for sc, n, _v, _m in scored))
+    return best_name, best_verts, best_metrics
+
+
 def in_frame_ratio(verts, images, cameras, sample: int = 20000,
                    seed: int = 0) -> float:
     """有多少比例的顶点能投进**至少一台**相机的画幅（对齐验收用）。
@@ -1039,9 +1109,42 @@ def texture_mesh_from_photos(mesh, task_root: str, item_id: str, cfg,
                                 "投影覆盖 %.1f%% -> %.1f%%",
                                 _before_ts * 100, _after_ts * 100)
                 else:
+                    # ---- 两条路径都跑，按「对齐后能不能被正面看到」取优 ----
+                    # 2026-11-03：控制点那条在真机上解出了约 90° 的旋转错，而
+                    # `in_frame` 从 0 报成 1.0 照样放行——**它区分不了 0° 和
+                    # 90°**：对齐前激光系里根本没有相机，任何把物体搬进视野的
+                    # 解都会是 1.0。「能被正面看到的面比例」才有区分度
+                    # （实测：自动 ICP 0.98 / 控制点 0.69）。
+                    import open3d as _o3d_c
+                    from h3d.geo_align import align_points_to_mesh
+                    tris_a = np.asarray(mesh.triangles)
+                    cands = [("control_points",
+                              np.asarray(mesh.vertices, dtype=np.float64),
+                              tris_a, dict(align_metrics))]
+                    try:
+                        base = _o3d_c.geometry.TriangleMesh()
+                        base.vertices = _o3d_c.utility.Vector3dVector(verts0)
+                        base.triangles = _o3d_c.utility.Vector3iVector(tris_a)
+                        s_i, R_i, T_i, m_i = align_points_to_mesh(
+                            sparse_pts, base)
+                        if m_i.get("accepted") is not False:
+                            v_i = (R_i.T @ (verts0 - T_i).T).T / s_i
+                            m_i = dict(m_i)
+                            m_i["in_frame_before"] = round(_before_ts, 4)
+                            cands.append(("auto_icp", v_i, tris_a, m_i))
+                        else:
+                            log.info("自动 ICP 候选被质量闸门拒绝，不参与择优：%s",
+                                     m_i.get("reject_reason", ""))
+                    except Exception as exc:  # noqa: BLE001 - 候选失败不影响主路径
+                        log.debug("自动 ICP 候选生成失败（不参与择优）：%s", exc)
+                    _picked, _pverts, align_metrics = choose_alignment(
+                        cands, images, cameras)
+                    mesh.vertices = _o3d_c.utility.Vector3dVector(
+                        np.asarray(_pverts, dtype=np.float64).copy())
+                    mesh.triangles = _o3d_c.utility.Vector3iVector(tris_a)
                     mesh.compute_vertex_normals()
                     align_metrics = apply_align_status(align_metrics, True)
-                    log.info("照片纹理两阶段对齐：%s", align_metrics)
+                    log.info("照片纹理对齐（择优=%s）：%s", _picked, align_metrics)
             except ControlPointError as exc:
                 # 清空 method：失败必须回退自动 ICP（否则对齐被跳过）
                 align_metrics = {"error": str(exc)}
