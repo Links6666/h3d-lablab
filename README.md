@@ -62,8 +62,31 @@ python -m h3d.cli init            # 初始化项目目录
 python -m h3d.cli validate -c config.yaml   # 校验配置与数据
 python -m h3d.cli batch -c config.yaml      # 批量全链处理
 python -m h3d.cli report -c config.yaml     # 仅重生成报表
+python -m h3d.cli verify <项目目录>          # 核验交付包是否自洽
 python -m h3d.cli gui             # 启动图形界面
 ```
+
+### 交付核验（`verify`）
+
+跑完之后想知道「交付包到底有没有坏」，用这一条：
+
+```bash
+h3d verify D:/my_project          # 直接给项目目录
+h3d verify -c config.yaml         # 或从配置的 raw_dir 推出项目根
+```
+
+它把三处对一遍：**manifest 记的产物 vs 磁盘 vs 报表**，22 项检查，退出码
+0 = 通过、1 = 有 FAIL。查的是历史真踩过的坑：
+
+| 检查 | 对应事故 |
+|---|---|
+| manifest 记的每个产物都在磁盘上 | 中文路径下 GLB 静默失败（返回 True 却不写文件） |
+| 交付件数 = M6 完成件数 | 多件批少交付一件，报表齐全看不出 |
+| 每件请求的格式都已交付 | `publish.formats` 要了 glb、M4 没产，日志全绿 |
+| 图集有 obj/glb 承载 | 图集孤立：只剩顶点色，PNG 没人引 |
+| 每份 accuracy.csv 逐份检查 | 多件批只看第一份，第二件表坏了不报 |
+
+WARN 不影响退出码（例如上次运行的残留件目录）；FAIL 才返回 1。
 
 ### 并行与断点续跑（**二者互斥**）
 
@@ -86,7 +109,7 @@ python -m h3d.cli gui             # 启动图形界面
 ## 文档与测试
 
 - 开发文档/PDF 交付物：output/ 目录
-- 测试：`python -m pytest tests/`（355 项）
+- 测试：`python -m pytest tests/`（1318 项，约 2.5 分钟）
 - 变更记录：CHANGELOG.md
 
 ## 开源说明
