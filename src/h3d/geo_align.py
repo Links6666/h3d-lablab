@@ -163,6 +163,76 @@ def _sample_surface(verts: np.ndarray, n: int) -> np.ndarray:
     return np.asarray(verts[idx], dtype=np.float64)
 
 
+#: ICP 尺度的漂移带（相对初值）。SfM 的尺度由鲁棒对角比给出，误差通常 <10%；
+#: 超过这个带宽的「解」不是尺度估计，是对应关系崩了之后的下塌（实测 0.43×）。
+_SCALE_BAND = (0.6, 1.6)
+
+
+def _axis_rotations() -> list:
+    """24 个立方体群旋转（坐标轴置换 + 符号，det=+1）。
+
+    为什么需要：COLMAP 世界系的坐标轴由建图过程决定，与激光扫描仪无关，
+    两者之间的相对朝向可以是**任意**旋转。单初值（单位阵）在真机上彻底卡死
+    （中位最近邻 112% 对角线），而已知正确朝向时只有 2.5%。
+    """
+    import itertools
+
+    out = []
+    for perm in itertools.permutations(range(3)):
+        for signs in itertools.product((1, -1), repeat=3):
+            R = np.zeros((3, 3))
+            for i, p in enumerate(perm):
+                R[i, p] = signs[i]
+            if np.linalg.det(R) > 0:
+                out.append(R)
+    return out
+
+
+def _icp_similarity_once(mesh, centred: np.ndarray, R0: np.ndarray,
+                         n_samples: int, iterations: int,
+                         inlier_percentile: float) -> dict:
+    """从给定旋转初值跑一遍 ICP，返回 **centred 空间**里的累积 (s, R, T)。
+
+    尺度被夹在 ``_SCALE_BAND`` 内：ICP 的尺度项没有约束，对应关系一错就顺着
+    错配往下塌（真机实测从 1.0 塌到 0.43 后被闸门拒）。夹住之后极端解会被
+    「不动尺度」替代，让旋转去找解，而不是让尺度去凑。
+    """
+    from scipy.spatial import cKDTree
+
+    M = centred.mean(axis=0)
+    work = (centred - M) @ R0.T + M
+    # 初值旋转必须**折进累积变换**，否则返回的 (s,R,T) 复现不出 work
+    # （2026-11-03：漏了这一步，选出来的候选比单位阵初值还差）。
+    # work = R0·(centred − M) + M = R0·centred + (M − R0·M)
+    s, R, T = 1.0, np.asarray(R0, dtype=np.float64).copy(), M - R0 @ M
+    n_keep = 0
+    for _it in range(iterations):
+        _seed_random(_SAMPLE_SEED + _it)
+        surf = np.asarray(mesh.sample_points_uniformly(n_samples).points,
+                          dtype=np.float64)
+        tree = cKDTree(surf)
+        d, idx = tree.query(work, k=1)
+        keep = d < np.percentile(d, inlier_percentile) * 2.0
+        n_keep = int(keep.sum())
+        if n_keep < 4:
+            break
+        ds, dR, dT = umeyama_similarity(work[keep], surf[idx[keep]])
+        lo, hi = _SCALE_BAND
+        if not (lo <= s * ds <= hi):
+            ds = 1.0                      # 尺度越界就当这一步没估出尺度
+        work = ds * (work @ dR.T) + dT
+        s = s * ds
+        R = dR @ R
+        T = ds * (dR @ T) + dT
+    _seed_random(_SAMPLE_SEED)
+    surf_final = np.asarray(mesh.sample_points_uniformly(n_samples).points,
+                            dtype=np.float64)
+    d_final, _ = cKDTree(surf_final).query(work, k=1)
+    rmse = float(np.sqrt(np.mean(np.sort(d_final)[:max(n_keep, 1)] ** 2)))
+    return {"s": s, "R": R, "T": T, "work": work, "rmse": rmse,
+            "n_keep": n_keep, "med": float(np.median(d_final))}
+
+
 def align_points_to_mesh(src_points: np.ndarray, mesh,
                          n_samples: int = 3000, iterations: int = 6,
                          inlier_percentile: float = 90.0,
@@ -188,50 +258,50 @@ def align_points_to_mesh(src_points: np.ndarray, mesh,
 
     verts = np.asarray(mesh.vertices, dtype=np.float64)
     src = np.asarray(src_points, dtype=np.float64)
-    s, R, T = 1.0, np.eye(3), np.zeros(3)
-    work_pts = src.copy()
-    final_rmse = 0.0
-    n_keep = 0
     # 粗对齐初始化：质心对齐 + **鲁棒**包围盒尺度比（SfM 任意尺度，最近邻对
     # 尺度敏感；COLMAP 飞点会把 min/max 撑大数倍，必须用分位包围盒）
     # 固定采样种子：保证同一输入多次运行结果一致（可复现性，实机 2026-09-15）
     _seed_random(_SAMPLE_SEED)
     surface0 = mesh.sample_points_uniformly(n_samples)
     surf0 = np.asarray(surface0.points, dtype=np.float64)
-    s0 = _robust_diag(surf0) / max(_robust_diag(work_pts), 1e-9)
-    work_pts = work_pts * s0 + (surf0.mean(axis=0) - work_pts.mean(axis=0) * s0)
-    s, T = s0, surf0.mean(axis=0) - src.mean(axis=0) * s0
-    for _it in range(iterations):
-        _seed_random(_SAMPLE_SEED + _it)
-        surface = mesh.sample_points_uniformly(n_samples)
-        surf_pts = np.asarray(surface.points, dtype=np.float64)
-        tree = cKDTree(surf_pts)
-        d, idx = tree.query(work_pts, k=1)
-        thr = np.percentile(d, inlier_percentile) * 2.0
-        keep = d < thr
-        n_keep = int(keep.sum())
-        if n_keep < 4:
-            log.warning("ICP 对齐有效对应不足（%d），跳过迭代", n_keep)
-            break
-        ds, dR, dT = umeyama_similarity(work_pts[keep], surf_pts[idx[keep]])
-        # 累积变换：work = ds*dR@work + dT；总变换作用在原始点上
-        work_pts = ds * (work_pts @ dR.T) + dT
-        s = s * ds
-        R = dR @ R
-        T = ds * dR @ T + dT
-    # 收敛后残差：必须用**变换后**的点重算，不能沿用循环里那个滞后一步的 d
-    if len(work_pts):
-        _seed_random(_SAMPLE_SEED)
-        surf_final = np.asarray(mesh.sample_points_uniformly(n_samples).points,
-                                dtype=np.float64)
-        d_final, _ = cKDTree(surf_final).query(work_pts, k=1)
-        if n_keep >= 4:
-            final_rmse = float(np.sqrt(np.mean(
-                np.sort(d_final)[:max(n_keep, 1)] ** 2)))
+    s0 = _robust_diag(surf0) / max(_robust_diag(src), 1e-9)
+    C = src.mean(axis=0)                 # 源质心
+    M = surf0.mean(axis=0)               # 网格质心
+    centred = (src - C) * s0 + M
+
+    # ---- 多初值（2026-11-03）--------------------------------------------------
+    # 单初值（单位阵）在真机上彻底卡死：稀疏点与网格的**相对朝向**是任意的
+    # （COLMAP 世界系由建图过程决定，与激光扫描仪坐标轴无关）。实测同一份数据：
+    #   单位阵初值 → 中位最近邻 112% 对角线（完全没对上）
+    #   正确旋转初值 → 2.5% 对角线（可用）
+    # 卡死之后 Umeyama 会顺着错误对应把尺度往下塌（实测 0.43），于是被质量闸门
+    # 拒绝——闸门行为是对的（宁可不动也不搬错），但对齐永远走不通。
+    #
+    # 24 个立方体群旋转（坐标轴置换 + 符号）覆盖了任意轴向对应；每个初值独立跑
+    # 完整迭代，取**最终中位最近邻**最小的那个。代价约 2 s，值得。
+    best = None
+    for R0 in _axis_rotations():
+        cand = _icp_similarity_once(mesh, centred, R0, n_samples,
+                                    iterations, inlier_percentile)
+        if best is None or cand["med"] < best["med"]:
+            best = cand
+    # 组合总变换：best 里的 (s_c, R_c, T_c) 作用在 **centred** 空间
+    #   centred = s0·(X - C) + M
+    #   X' = s_c·R_c·centred + T_c
+    #     = (s_c·s0)·R_c·X + s_c·R_c·(M - s0·C) + T_c
+    # 于是 (s, R, T) 仍是「作用在原始 src 上」的相似变换，语义不变。
+    s_c, R_c, T_c = best["s"], best["R"], best["T"]
+    s = s_c * s0
+    R = R_c
+    T = s_c * (R_c @ (M - s0 * C)) + T_c
+    work_pts = best["work"]
+    final_rmse = best["rmse"]
+    n_keep = best["n_keep"]
 
     metrics = {
         "n_correspondences": n_keep,
         "scale_s": round(float(s), 5),
+        "scale_init": round(float(s0), 5),
         "rmse_after": round(float(final_rmse), 6),
         "bbox_src": [round(float(v), 3) for v in
                      (work_pts.max(axis=0) - work_pts.min(axis=0))],
