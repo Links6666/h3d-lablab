@@ -56,8 +56,15 @@ LEGACY_EXPORT_DIR = "80_export"
 LEGACY_REPORT_DIR = "report"
 
 #: 阶段成果下的目录骨架（迁移时按此顺序搬运；未出现的跳过）
-_STAGE_CHILDREN = ("00_raw", "00_photo", "00_ctrl", "10_dense", "30_dense",
-                   "50_tex", "70_report", "90_meta", "99_runs", "output")
+_STAGE_CHILDREN = ("00_raw", "00_photo", "00_ctrl", "10_clean", "10_dense",
+                   "20_registered", "30_dense", "50_tex", "60_qc", "70_report",
+                   "90_meta", "99_runs", "output")
+#: 2026-11-03 补 `10_clean` / `20_registered` / `60_qc`：它们是**当前**阶段的目录
+#: （M1 / M2 / X3 就写在这里），而这张迁移清单是手写的，一直漏着。真机上 GUI
+#: 打开旧布局项目后自动迁移，这三个目录留在项目根，而进程内 `stage_root()`
+#: 已指向 `阶段成果` → 新布局里找不到 M1/M2/X3 的产物。
+#: 目录名散落在 runner（`os.path.join(task.root, "10_clean", ...)`）与 cli 的手写
+#: 清单里各一份，这里**只能是全集的副本**——所以新增阶段目录时三处都要对一遍。
 
 #: 判定"这确实是个 H3D 项目"的痕迹（**故意不含** ``output`` 与 ``report``，
 #: 理由见 :func:`looks_like_project`）
@@ -260,6 +267,140 @@ def legacy_dirs_present(project_root: str) -> list[str]:
     return found
 
 
+def _rewrite_json_paths(path: str, moves: list) -> bool:
+    """把 JSON 里以旧目录开头的字符串路径改成新位置（递归 dict/list）。
+
+    为什么必须有（2026-11-03 真机）：manifest 的 ``outputs`` 存的是**绝对路径**。
+    目录搬进 ``阶段成果/`` 之后，13 个产物变成「不在磁盘上」→ 断点续跑全部重算、
+    ``h3d verify`` 当场 FAIL 13 条。**搬了东西没搬账，等于白搬。**
+
+    只改以旧目录为**前缀边界**的字符串（``/30_dense`` 不该匹配 ``/30_dense2``）。
+    返回是否真的改动了（便于调用方决定要不要报出来）。
+    """
+    import json
+
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return False
+
+    # 长前缀优先：先匹配 80_export/r1 再匹配 80_export
+    pairs = sorted(moves, key=lambda p: len(p[0]), reverse=True)
+
+    def fix(node):
+        if isinstance(node, str):
+            # 用**规范化后的斜杠**比较：真机上见过 `D:/proj\output\...` 这种混用
+            # 分隔符的写法，按原样 startswith 会静默漏掉（改了等于没改）。
+            norm = node.replace("\\", "/")
+            for old, new in pairs:
+                o = old.replace("\\", "/")
+                if norm == o:
+                    return new
+                if norm.startswith(o + "/"):
+                    # 按原串长度切片：比较用的 o 与原 old 等长，尾部保留原分隔符
+                    return new + node[len(old):]
+            return node
+        if isinstance(node, list):
+            return [fix(x) for x in node]
+        if isinstance(node, dict):
+            return {k: fix(v) for k, v in node.items()}
+        return node
+
+    fixed = fix(data)
+    if fixed == data:
+        return False
+    # 原子写：派生状态写一半崩掉，manifest 会变成不可读的半截文件
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(fixed, fh, ensure_ascii=False)
+    os.replace(tmp, path)
+    return True
+
+
+def _infer_moved_prefixes(root: str, sroot: str, droot: str) -> list:
+    """推断「旧前缀 → 新位置」，用于修复**半迁移**的项目。
+
+    只按「本次搬了什么」重写账本是不够的：旧版本迁移过一次（搬了目录、没搬账），
+    之后 ``legacy_dirs_present`` 因为 ``<root>/阶段成果`` 已存在而返回 ``[]``，
+    永远不再自动迁移——项目就卡在「目录新、账本旧」，产物全被判为「不在磁盘上」。
+
+    判据：旧的根级目录**已不存在**、而新位置的同名目录**存在**，才认为它搬过。
+    这样不会误伤仍留在根级（合法存在）的同名目录。
+    """
+    pairs = []
+    for name in _STAGE_CHILDREN:
+        old = os.path.join(root, name)
+        new = os.path.join(sroot, name)
+        if os.path.isdir(new) and not os.path.isdir(old):
+            pairs.append((old, new))
+    if os.path.isdir(droot):
+        legacy_export = os.path.join(root, LEGACY_EXPORT_DIR)
+        if not os.path.isdir(legacy_export):
+            pairs.append((legacy_export, droot))
+        legacy_report = os.path.join(root, LEGACY_REPORT_DIR)
+        new_report = os.path.join(droot, LEGACY_REPORT_DIR)
+        if os.path.isdir(new_report) and not os.path.isdir(legacy_report):
+            pairs.append((legacy_report, new_report))
+    return pairs
+
+
+def _rewrite_config_paths(root: str, pairs: list) -> bool:
+    """把 ``config.yaml`` 里的绝对路径跟着搬（``runner.manifest`` 等）。
+
+    失效后果比看起来严重：下次跑会**在旧位置新建**一份 manifest，新旧两份并存
+    ——旧的记得哪些阶段已完成、新的从零开始，断点续跑彻底失效（split-brain）。
+
+    只替换**刚搬走的那几个前缀**，不做通用 YAML 重排；保留原文件的 BOM。
+    """
+    if not pairs:
+        return False
+    cfg = os.path.join(root, "config.yaml")
+    if not os.path.isfile(cfg):
+        return False
+    with open(cfg, "rb") as fh:
+        raw = fh.read()
+    bom = raw.startswith(b"\xef\xbb\xbf")
+    text = raw.decode("utf-8-sig")
+    import re
+
+    new = text
+    for old, dst in sorted(pairs, key=lambda p: len(p[0]), reverse=True):
+        # 目录分隔符可能混用（`D:/proj\output\…`），所以按段匹配、两种都认
+        segs = [re.escape(x) for x in old.replace("\\", "/").split("/") if x]
+        pat = re.compile(r"[\\/]".join(segs))
+        new = pat.sub(dst.replace("\\", r"\\"), new)
+    if new == text:
+        return False
+    tmp = cfg + ".tmp"
+    with open(tmp, "wb") as fh:
+        fh.write((b"\xef\xbb\xbf" if bom else b"") + new.encode("utf-8"))
+    os.replace(tmp, cfg)
+    return True
+
+
+def _rewrite_manifests(sroot: str, moves: list, root: str = "",
+                       droot: str = "") -> list:
+    """重写 ``90_meta/*.json`` 与 ``output/*.json`` 里的产物路径。"""
+    pairs = list(moves)
+    if root and droot:
+        pairs += _infer_moved_prefixes(root, sroot, droot)
+    if not pairs:
+        return []
+    done = []
+    for sub in ("90_meta", "output"):
+        d = os.path.join(sroot, sub)
+        if not os.path.isdir(d):
+            continue
+        for name in sorted(os.listdir(d)):
+            if not name.lower().endswith(".json"):
+                continue
+            fp = os.path.join(d, name)
+            if _rewrite_json_paths(fp, pairs):
+                done.append(fp)
+    return done
+
+
 def migrate_legacy(project_root: str, dry_run: bool = False) -> dict:
     """把旧布局就地迁到新布局（幂等，同名冲突跳过并记录）。
 
@@ -331,10 +472,19 @@ def migrate_legacy(project_root: str, dry_run: bool = False) -> dict:
                 os.makedirs(droot, exist_ok=True)
                 shutil.move(legacy_report, dst)
 
+    # 搬完必须**搬账**：manifest 里的绝对路径不跟着改，断点续跑与交付核验
+    # 会全盘失效（真机 13 个产物「不在磁盘上」）。
+    rewritten: list[str] = []
+    cfg_rewritten = False
     if not dry_run:
+        rewritten = _rewrite_manifests(sroot, moved, root, droot)
+        # 配置里的绝对路径也要跟：否则下次跑会在旧位置新建一份 manifest
+        pairs = list(moved) + _infer_moved_prefixes(root, sroot, droot)
+        cfg_rewritten = _rewrite_config_paths(root, pairs)
         write_layout_readme(root)
     return {"moved": moved, "skipped": skipped, "root": root,
-            "dry_run": dry_run}
+            "dry_run": dry_run, "rewritten": rewritten,
+            "config_rewritten": cfg_rewritten}
 
 
 def _fmt_path(rel: str) -> str:

@@ -404,6 +404,12 @@ class MainWindow(QMainWindow):
         self.btn_export.setEnabled(False)
         self.btn_export.clicked.connect(self._export_package)
         v.addWidget(self.btn_export)
+        self.btn_verify = QPushButton("核验交付包")
+        self.btn_verify.setToolTip(
+            "核对 manifest / 磁盘 / 报表三处是否自洽：产物都在、件数对齐、\n"
+            "每件格式齐、图集有载体、accuracy.csv 的数值与 manifest 一致。")
+        self.btn_verify.clicked.connect(self._verify_delivery)
+        v.addWidget(self.btn_verify)
         v.addStretch()
         return w
 
@@ -1327,6 +1333,55 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "导出完成",
                                 f"交付包：{out}\n{r['n_files']} 个文件，"
                                 f"{r['size_kb']} KB{detail}")
+
+    def _verify_delivery(self):
+        """核验交付包：manifest / 磁盘 / 报表三处是否自洽。
+
+        槽内必须自带 try/except（实机教训）：windowed 打包版 `stderr=None`，
+        槽里抛异常会**静默终止**——后面的界面更新全不执行，用户看到的是
+        「点了没反应」。这里任何异常都转成可见的提示框。
+        """
+        root = getattr(self.cfg, "root_dir", "") or ""
+        if not root or not os.path.isdir(root):
+            QMessageBox.warning(self, "还没有项目",
+                                "请先打开或生成一个项目，再核验交付包。")
+            return
+        self.btn_verify.setEnabled(False)
+        self.btn_verify.setText("核验中…")
+        try:
+            from h3d.delivery_verify import verify_report
+            rep = verify_report(root)
+        except Exception as exc:  # noqa: BLE001 - 槽内异常不外传，必须自兜
+            self._log(f"[核验] 失败：{exc}")
+            QMessageBox.critical(self, "核验失败",
+                                 f"核验过程出错：{exc}\n详情见界面日志。")
+            return
+        finally:
+            self.btn_verify.setText("核验交付包")
+            self.btn_verify.setEnabled(True)
+
+        head = (f"PASS {rep['n_pass']} · WARN {rep['n_warn']} · "
+                f"FAIL {rep['n_fail']}")
+        # 完整清单进界面日志（可滚动、可复制）；弹窗只放**要动手的那几条**。
+        # 二十几行 PASS 铺在对话框里，真正的问题就看不见了。
+        self._log(f"[核验] 交付包核验：{head}")
+        for m in rep["warn"]:
+            self._log(f"[核验][WARN] {m}")
+        for m in rep["fail"]:
+            self._log(f"[核验][FAIL] {m}")
+
+        if rep["ok"] and not rep["n_warn"]:
+            QMessageBox.information(self, "交付包核验通过",
+                                    f"{head}\n\n清单、磁盘、报表三处一致。")
+            return
+        todo = [f"· {m}" for m in rep["fail"]] + [f"· {m}" for m in rep["warn"]]
+        body = "\n".join(todo[:6])
+        if len(todo) > 6:
+            body += f"\n…（共 {len(todo)} 条，完整结果见下方日志）"
+        if rep["ok"]:
+            QMessageBox.warning(self, "交付包核验：有提醒", f"{head}\n\n{body}")
+        else:
+            QMessageBox.critical(self, "交付包核验：有问题", f"{head}\n\n{body}")
 
     def _open3d_window(self):
         from h3d.gui.viewer3d import show_open3d_window

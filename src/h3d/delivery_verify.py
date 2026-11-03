@@ -218,11 +218,13 @@ def stages_of(man):
     return out
 
 
-def main(root):
+def main(root, quiet: bool = False):
     # 每次调用清空累加器：同一个进程里连跑两次（测试、或 GUI 里重试）不该叠加。
     for bucket in (OKS, WARNS, FAILS):
         bucket.clear()
-    print(f"核验项目：{root}\n")
+    global _QUIET
+    _QUIET = bool(quiet)
+    _say(f"核验项目：{root}\n")
 
     # ---------- 1) manifest 与磁盘 ----------
     path, man = load_manifest(root)
@@ -258,7 +260,7 @@ def main(root):
     else:
         deliver, layout = os.path.join(root, "交付成果"), "缺失"
     check(layout != "缺失", f"交付目录：{layout}", "既没有 交付成果/ 也没有 80_export/")
-    print(f"  目录布局：{layout}")
+    _say(f"  目录布局：{layout}")
 
     # ---------- 2b) 多件覆盖：清单说交付的件，磁盘上必须有子目录 ----------
     # 单件批看不出来这件事。多件批最容易的静默失效就是「3 件里 2 件交付了」——
@@ -336,8 +338,8 @@ def main(root):
     for f in files:
         exts[os.path.splitext(f)[1].lower()] = exts.get(
             os.path.splitext(f)[1].lower(), 0) + 1
-    print("  交付文件类型：" + "  ".join(f"{k or '(无扩展名)'}×{v}"
-                                    for k, v in sorted(exts.items())))
+    _say("  交付文件类型：" + "  ".join(f"{k or '(无扩展名)'}×{v}"
+                                     for k, v in sorted(exts.items())))
 
     # 空文件 / 0 字节
     empties = [f for f in files if os.path.getsize(f) == 0]
@@ -471,12 +473,53 @@ def main(root):
     return 0 if not FAILS else 1
 
 
+#: 静默开关。GUI 要的是**结构**不是 stdout——打包版是 windowed 应用，
+#: stderr/stdout 可能是 None，打印出去没人看得见（还会污染日志）。
+#: 用模块级开关而不是层层传参：本模块的累加器（OKS/WARNS/FAILS）本来就是
+#: 模块级的，函数内的 print 藏在好几处，传参会漏。
+_QUIET = False
+
+
+def _say(msg):
+    if not _QUIET:
+        print(msg)
+
+
+def format_report(oks, warns, fails) -> str:
+    """把三段结果拼成可直接展示的文本（GUI 对话框 / CLI 输出共用）。"""
+    lines = [f"[PASS] {m}" for m in oks]
+    lines += [f"[WARN] {m}" for m in warns]
+    lines += [f"[FAIL] {m}" for m in fails]
+    lines.append("")
+    lines.append(f"合计：PASS {len(oks)} / WARN {len(warns)} / FAIL {len(fails)}")
+    return "\n".join(lines)
+
+
+def verify_report(root) -> dict:
+    """核验并返回**结构**：``ok`` / 三段清单 / 计数 / 可展示文本。
+
+    GUI 走这里，CLI 走 :func:`main`（两者共用同一份规则，只是出口不同）。
+    """
+    code = main(root, quiet=True)
+    return {
+        "root": root,
+        "ok": code == 0,
+        "pass": list(OKS),
+        "warn": list(WARNS),
+        "fail": list(FAILS),
+        "n_pass": len(OKS),
+        "n_warn": len(WARNS),
+        "n_fail": len(FAILS),
+        "text": format_report(OKS, WARNS, FAILS),
+    }
+
+
 def report():
-    print()
+    _say("")
     for m in OKS:
-        print(f"  [PASS] {m}")
+        _say(f"  [PASS] {m}")
     for m in WARNS:
-        print(f"  [WARN] {m}")
+        _say(f"  [WARN] {m}")
     for m in FAILS:
-        print(f"  [FAIL] {m}")
-    print(f"\n合计：PASS {len(OKS)} / WARN {len(WARNS)} / FAIL {len(FAILS)}")
+        _say(f"  [FAIL] {m}")
+    _say(f"\n合计：PASS {len(OKS)} / WARN {len(WARNS)} / FAIL {len(FAILS)}")

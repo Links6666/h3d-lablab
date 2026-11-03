@@ -6,7 +6,12 @@
 """
 from __future__ import annotations
 
+import json
 import os
+
+from h3d.core import paths
+
+from h3d.core import paths
 
 import pytest
 
@@ -275,3 +280,140 @@ class TestRunnerUsesDeliveryRoot:
         assert tasks[0].root == os.path.join(str(tmp_path), "阶段成果")
         assert paths.delivery_item_dir(tasks[0].root, "r1") == \
             os.path.join(str(tmp_path), "交付成果", "r1")
+
+
+class TestMigrateKeepsBookkeepingValid:
+    """迁移不只搬目录，还得让**账本**继续指得着。
+
+    真机 2026-11-03（GUI 打开旧布局项目，自动迁移后）：
+      · `10_clean` / `20_registered` / `60_qc` 留在项目根——迁移清单里没有它们，
+        而它们是**当前**阶段的目录（M1/M2/X3 就写在这里）
+      · `90_meta/*.json` 里的 `outputs` 仍是旧绝对路径 → 13 个产物「不在磁盘上」
+        → 断点续跑全部重算，`h3d verify` 当场 FAIL 13 条
+
+    两条都是「搬了东西没搬账」，后果一模一样：判据看着正常，实际全失效。
+    """
+
+    @staticmethod
+    def _legacy_with_manifest(root: str):
+        from h3d.core import paths
+        for d in ("10_clean", "10_dense", "20_registered", "30_dense",
+                  "50_tex", "60_qc", "90_meta", "output"):
+            os.makedirs(os.path.join(root, d), exist_ok=True)
+        cloud = os.path.join(root, "30_dense", "r1", "r1.ply")
+        os.makedirs(os.path.dirname(cloud), exist_ok=True)
+        open(cloud, "w").write("mesh")
+        masks = os.path.join(root, "60_qc", "r1", "anomaly", "metrics.json")
+        os.makedirs(os.path.dirname(masks), exist_ok=True)
+        open(masks, "w").write("{}")
+        man = {"stages": {"r1/M3": {"status": "done", "outputs": [cloud]},
+                          "r1/X3": {"status": "done", "outputs": [masks]}}}
+        mp = os.path.join(root, "90_meta", "run_manifest.json")
+        open(mp, "w", encoding="utf-8").write(json.dumps(man))
+        return mp
+
+    def test_moves_current_stage_dirs_too(self, tmp_path):
+        root = str(tmp_path)
+        self._legacy_with_manifest(root)
+
+        paths.migrate_legacy(root)
+
+        for d in ("10_clean", "20_registered", "60_qc"):
+            assert not os.path.isdir(os.path.join(root, d)), \
+                f"{d} 还留在项目根——迁移清单漏了它"
+            assert os.path.isdir(os.path.join(root, "阶段成果", d)), d
+
+    def test_manifest_paths_follow_the_files(self, tmp_path):
+        root = str(tmp_path)
+        self._legacy_with_manifest(root)
+
+        paths.migrate_legacy(root)
+
+        mp = os.path.join(root, "阶段成果", "90_meta", "run_manifest.json")
+        man = json.load(open(mp, encoding="utf-8"))
+        for key in ("r1/M3", "r1/X3"):
+            for out in man["stages"][key]["outputs"]:
+                assert out.startswith(os.path.join(root, "阶段成果")), out
+                assert os.path.exists(out), f"{key} 的产物路径搬完就失效了：{out}"
+
+    def test_dry_run_does_not_touch_the_manifest(self, tmp_path):
+        root = str(tmp_path)
+        mp = self._legacy_with_manifest(root)
+        before = open(mp, encoding="utf-8").read()
+
+        paths.migrate_legacy(root, dry_run=True)
+
+        assert open(mp, encoding="utf-8").read() == before
+
+    def test_repairs_half_migrated_project(self, tmp_path):
+        """目录已经在新布局里、但账本还指着旧路径 → 再迁一次要能修好。
+
+        真机现实：旧版本 GUI 已经迁过一次（搬了 30_dense/50_tex，**没搬账**），
+        之后 `legacy_dirs_present` 因为 `<root>/阶段成果` 已存在而返回 []，
+        于是永远不再自动迁移——项目就卡在「目录新、账本旧」的状态，
+        13 个产物「不在磁盘上」，断点续跑全废。
+
+        修法：重写账本不只按「本次搬了什么」，还要按「哪些旧前缀已经不存在、
+        新位置却存在」推断。
+        """
+        root = str(tmp_path)
+        sroot = os.path.join(root, "阶段成果")
+        # 已经被（旧版本）搬过去：30_dense 在新位置，根目录没有
+        cloud = os.path.join(sroot, "30_dense", "r1", "r1.ply")
+        os.makedirs(os.path.dirname(cloud), exist_ok=True)
+        open(cloud, "w").write("mesh")
+        os.makedirs(os.path.join(sroot, "90_meta"), exist_ok=True)
+        stale = os.path.join(root, "30_dense", "r1", "r1.ply")   # 旧路径，已不存在
+        man = {"stages": {"r1/M3": {"status": "done", "outputs": [stale]}}}
+        mp = os.path.join(sroot, "90_meta", "run_manifest.json")
+        open(mp, "w", encoding="utf-8").write(json.dumps(man))
+        # 根目录还留着一个没搬的（这条让迁移有理由跑起来）
+        os.makedirs(os.path.join(root, "10_clean", "r1"), exist_ok=True)
+
+        paths.migrate_legacy(root)
+
+        got = json.load(open(mp, encoding="utf-8"))["stages"]["r1/M3"]["outputs"]
+        assert got and got[0] == cloud, f"账本没修好：{got}"
+        assert os.path.exists(got[0])
+
+    def test_config_manifest_path_is_followed_too(self, tmp_path):
+        """`config.yaml` 里的 `runner.manifest` 是绝对路径，搬完同样会失效。
+
+        失效后果比看起来严重：下次跑会**在旧位置新建**一份 manifest，
+        于是新旧两份并存（split-brain）——旧的记得已完成、新的从零开始。
+        """
+        root = str(tmp_path)
+        cfg = os.path.join(root, "config.yaml")
+        os.makedirs(os.path.join(root, "output"), exist_ok=True)
+        open(cfg, "w", encoding="utf-8").write(
+            "project:/n  name: t\n"
+            f"runner:/n  manifest: {os.path.join(root, 'output', 'run_manifest.json')}\n")
+        os.makedirs(os.path.join(root, "00_raw", "r1"), exist_ok=True)
+
+        paths.migrate_legacy(root)
+
+        text = open(cfg, encoding="utf-8").read()
+        want = os.path.join(root, "阶段成果", "output", "run_manifest.json")
+        assert want in text, text
+        assert not os.path.isdir(os.path.join(root, "output"))
+
+    def test_config_manifest_path_is_followed_too(self, tmp_path):
+        """`config.yaml` 里的 `runner.manifest` 是绝对路径，搬完同样会失效。
+
+        失效后果比看起来严重：下次跑会**在旧位置新建**一份 manifest，
+        于是新旧两份并存（split-brain）——旧的记得已完成、新的从零开始。
+        """
+        root = str(tmp_path)
+        cfg = os.path.join(root, "config.yaml")
+        os.makedirs(os.path.join(root, "output"), exist_ok=True)
+        open(cfg, "w", encoding="utf-8").write(
+            "project:\n  name: t\n"
+            f"runner:\n  manifest: {os.path.join(root, 'output', 'run_manifest.json')}\n")
+        os.makedirs(os.path.join(root, "00_raw", "r1"), exist_ok=True)
+
+        paths.migrate_legacy(root)
+
+        text = open(cfg, encoding="utf-8").read()
+        want = os.path.join(root, "阶段成果", "output", "run_manifest.json")
+        assert want in text, text
+        assert not os.path.isdir(os.path.join(root, "output"))
