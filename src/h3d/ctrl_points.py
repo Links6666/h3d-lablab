@@ -302,24 +302,47 @@ def align_mesh_with_controls(mesh, controls: dict, images: dict,
     return new_mesh, metrics
 
 
+#: 精化阶段的累积尺度带。第一阶段（控制点 Umeyama）已经估过尺度，这里只该
+#: 微调；超出这个带就不是"精化"，是对应关系崩了之后的塌陷（真机压到 0.52）。
+_REFINE_SCALE_BAND = (0.75, 1.35)
+_REFINE_SEED = 20261103
+
+
 def refine_mesh_to_points(mesh, src_points: np.ndarray,
                           iterations: int = 5, n_samples: int = 2000,
-                          inlier_percentile: float = 90.0):
+                          inlier_percentile: float = 90.0,
+                          scale_band: tuple = _REFINE_SCALE_BAND):
     """最近邻精化（P2 第二阶段）：控制点粗对齐后，用 SfM 稀疏点云精化网格。
 
     迭代「网格表面采样 ↔ src_points 最近邻对应 → Umeyama 相似变换」
     （变换作用在网格上，src 不动），把网格微调到贴合稀疏点云。
     返回 (new_mesh, metrics)。
+
+    三个约束（2026-11-03 真机事故后补）
+    -----------------------------------
+    1. **尺度夹带**：每步累积尺度必须留在 ``scale_band`` 内，越界就当这一步
+       没估出尺度。真机就是在这里从 1.0 一路塌到 0.52（成品对角 3.27，而稀疏点
+       稳健对角 6.70），却因为"贴合度"变好而被接受。
+    2. **定种子**：`sample_points_uniformly` 用 Open3D 自己的随机源，不定种子
+       会让同一输入两次结果不同（实测逐顶点差 2.9e-3，coverage 0.6335/0.6538/
+       0.6305）。**不确定的对齐让所有对比数字都不可信。**
+    3. **报出实际施加的尺度**（``scale_applied``）：原来 metrics 里的
+       ``scale_s`` 是**第一阶段**的，精化改了尺度却看不出来——自报数字与
+       实际施加的不是同一件事。
     """
     from scipy.spatial import cKDTree
 
     import open3d as o3d
-    from h3d.geo_align import umeyama_similarity
+    from h3d.geo_align import _seed_random, umeyama_similarity
 
     verts = np.asarray(mesh.vertices, dtype=np.float64)
     new_verts = verts.copy()
     final_rmse = None
+    s_applied = 1.0
+    lo, hi = scale_band
     for _it in range(iterations):
+        # 每轮重定种子，保证同一输入同一结果
+        _seed_random(_REFINE_SEED + _it)
         work = o3d.geometry.TriangleMesh()
         work.vertices = o3d.utility.Vector3dVector(new_verts)
         work.triangles = mesh.triangles
@@ -332,6 +355,9 @@ def refine_mesh_to_points(mesh, src_points: np.ndarray,
         if keep.sum() < 8:
             break
         s, R, T = umeyama_similarity(surf_pts[keep], src_points[idx[keep]])
+        if not (lo <= s_applied * s <= hi):
+            s = 1.0                      # 越界 = 没估出尺度，别动它
+        s_applied *= s
         new_verts = s * (new_verts @ R.T) + T
         final_rmse = np.sqrt(np.mean(d[keep] ** 2))
     new_mesh = o3d.geometry.TriangleMesh()
@@ -345,6 +371,10 @@ def refine_mesh_to_points(mesh, src_points: np.ndarray,
         "method": "control_points + nearest_refine",
         "iterations": iterations,
         "rmse_after": round(float(final_rmse) if final_rmse else 0.0, 6),
+        # 精化**自己**施加的累积尺度。与第一阶段的 scale_s 相乘（取倒数）才是
+        # 最终作用在几何上的总尺度；两个数分开落，才能判断"是谁动的"。
+        "scale_applied": round(float(s_applied), 5),
+        "scale_band": [lo, hi],
     }
     return new_mesh, metrics
 
@@ -358,6 +388,12 @@ def align_two_stage(mesh, controls: dict, images: dict, cameras: dict,
     if sparse_points is not None and len(sparse_points) >= 8:
         mesh, m2 = refine_mesh_to_points(mesh, sparse_points)
         m1.update(m2)
+        # 总尺度 = 第一阶段的 1/s（几何乘了 1/s）× 精化的 scale_applied。
+        # 两个分项各自可能都在"合理"范围，乘起来才暴露问题——真机
+        # 1/0.764 × 0.52 ≈ 0.68，而期望 ≈1.07（稀疏点对角/激光对角）。
+        s1 = float(m1.get("scale_s") or 1.0)
+        sa = float(m2.get("scale_applied") or 1.0)
+        m1["scale_total"] = round(sa / max(s1, 1e-9), 5)
     return mesh, m1
 
 
