@@ -236,6 +236,7 @@ def _cmd_batch(cfg_path: str, dry_run: bool, no_preflight: bool = False,
         try:
             manifest = RunManifest.load(cfg.runner.manifest)
             cfg.report.project_name = cfg.project.name or ""
+            cfg.report.output_dir = resolve_report_dir(cfg)
             files = generate(manifest, result.failures, cfg.report)
             for f in files:
                 print(f"报表产物 -> {f}")
@@ -245,6 +246,35 @@ def _cmd_batch(cfg_path: str, dry_run: bool, no_preflight: bool = False,
     return 0
 
 
+def resolve_report_dir(cfg) -> str:
+    """把报表输出目录解析成**项目根下**的绝对路径。
+
+    为什么需要（2026-11-03 实机）：`report.output_dir` 默认是相对路径
+    ``"report"``，而 :func:`h3d.report.generate` 直接拿它 ``os.makedirs``——
+    按**当前工作目录**解析。于是从仓库根跑 ``h3d.cli batch -c D:/proj/cfg.yaml``，
+    报表会落到仓库根，而不是项目目录。实测把 3 个报表写进了代码仓
+    （``E:/h3d_lablab/report/``），而 ``generate`` 的 docstring 写的是「相对项目根」。
+
+    这里改用 :func:`h3d.core.paths.report_dir`——布局的唯一出口：新布局
+    ``<项目根>/交付成果/report``、旧布局 ``<项目根>/report``。用户显式配了
+    其它相对名字时，仍钉到项目根下（不静默改成默认名）。
+    """
+    import os
+
+    from h3d.core.paths import report_dir
+
+    out = str(getattr(cfg.report, "output_dir", "report") or "report")
+    if os.path.isabs(out):
+        return out
+    raw = str(getattr(cfg.project, "raw_dir", "") or "")
+    if not raw:
+        return out
+    base = os.path.dirname(os.path.abspath(raw.rstrip("/\\")))
+    if out == "report":                 # 默认值 → 走布局的唯一出口
+        return report_dir(base)
+    return os.path.join(base, out)
+
+
 def _cmd_report(cfg_path: str) -> int:
     from h3d.core import load, RunManifest
     from h3d.report import generate
@@ -252,6 +282,7 @@ def _cmd_report(cfg_path: str) -> int:
     cfg = load(cfg_path)
     manifest = RunManifest.load(cfg.runner.manifest)
     cfg.report.project_name = cfg.project.name or ""
+    cfg.report.output_dir = resolve_report_dir(cfg)
     files = generate(manifest, failures=None, report_cfg=cfg.report)
     for f in files:
         print(f"报表产物 -> {f}")

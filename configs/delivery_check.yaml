@@ -1,0 +1,30 @@
+# 交付链路核验用配置（真机 relic_001）
+# 用途：只验证「跑批 → 报表 → 交付」这条机制，不改任何产品默认值。
+# 质量门在本文件里放宽，原因是这件数据本来达不到 5mm/80%——M5 一 fail，
+# M6 与报表就不会执行，交付目录永远是空的，机制验不到。
+project:
+  name: relic_delivery
+  raw_dir: D:/h3d_relic_test/00_raw
+  formats: [ply, obj, glb]
+
+sfm_solve:
+  enabled: false          # 用既有 capture_meta，不重跑 COLMAP
+
+texture:
+  paint_mode: photo
+  export_formats: [ply, obj, glb]
+
+photo_texture:
+  texture_size: 2048
+
+quality:
+  enabled: true
+  coverage_threshold: 0.30
+  rmse_threshold_mm: 500.0
+
+report:
+  enabled: true
+
+runner:
+  workers: 1
+  manifest: D:/h3d_relic_test/90_meta/delivery_manifest.json
