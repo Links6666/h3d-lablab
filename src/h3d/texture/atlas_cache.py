@@ -56,7 +56,11 @@ log = get_logger("texture.atlas_cache")
 # 缓存会复用**首件 metrics**，旧缓存里没有这些键 → 新键永远是 None，
 # 而且不报错。**凡是产出 metrics 的键集合变了，就必须升这个版本号**——
 # 这比「记得清 99_runs/atlas_cache」可靠。
-CACHE_VERSION = 2
+# v3（2026-11-03）：位姿约定归一（capture_meta 旧格式 R_co+tvec）会改变
+# 参与采样的相机集合，图集内容随之变化；且 metrics 新增 pose_* 三键。
+# 旧缓存会把「用错位姿算出来的图集」当命中复用——那是**错误的纹理**，
+# 比慢几分钟糟得多。
+CACHE_VERSION = 3
 
 _CACHE_REL = os.path.join("99_runs", "atlas_cache")
 

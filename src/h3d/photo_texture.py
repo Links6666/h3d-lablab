@@ -28,6 +28,15 @@ def load_capture_meta(meta_path: str) -> tuple:
     """读取 capture_meta.json -> (cameras, images)；images 含 R/t/cam_id。
 
     utf-8-sig 读取：兼容文件 BOM（跨工具链写入的 JSON）。
+
+    **这里不做位姿约定转换**（2026-11-03）。det(R) 看似能区分「COLMAP 原生
+    ``X_cam = R_co·X + tvec``（前方 +Z）」与「本管线 ``pc = R·(p-C)``（前方
+    -Z）」，但 ``R`` 与 ``-R`` 给出**完全相同的 u/v**、只翻转 z 的符号——一个
+    手写的合法管线位姿完全可以 det=+1。用 det 猜会误伤正常文件。
+
+    真正的判据是**数据**：把 SfM 稀疏点按两种解释各投一次，看哪种落进画幅
+    （见 :func:`normalise_pose_convention`）。没有稀疏点时无从判断，按调用方
+    给的约定原样使用。
     """
     with open(meta_path, encoding="utf-8-sig") as fh:
         meta = json.load(fh)
@@ -37,6 +46,89 @@ def load_capture_meta(meta_path: str) -> tuple:
                "t": np.array(im["t"], dtype=np.float64),
                "cam_id": im["cam_id"]} for im in meta.get("images", [])]
     return cameras, images
+
+
+def normalise_pose_convention(images: list, cameras: dict, probe_points,
+                              min_frac: float = 0.05) -> dict:
+    """用「稀疏点能不能投进画幅」判定位姿约定，必要时就地转换。
+
+    真机事故（2026-11-03）
+    ---------------------
+    ``90_meta/relic_001_capture_meta.json`` 写于 2026-09-15「坐标系修复」之前，
+    存的是 **COLMAP 原生格式**（``R_co`` + ``tvec``，前方 **+Z**）。而管线按
+    「``t`` = 相机中心、前方 −Z」读它，于是把 ``tvec`` 当成相机位置：
+    30 台里 **19 台一条纹素都投不上**，剩下 11 台纯属巧合。
+
+    这个错误最阴的地方是**它有产出**：那 11 台偶然投上的相机让
+    ``in_frame_fraction`` 报出 86.7%，于是「几何已在画幅内，跳过对齐」这道
+    闸门正当地放行了——判据在垃圾数据上触发，产出看着合理。
+
+    判据
+    ----
+    用 SfM 稀疏点（``points3D.txt``，与位姿同系）当探针：两种解释各投一遍，
+    取「落在任一画幅内的点更多」的那个。真机实测：原生解释 95.6%、管线解释
+    几乎为 0，区分度极大。
+
+    转换公式（与 :func:`h3d.sfm_solve.parse_images` 一致）::
+
+        C = -R_co^T · tvec ;  R = -R_co
+
+    返回 metrics（``pose_convention`` / ``pose_probe_frac`` / ``pose_converted``），
+    没有可判定的数据时返回 ``pose_convention="unknown"`` 且**不动 images**——
+    判不出来就不猜（猜错方向比不改更糟：会把本来对的位姿改坏）。
+    """
+    pts = np.asarray(probe_points, dtype=np.float64) if probe_points is not None \
+        else np.zeros((0, 3))
+    if len(pts) > 20000:
+        pts = pts[np.random.default_rng(0).choice(len(pts), 20000, replace=False)]
+
+    def hit_frac(imgs) -> float:
+        """探针点落在**任一**相机画幅内的比例（与累积 in_frame 同口径）。"""
+        if len(pts) == 0 or not imgs:
+            return 0.0
+        hit = np.zeros(len(pts), dtype=bool)
+        for im in imgs:
+            cam = cameras[int(im["cam_id"])]
+            pc = (pts - im["t"]) @ im["R"].T
+            z = pc[:, 2]
+            with np.errstate(divide="ignore", invalid="ignore"):
+                u = cam["fx"] * pc[:, 0] / z + cam["cx"]
+                v = cam["fy"] * pc[:, 1] / z + cam["cy"]
+            hit |= ((z < -1e-9) & (u >= 0) & (u < cam["w"])
+                    & (v >= 0) & (v < cam["h"]))
+        return float(hit.mean())
+
+    as_is = hit_frac(images)
+    converted = [{"name": im["name"], "cam_id": im["cam_id"],
+                  "R": -np.asarray(im["R"], dtype=np.float64),
+                  "t": (-np.asarray(im["R"], dtype=np.float64).T
+                        @ np.asarray(im["t"], dtype=np.float64))}
+                 for im in images]
+    flipped = hit_frac(converted)
+
+    metrics = {"pose_probe_as_is": round(as_is, 4),
+               "pose_probe_converted": round(flipped, 4),
+               "pose_convention": "pipeline", "pose_converted": False}
+
+    if as_is >= min_frac or flipped >= min_frac:
+        # 谁投得上用谁；差距不明显时不换（保守：换错 = 把对的改坏）
+        if flipped > as_is * 2.0 and flipped >= min_frac:
+            images[:] = converted
+            metrics.update({"pose_convention": "colmap_raw",
+                            "pose_converted": True})
+            log.warning(
+                "位姿是**原生 COLMAP 格式**（R_co + tvec，前方 +Z），已就地转换"
+                "为管线约定（相机中心、前方 −Z）：稀疏点入画 %.1f%% → %.1f%%。"
+                "这类文件通常是旧版本或手工写出——重跑 S1 可得到规范格式。",
+                as_is * 100, flipped * 100)
+    else:
+        metrics["pose_convention"] = "unknown"
+        log.warning(
+            "位姿约定判不出来（两种解释下稀疏点入画都 <%d%%：原样 %.1f%% / "
+            "转换后 %.1f%%）——按原样使用。若纹理大面积落空，请核对 "
+            "capture_meta 的 R/t 约定或重跑 S1。",
+            int(min_frac * 100), as_is * 100, flipped * 100)
+    return metrics
 
 
 def in_frame_ratio(verts, images, cameras, sample: int = 20000,
@@ -832,6 +924,22 @@ def texture_mesh_from_photos(mesh, task_root: str, item_id: str, cfg,
     align_metrics = {}
     verts0 = np.asarray(mesh.vertices, dtype=np.float64).copy()  # 激光系
     sparse_pts = None
+    # ---- 位姿约定归一（2026-11-03）----
+    # 必须在**任何投影之前**。真机 capture_meta 是 2026-09-15「坐标系修复」前的
+    # 旧格式（R_co + tvec，前方 +Z），管线按「t=相机中心、前方 -Z」读它 →
+    # 30 台里 19 台一条纹素都投不上。**最阴的是它有产出**：剩下 11 台偶然投上
+    # 让 in_frame 报出 86.7%，于是下面「几何已在画幅内 → 跳过对齐」的闸门正当
+    # 地放行了——判据在垃圾数据上触发，结果看着合理（coverage 57%）。
+    # 判据用 SfM 稀疏点（与位姿同系）试两种解释，取投得上的那个。
+    sparse_txt = os.path.join(cfg.sfm_solve.workspace or
+                              os.path.join(task_root, "99_runs",
+                                           "sfm_tmp", item_id),
+                              "sparse", "0_txt")
+    pts3d_path = os.path.join(sparse_txt, "points3D.txt")
+    if os.path.exists(pts3d_path):
+        from h3d.sfm_solve import read_points3d
+        sparse_pts = read_points3d(pts3d_path)
+    pose_metrics = normalise_pose_convention(images, cameras, sparse_pts)
     # 投影级预检（2026-11-01，覆盖率 21%→57% 的那一刀）：
     # **几何本来就在相机画幅里就没必要对齐**。真机 `10_clean`（激光件 6.34）对
     # 30 台相机算 in_frame=86.7%——它已经与位姿同系；再跑一次对齐纯属净损失：
@@ -860,14 +968,6 @@ def texture_mesh_from_photos(mesh, task_root: str, item_id: str, cfg,
     elif cfg.photo_texture.icp_align and len(images) >= 2:
         from h3d.ctrl_points import (ControlPointError, align_two_stage,
                                      find_ctrl_file, load_control_points)
-        from h3d.sfm_solve import read_points3d
-        sparse_txt = os.path.join(cfg.sfm_solve.workspace or
-                                  os.path.join(task_root, "99_runs",
-                                               "sfm_tmp", item_id),
-                                  "sparse", "0_txt")
-        pts3d_path = os.path.join(sparse_txt, "points3D.txt")
-        if os.path.exists(pts3d_path):
-            sparse_pts = read_points3d(pts3d_path)
         ctrl_path = find_ctrl_file(task_root, item_id)
         # 同源预检（2026-10-31 真机 1.1.12）：几何与点云本来就同系同尺度时，
         # 任何相似变换都是净损失。实测跳过对齐 98.87%、合格的两阶段 93.15%、
@@ -1178,6 +1278,10 @@ def texture_mesh_from_photos(mesh, task_root: str, item_id: str, cfg,
         log.warning("顶点色 PLY 兜底导出失败（跳过）：%s", exc)
     metrics.update({
         "icp_align": align_metrics or {"status": "skipped"},
+        # 位姿约定（2026-11-03）：`pose_convention` 取 pipeline/colmap_raw/unknown，
+        # `pose_probe_*` 是两种解释下稀疏点的入画比例。三者一起看才知道「位姿到底
+        # 是不是被改过」——只看覆盖率看不出来（旧格式下仍有 11 台偶然投上）。
+        **pose_metrics,
         "n_outputs": len(outputs),
         "paint_mode": "photo",
         # formats = 实际导出格式（含自动补导）；requested = 配置原值。
