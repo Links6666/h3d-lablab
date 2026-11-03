@@ -37,6 +37,109 @@ def warn(cond, ok_msg, warn_msg):
         WARNS.append(warn_msg)
 
 
+#: ``accuracy.csv`` 里**数值可核对**的列 → (阶段, 指标键, 是否百分比)。
+#:
+#: 只收「manifest 里有唯一来源」的列。``中误差口径`` / ``判定`` / ``纹理达标``
+#: 是文字与派生结论，由口径逻辑决定，不是可独立复算的数——把它们也纳入核对，
+#: 等于把同一段判断逻辑抄两遍（r16 那类「手写副本」）。
+#:
+#: 列名一改这里就失效，所以 ``_accuracy_drift()`` 会在核验开始时对照
+#: ``ACCURACY_HEADERS`` 查一遍，名字对不上就报出来——**不静默跳过**。
+ACCURACY_NUMERIC_SOURCES = {
+    "中误差(mm)": ("M5", "rmse_mm", False),
+    "覆盖率": ("M5", "coverage", True),
+    "相对中误差(%对角线)": ("M5", "rmse_rel", True),
+    "纹理覆盖率": ("M4", "coverage_ratio", False),
+    "异常面积(岛内)": ("M5", "anomaly_ratio", True),
+    "图斑数": ("M5", "anomaly_regions", False),
+}
+
+
+def _cell_number(text, is_pct):
+    """把单元格读成数。``'61.5%'`` → 61.5（百分比列保留百分数口径）。
+
+    读不成数（``N/A`` / ``未筛查`` / ``未标定`` / 空）返回 ``None``——**那些是
+    合法状态，不是对不上**。把「没数」当「数错了」会逼着人去凑数。
+    """
+    t = (text or "").strip()
+    if t.endswith("%"):
+        t = t[:-1].strip()
+    t = t.replace(",", "")
+    if not t:
+        return None
+    try:
+        return float(t)
+    except ValueError:
+        return None
+
+
+def _cell_decimals(text):
+    """单元格自己显示了几位小数（``'61.5%'`` → 1，``'0.5865'`` → 4）。"""
+    t = (text or "").strip().rstrip("%")
+    return len(t.split(".")[1]) if "." in t else 0
+
+
+def _cell_tolerance(text):
+    """按单元格自己显示的小数位数给容差（半个最小刻度）。
+
+    报表写的是四舍五入后的值，拿全精度去比一定对不上——容差必须跟着**显示精度**
+    走，否则每一条都是假 FAIL。
+    """
+    return 0.5 * (10.0 ** -_cell_decimals(text)) + 1e-9
+
+
+def accuracy_value_mismatches(acc_files, stages):
+    """逐件逐列核对 ``accuracy.csv`` 的数值与 manifest。
+
+    返回 ``(mismatches, checked)``：``mismatches`` 是
+    ``[(件, 列名, 单元格原文, 期望值), ...]``，``checked`` 是实际比过的格子数。
+    """
+    mism, checked = [], 0
+    for f in acc_files:
+        item = os.path.basename(os.path.dirname(f))
+        with open(f, encoding="utf-8-sig") as fh:
+            rows = list(csv.reader(fh))
+        if len(rows) < 2:
+            continue
+        head = rows[0]
+        # 优先挑「第一列就是本件」的那行；没有就退回第一条数据行
+        row = next((r for r in rows[1:] if r and r[0] == item), rows[1])
+        if len(row) < len(head):
+            row = row + [""] * (len(head) - len(row))
+        for col, (stage, key, is_pct) in ACCURACY_NUMERIC_SOURCES.items():
+            if col not in head:
+                continue
+            val = _field(stages.get(f"{item}/{stage}") or {}, key)
+            if not isinstance(val, (int, float)) or isinstance(val, bool):
+                continue
+            idx = head.index(col)
+            got = _cell_number(row[idx], is_pct)
+            if got is None:
+                continue
+            expect = float(val) * (100.0 if is_pct else 1.0)
+            checked += 1
+            if abs(got - expect) > _cell_tolerance(row[idx]):
+                # 期望值按**单元格自己的精度**印出来，否则提示里写 62.11 而表里是
+                # 62.1%，读的人会以为两个数不一样、去找一个不存在的偏差。
+                mism.append((item, col, row[idx],
+                             f"{expect:.{_cell_decimals(row[idx])}f}"))
+    return mism, checked
+
+
+def accuracy_column_drift():
+    """核验脚本认识的列名，是否都还在 ``ACCURACY_HEADERS`` 里。
+
+    列名一改，数值核对就会**静默跳过**——那是最难发现的一类失效（r16 的根因
+    就是「改了产出的键、忘了改消费方」）。这里主动对一遍。
+    """
+    try:
+        from h3d.quality.gate import ACCURACY_HEADERS
+    except Exception:  # noqa: BLE001 - 取不到就不判（不因此让整次核验失败）
+        return []
+    known = {h for _k, h in ACCURACY_HEADERS}
+    return [c for c in ACCURACY_NUMERIC_SOURCES if c not in known]
+
+
 def meta_dir(root):
     """阶段元数据目录：新布局在 <root>/阶段成果/90_meta，旧布局在 <root>/90_meta。
 
@@ -328,6 +431,23 @@ def main(root):
             has_x3 = "anomaly" in head or "异常" in head
             warn(has_x3, "accuracy.csv 含 X3 异常列",
                  "accuracy.csv 里没有 X3 异常列 —— 检查阶段清单是否漏了 X3")
+
+        # ---- 数值核对：报表的数 vs manifest 的数（「三处自洽」的第三处）----
+        # 结构对得上不代表数对得上：这张表是论文直接引用的，手改一个数、或者
+        # 某次重算后 CSV 没重新生成，结构检查全都看不见。
+        drift = accuracy_column_drift()
+        if drift:
+            WARNS.append("核验脚本认识的列名已不在 ACCURACY_HEADERS 里"
+                         "（这些列的数值核对会被跳过）：" + "、".join(drift))
+        mism, checked = accuracy_value_mismatches(acc, st)
+        check(not mism,
+              f"accuracy.csv 的 {checked} 个数值与 manifest 一致",
+              "accuracy.csv 数值与 manifest 对不上：" + "；".join(
+                  f"{i} 的「{c}」写 {cell}，manifest 是 {exp}"
+                  for i, c, cell, exp in mism[:5]))
+        if not checked and not mism:
+            WARNS.append("没有任何数值可核对（CSV 全是 N/A/未筛查，"
+                         "或 manifest 缺对应指标）")
 
     if html:
         txt = open(html[0], encoding="utf-8", errors="ignore").read()
