@@ -1,0 +1,28 @@
+# 多件批交付核验配置（batch3：ping_a / ping_b / ping_c）
+# 用途：只验证「多件批 → 报表 → 交付」这条机制，不改产品默认值。
+# 质量门放宽的理由同 delivery_check.yaml：这三件是同一份激光几何复制出来的，
+# M5 本来就达不到 5mm/80%；M5 一 fail 按五态契约 M6 不执行，交付目录永远是空的。
+# 本文件只用于核验机制，不动产品默认阈值。
+project:
+  name: batch3_delivery
+  raw_dir: output/_build/batch3/阶段成果/00_raw
+  formats: [ply, obj, glb]
+
+sfm_solve:
+  enabled: false          # 纯激光件，没有照片也没有 capture_meta
+
+texture:
+  paint_mode: vertex      # 无照片 → 顶点色（photo 模式会 SKIPPED）
+  export_formats: [ply, obj, glb]
+
+quality:
+  enabled: true
+  coverage_threshold: 0.00     # 顶点色模式没有图集覆盖率，这里不设门
+  rmse_threshold_mm: 500.0
+
+report:
+  enabled: true
+
+runner:
+  workers: 1
+  manifest: output/_build/batch3/阶段成果/90_meta/delivery_manifest.json

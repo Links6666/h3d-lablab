@@ -58,6 +58,13 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("gui", help="启动图形界面（P1 核心版）")
     p_report.add_argument("-c", "--config", required=True, help="配置文件路径")
 
+    p_verify = sub.add_parser(
+        "verify", help="核验交付包：清单 vs 磁盘 vs 报表，三处是否自洽")
+    p_verify.add_argument("path", nargs="?", default=None,
+                          help="项目目录（省略时从 -c 的 raw_dir 推）")
+    p_verify.add_argument("-c", "--config", default=None,
+                          help="配置文件路径（用于推出项目根）")
+
     p_arch = sub.add_parser(
         "archive", help="文物档案（时相登记 / 存量迁移 / 状态查看）")
     arch_sub = p_arch.add_subparsers(dest="archive_cmd", required=True)
@@ -273,6 +280,52 @@ def resolve_report_dir(cfg) -> str:
     if out == "report":                 # 默认值 → 走布局的唯一出口
         return report_dir(base)
     return os.path.join(base, out)
+
+
+def project_root_from_config(cfg) -> str:
+    """从配置推出**项目根**（同时含 阶段成果/ 与 交付成果/ 的那一层）。
+
+    `raw_dir` 有两种形状：
+      旧布局 ``<root>/00_raw``          → 项目根 = raw_dir 的上一级
+      新布局 ``<root>/阶段成果/00_raw``  → 项目根 = 上两级
+    判据是「上一级是不是叫 阶段成果」（paths.py 的约定），不是「有没有 00_raw」——
+    两种都存在，用 00_raw 判会把新布局判成旧布局。
+    """
+    import os
+
+    raw = str(getattr(cfg.project, "raw_dir", "") or "")
+    if not raw:
+        return ""
+    stage = os.path.dirname(os.path.abspath(raw.rstrip("/\\")))
+    if os.path.basename(stage) == "阶段成果":
+        return os.path.dirname(stage)
+    return stage
+
+
+def _cmd_verify(args) -> int:
+    """交付核验：把 `h3d.delivery_verify` 暴露成一条命令。
+
+    规则只有一份（`h3d.delivery_verify`），仓库脚本 `scripts/verify_delivery.py`
+    是同一份的薄包装。历史上「阶段清单」被手抄成八份、四份漏了 X3——核验逻辑
+    不该重演同一件事。
+    """
+    import os
+
+    from h3d.core import load
+    from h3d.delivery_verify import main as verify_main
+
+    root = args.path
+    if not root:
+        cfg_path = getattr(args, "config", None)
+        if not cfg_path:
+            print("需要项目目录：h3d verify <项目目录>，或用 -c 指定配置",
+                  file=sys.stderr)
+            return 2
+        root = project_root_from_config(load(cfg_path))
+    if not os.path.isdir(root):
+        print(f"[E100] 目录不存在：{root}", file=sys.stderr)
+        return 1
+    return verify_main(root)
 
 
 def _cmd_report(cfg_path: str) -> int:
@@ -698,6 +751,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                                show_all=args.all, deep=args.deep)
         if args.command == "report":
             return _cmd_report(args.config)
+        if args.command == "verify":
+            return _cmd_verify(args)
         if args.command == "archive":
             return _cmd_archive(args)
         if args.command == "anomaly":
