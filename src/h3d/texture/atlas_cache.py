@@ -62,7 +62,8 @@ log = get_logger("texture.atlas_cache")
 # 比慢几分钟糟得多。
 # v4（2026-11-03）：metrics 新增 normal_flip_fraction（法线一致性诊断）。
 # 缓存会复用「首件 metrics」，旧缓存里没这个键 → 永远 None 且不报错。
-CACHE_VERSION = 4
+# v5（2026-11-03）：metrics 新增 camera_id_used（逐纹素胜出相机诊断）。
+CACHE_VERSION = 5
 
 _CACHE_REL = os.path.join("99_runs", "atlas_cache")
 

@@ -544,6 +544,7 @@ def project_photos_to_texture(mesh, uv, faces, images, cameras, photo_dir,
                               size=1024, top_k=3, samples_per_tri=4,
                               pad=3, occlusion=True, chunk=60_000,
                               want_mask=False, hole_fill_px: int = 0,
+                              want_camera_map: bool = False,
                               balance_exposure: bool = False):
     """照片投影纹理：UV 光栅化 → 逐纹素多视角加权采样 → 纹理图。
 
@@ -710,6 +711,10 @@ def project_photos_to_texture(mesh, uv, faces, images, cameras, photo_dir,
 
     image = np.zeros((size * size, 3), dtype=np.float32)
     painted = np.zeros(size * size, dtype=bool)
+    # 逐纹素「胜出相机」下标（-1 = 未着色）。诊断用：判断 X3 的图斑是不是
+    # 「同一个岛内、不同相机拼出来的色调台阶」——台阶跟着相机分界走，不跟岛
+    # 边界走（ADR-0016 的测量排除了岛边界假设）。只读诊断，不参与着色。
+    cam_map = np.zeros(size * size, dtype=np.int16) - 1
     # 去重口径：back_filled / occluded 是「相机×纹素」的事件计数（一台相机
     # 判一次就 +1），30 台相机能把 7 万纹素刷成 200 万。报表若直接拿它当
     # 纹素数，会读出「77.8% 靠反面填充」这种与事实相反的结论。这两个掩膜
@@ -808,6 +813,7 @@ def project_photos_to_texture(mesh, uv, faces, images, cameras, photo_dir,
         valid = wsum > 1e-9
         if not valid.any():
             continue
+        cam_map[flat[start:stop][valid]] = order[valid, 0].astype(np.int16)
         col = (cs * ws[:, :, None]).sum(axis=1) / np.maximum(wsum, 1e-9)[:, None]
         # 多视角一致性：同一纹素在 top-k 相机下的颜色离散度（越小越好）
         dev = np.sqrt(((cs - col[:, None, :]) ** 2).mean(axis=2))
@@ -883,6 +889,9 @@ def project_photos_to_texture(mesh, uv, faces, images, cameras, photo_dir,
     }
     return_mask = pre_mask
     img = np.clip(tmap, 0, 255).astype(np.uint8)
+    metrics["camera_id_used"] = int(len(np.unique(cam_map[cam_map >= 0])))
+    if want_camera_map:
+        return img, metrics, return_mask, cam_map.reshape(size, size)
     if want_mask:
         # 着色掩膜：M5 用它算精确"图集填充率"，不再靠亮度阈值猜
         # （暗色器物如青铜/漆木整片亮度 <20，用亮度当掩膜会把好纹理判成没贴图）
@@ -1245,8 +1254,9 @@ def texture_mesh_from_photos(mesh, task_root: str, item_id: str, cfg,
             reuse["texture_from"] = tex_meta.get("source_item")
             log.info("纹理图集复用：%s（来自 %s，跳过逐纹素采样与融合）",
                      item_id, reuse["texture_from"])
+    cam_map = None          # 命中纹理缓存时保持 None：诊断图不重算（缺图 ≠ 无台阶）
     if tex_hit is None:
-        image, metrics, painted = project_photos_to_texture(
+        image, metrics, painted, cam_map = project_photos_to_texture(
             new_mesh, uv, faces, images, cameras, photo_dir,
             size=cfg.photo_texture.texture_size,
             top_k=cfg.photo_texture.top_k,
@@ -1254,7 +1264,7 @@ def texture_mesh_from_photos(mesh, task_root: str, item_id: str, cfg,
             balance_exposure=bool(
                 getattr(cfg.photo_texture, "balance_exposure", False)),
             samples_per_tri=cfg.photo_texture.samples_per_tri,
-            want_mask=True)
+            want_mask=True, want_camera_map=True)
         if cfg.photo_texture.poisson_blend:
             # 泊松融合（P1 GPU 形态改造）：共轭梯度一次求解——4K <1s（实测
             # 0.82s，比 Jacobi 迭代快 33x）；失败回退多分辨率迭代。
@@ -1310,6 +1320,23 @@ def texture_mesh_from_photos(mesh, task_root: str, item_id: str, cfg,
         metrics["uv_layout_error"] = str(exc)[:200]
         log.warning("UV 布局落盘失败（图集将无法继承）：%s", exc)
     # 着色掩膜落盘：M5 以它判填充率（比亮度阈值可靠），同时也是排障依据
+    # 逐纹素「胜出相机」诊断图（2026-11-03，ADR-0016）：判 X3 图斑是不是
+    # 岛内相机拼接台阶。存 16 位 PNG：0 = 未着色，k+1 = 第 k 台相机胜出。
+    # 复用缓存时不重算，此时不写（缺图不等于"没有台阶"）。
+    if cam_map is not None:
+        # 落 99_runs/ 而不是交付目录：诊断产物不进交付包（同 _uv.npz 的定位）。
+        # 交付目录只放用户要的东西，多一张 4MB 的诊断图就是噪声。
+        _cmap_dir = os.path.join(task_root, "99_runs", "camera_id")
+        os.makedirs(_cmap_dir, exist_ok=True)
+        cmap_path = os.path.join(_cmap_dir, f"{item_id}_camera_id.png")
+        try:
+            from PIL import Image as _Image
+            _Image.fromarray((cam_map.astype(np.int32) + 1).astype(np.uint16)) \
+                .save(cmap_path)
+            metrics["camera_id_map"] = cmap_path
+        except Exception as exc:  # noqa: BLE001 - 诊断图写失败不影响交付
+            metrics["camera_id_map_error"] = str(exc)[:200]
+            log.warning("相机 id 诊断图写出失败（跳过）：%s", exc)
     mask_path = os.path.join(out_dir, f"{item_id}_L1.0_mask.png")
     try:
         from PIL import Image as _Image
