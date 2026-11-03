@@ -60,7 +60,9 @@ log = get_logger("texture.atlas_cache")
 # 参与采样的相机集合，图集内容随之变化；且 metrics 新增 pose_* 三键。
 # 旧缓存会把「用错位姿算出来的图集」当命中复用——那是**错误的纹理**，
 # 比慢几分钟糟得多。
-CACHE_VERSION = 3
+# v4（2026-11-03）：metrics 新增 normal_flip_fraction（法线一致性诊断）。
+# 缓存会复用「首件 metrics」，旧缓存里没这个键 → 永远 None 且不报错。
+CACHE_VERSION = 4
 
 _CACHE_REL = os.path.join("99_runs", "atlas_cache")
 

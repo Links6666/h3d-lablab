@@ -200,3 +200,50 @@ def test_register_run_sets_low_confidence_flag() -> None:
     if not m.get("low_confidence"):
         assert m["fitness"] >= 0.55, (
             "fitness 低于 0.55 却没有打 low_confidence 标记")
+
+
+class TestNormalConsistency:
+    """法线一致性要能自证：这是「低可见性到底怪法线还是怪对齐」的判据。
+
+    真机 2026-11-03：`normal_visible_fraction` 0.74 的告警说「网格法线局部方向
+    不一致」，实测相邻面反向只有 0.08%——**法线是全局一致的**，真正的原因是
+    对齐把几何放错了位置（投影到照片上一眼可见）。误诊会把排查引向错误方向。
+    """
+
+    def _plane(self, n=12, flip_patch=False):
+        import open3d as o3d
+        m = o3d.geometry.TriangleMesh.create_box(width=1.0, height=1.0,
+                                                 depth=0.02)
+        m.compute_vertex_normals()
+        return m
+
+    def test_consistent_mesh_scores_near_zero(self):
+        from h3d.geo_align import normal_consistency
+
+        r = normal_consistency(self._plane())
+        assert r["flip_fraction"] < 0.02, r
+        assert r["n_pairs"] > 0
+
+    def test_flipped_patch_is_detected(self):
+        """把一部分三角面反绕，一致性必须掉下来。"""
+        import numpy as np
+        import open3d as o3d
+
+        from h3d.geo_align import normal_consistency
+
+        m = o3d.geometry.TriangleMesh.create_box(1.0, 1.0, 1.0)
+        t = np.asarray(m.triangles).copy()
+        t[::3] = t[::3][:, ::-1]          # 每三个面翻一个
+        m.triangles = o3d.utility.Vector3iVector(t)
+        m.compute_vertex_normals()
+        r = normal_consistency(m)
+        assert r["flip_fraction"] > 0.05, r
+
+    def test_empty_mesh_does_not_crash(self):
+        import open3d as o3d
+
+        from h3d.geo_align import normal_consistency
+
+        r = normal_consistency(o3d.geometry.TriangleMesh())
+        assert r["flip_fraction"] is None
+        assert r["n_pairs"] == 0

@@ -584,11 +584,35 @@ def project_photos_to_texture(mesh, uv, faces, images, cameras, photo_dir,
     normal_visible_fraction = round(max(frac_fwd, frac_rev), 4)
     in_frame_fraction = round(float(
         (rev_in if normal_flipped else fwd_in).mean()), 4)
+    # 可见性偏低有两种病因，**必须分开报**（2026-11-03）：
+    #   (a) 法线局部翻面 —— 相邻面法线反向比例高；
+    #   (b) 几何对齐错了 —— 法线一致，但整个网格被搬到相机看不到的地方/尺度。
+    # 旧实现在这里直接断言「网格法线局部方向不一致」，真机实测 0.74 而相邻面
+    # 反向只有 0.08%：**误诊**。把 (b) 说成 (a) 会把排查引向法线，而真正该看的是
+    # 对齐——那条路我按这个告警查了一整轮才发现是几何搬歪了。
+    nrm_consistency = None
     if normal_visible_fraction < 0.90:
-        log.warning("仅 %.0f%% 纹素能被任一台相机正面看到（不足 90%%）——"
-                    "说明网格法线**局部方向不一致**（常见于碎块化重建），"
-                    "剩余部分将按 -n 且要求深度可见后补色",
-                    normal_visible_fraction * 100)
+        try:
+            from h3d.geo_align import normal_consistency
+            nrm_consistency = normal_consistency(mesh)
+        except Exception as exc:  # noqa: BLE001 - 诊断失败不影响主流程
+            log.debug("法线一致性诊断失败：%s", exc)
+        flip = (nrm_consistency or {}).get("flip_fraction")
+        if flip is None:
+            log.warning("仅 %.0f%% 纹素能被任一台相机正面看到（不足 90%%），"
+                        "且法线一致性无法判定——请检查对齐结果与采集覆盖",
+                        normal_visible_fraction * 100)
+        elif flip >= 0.05:
+            log.warning("仅 %.0f%% 纹素能被任一台相机正面看到（不足 90%%），"
+                        "且相邻面法线反向 %.1f%%——**法线局部翻面**，"
+                        "请检查 M1/M3 的法线朝向；剩余部分将按 -n 且要求深度"
+                        "可见后补色", normal_visible_fraction * 100, flip * 100)
+        else:
+            log.warning("仅 %.0f%% 纹素能被任一台相机正面看到（不足 90%%），"
+                        "但相邻面法线反向只有 %.2f%%——**法线是好的**，问题在"
+                        "几何与位姿的对齐（位置/尺度），请核对 M4 的 icp_align "
+                        "结果；把成品网格投到照片上看一眼最快",
+                        normal_visible_fraction * 100, flip * 100)
     elif in_frame_fraction < 0.85:
         log.warning("法线朝向正常（%.0f%% 可正面看到）但只有 %.0f%% 纹素"
                     "落在任一图像画幅内——问题在**几何与位姿的尺度/平移对齐**，"
@@ -774,6 +798,9 @@ def project_photos_to_texture(mesh, uv, faces, images, cameras, photo_dir,
         "occlusion": bool(occlusion),
         "normal_flipped": normal_flipped,
         "normal_visible_fraction": normal_visible_fraction,
+        # 相邻面法线反向比例。与上一行配对读：可见性低时，它高=法线坏，
+        # 它低=对齐坏。None 表示没量（可见性正常时不算，省时间）。
+        "normal_flip_fraction": (nrm_consistency or {}).get("flip_fraction"),
         "in_frame_fraction": in_frame_fraction,
         "back_facing_filled": int(back_filled),
         "occlusion_rejected": int(occluded),

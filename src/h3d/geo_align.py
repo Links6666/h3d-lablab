@@ -70,6 +70,51 @@ def _bbox_diag(points: np.ndarray) -> float:
     return float(np.linalg.norm(points.max(axis=0) - points.min(axis=0)))
 
 
+def normal_consistency(mesh, max_pairs: int = 200000,
+                       seed: int = 0) -> dict:
+    """网格法线的**局部**一致性：相邻三角面法线反向的比例。
+
+    为什么要单独一个量（2026-11-03）
+    --------------------------------
+    M4 报 `normal_visible_fraction` 偏低时，日志断言「网格法线**局部方向不一致**
+    （常见于碎块化重建）」。真机实测：可见性 0.74，而相邻面反向只有 **0.08%**
+    ——法线是全局一致的，真正的原因是对齐把几何放错了位置（投影到照片上，
+    红色点云只盖住了头部、整体偏小）。
+
+    把「法线坏了」和「位置坏了」混成一句话，会把排查引向错误方向。这个量给出
+    可判据的区分：`flip_fraction` 高才是法线问题；低就是对齐/覆盖问题。
+
+    实现：共享一条边的两面配对（无向边），比较法线点积。配对数上限
+    ``max_pairs``，超出则随机抽样——这是统计量，不需要全量。
+
+    返回 ``{"flip_fraction": float|None, "n_pairs": int}``；空网格/无邻接时
+    ``flip_fraction`` 为 ``None``（不是 0——「没量到」和「量到 0」必须分开）。
+    """
+    verts = np.asarray(mesh.vertices, dtype=np.float64)
+    tris = np.asarray(mesh.triangles)
+    if len(verts) == 0 or len(tris) < 2:
+        return {"flip_fraction": None, "n_pairs": 0}
+    a, b, c = verts[tris[:, 0]], verts[tris[:, 1]], verts[tris[:, 2]]
+    fn = np.cross(b - a, c - a)
+    fn /= np.maximum(np.linalg.norm(fn, axis=1, keepdims=True), 1e-12)
+
+    e = np.vstack([tris[:, [0, 1]], tris[:, [1, 2]], tris[:, [2, 0]]])
+    e = np.sort(e, axis=1)
+    fid = np.tile(np.arange(len(tris)), 3)
+    order = np.lexsort((e[:, 1], e[:, 0]))
+    e, fid = e[order], fid[order]
+    same = np.all(e[1:] == e[:-1], axis=1)
+    i, j = fid[:-1][same], fid[1:][same]
+    if len(i) == 0:
+        return {"flip_fraction": None, "n_pairs": 0}
+    if len(i) > max_pairs:
+        idx = np.random.default_rng(seed).choice(len(i), max_pairs, replace=False)
+        i, j = i[idx], j[idx]
+    dot = (fn[i] * fn[j]).sum(axis=1)
+    return {"flip_fraction": round(float((dot < 0).mean()), 4),
+            "n_pairs": int(len(i))}
+
+
 def _robust_diag(points: np.ndarray, q: float = 0.99) -> float:
     """分位包围盒对角线（去掉两端各 (1-q)/2 的离群点）。
 
