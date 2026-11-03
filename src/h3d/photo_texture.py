@@ -1063,17 +1063,34 @@ def texture_mesh_from_photos(mesh, task_root: str, item_id: str, cfg,
                         "already_in_frame（几何已在相机画幅内，无需对齐）")},
             None)
     elif cfg.photo_texture.icp_align and len(images) >= 2:
+        # ---- 候选**无条件**生成，再统一择优（2026-11-03）--------------------
+        # 旧结构是「控制点优先、失败才回退自动 ICP」——于是「磁盘上有没有文件」
+        # 决定了走哪条路：一次成功的 ICP 会把控制点导出到 00_ctrl/*.json，**下次
+        # 运行就走控制点那条**，而它实测解出 90° 旋转错。同一份输入连跑三次
+        # normal_visible 得 0.96 / 0.69 / 0.58，就是这么来的（真机 control_points
+        # .json 的 mtime 与其中一次 ICP 运行对得上，只有 3 个点）。
+        #
+        # 现在两条都算（各几秒），按 visible_score 取优；闸门结论只作指标记录，
+        # 不再一票否决——否决权交给「对齐后到底能不能被相机看到」。
+        # 所有候选都从**同一份原始几何** verts0 出发，杜绝「上游改过 mesh」。
+        import open3d as _o3d_pick
+
         from h3d.ctrl_points import (ControlPointError, align_two_stage,
                                      find_ctrl_file, load_control_points)
-        ctrl_path = find_ctrl_file(task_root, item_id)
-        # 同源预检（2026-10-31 真机 1.1.12）：几何与点云本来就同系同尺度时，
-        # 任何相似变换都是净损失。实测跳过对齐 98.87%、合格的两阶段 93.15%、
-        # 自动 ICP 57.5%——所以先问"要不要对齐"，再问"怎么对齐"。
+        from h3d.geo_align import align_points_to_mesh, already_aligned
+
+        tris_full = np.asarray(mesh.triangles).copy()
+
+        def _mk_mesh(v):
+            mm = _o3d_pick.geometry.TriangleMesh()
+            mm.vertices = _o3d_pick.utility.Vector3dVector(
+                np.asarray(v, dtype=np.float64))
+            mm.triangles = _o3d_pick.utility.Vector3iVector(tris_full)
+            return mm
+
         skip_align = False
         if sparse_pts is not None and len(sparse_pts) >= 8:
-            from h3d.geo_align import already_aligned
-            pre = already_aligned(np.asarray(mesh.vertices, dtype=np.float64),
-                                  sparse_pts)
+            pre = already_aligned(verts0, sparse_pts)
             if pre["aligned"]:
                 skip_align = True
                 align_metrics = apply_align_status(
@@ -1084,133 +1101,86 @@ def texture_mesh_from_photos(mesh, task_root: str, item_id: str, cfg,
                 log.info("照片纹理对齐跳过：几何已与 SfM 点云同系"
                          "（中位距离 %.2f%% 对角线，阈值 %.0f%%）",
                          pre["norm_median"] * 100, pre["tolerance"] * 100)
-        if ctrl_path and sparse_pts is not None and not skip_align:
-            try:
-                controls = load_control_points(ctrl_path)
-                images_map = {im["name"]: im for im in images}
-                _before_ts = in_frame_ratio(verts0, images, cameras)
-                mesh, align_metrics = align_two_stage(
-                    mesh, controls, images_map, cameras, sparse_pts)
-                _after_ts = in_frame_ratio(
-                    np.asarray(mesh.vertices, dtype=np.float64), images, cameras)
-                align_metrics["in_frame_before"] = round(_before_ts, 4)
-                align_metrics["in_frame_after"] = round(_after_ts, 4)
-                # 控制点也可能点错（3D 坐标填反、点到相邻地物）。同一条验收：
-                # 投影覆盖掉一半以上就是把几何搬出了相机视野，回退恒等。
-                if alignment_regressed(_before_ts, _after_ts):
-                    import open3d as _o3d_ts
-                    mesh.vertices = _o3d_ts.utility.Vector3dVector(verts0)
-                    mesh.compute_vertex_normals()
-                    align_metrics["reject_reason"] = (
-                        f"控制点对齐后投影覆盖 {_before_ts:.1%} -> {_after_ts:.1%}"
-                        f"（几何被搬出相机视野），已回退原坐标系")
-                    align_metrics = apply_align_status(align_metrics, False)
-                    log.warning("照片纹理两阶段对齐被判无效，回退原坐标系："
-                                "投影覆盖 %.1f%% -> %.1f%%",
-                                _before_ts * 100, _after_ts * 100)
-                else:
-                    # ---- 两条路径都跑，按「对齐后能不能被正面看到」取优 ----
-                    # 2026-11-03：控制点那条在真机上解出了约 90° 的旋转错，而
-                    # `in_frame` 从 0 报成 1.0 照样放行——**它区分不了 0° 和
-                    # 90°**：对齐前激光系里根本没有相机，任何把物体搬进视野的
-                    # 解都会是 1.0。「能被正面看到的面比例」才有区分度
-                    # （实测：自动 ICP 0.98 / 控制点 0.69）。
-                    import open3d as _o3d_c
-                    from h3d.geo_align import align_points_to_mesh
-                    tris_a = np.asarray(mesh.triangles)
-                    cands = [("control_points",
-                              np.asarray(mesh.vertices, dtype=np.float64),
-                              tris_a, dict(align_metrics))]
-                    try:
-                        base = _o3d_c.geometry.TriangleMesh()
-                        base.vertices = _o3d_c.utility.Vector3dVector(verts0)
-                        base.triangles = _o3d_c.utility.Vector3iVector(tris_a)
-                        s_i, R_i, T_i, m_i = align_points_to_mesh(
-                            sparse_pts, base)
-                        if m_i.get("accepted") is not False:
-                            v_i = (R_i.T @ (verts0 - T_i).T).T / s_i
-                            m_i = dict(m_i)
-                            m_i["in_frame_before"] = round(_before_ts, 4)
-                            cands.append(("auto_icp", v_i, tris_a, m_i))
-                        else:
-                            log.info("自动 ICP 候选被质量闸门拒绝，不参与择优：%s",
-                                     m_i.get("reject_reason", ""))
-                    except Exception as exc:  # noqa: BLE001 - 候选失败不影响主路径
-                        log.debug("自动 ICP 候选生成失败（不参与择优）：%s", exc)
-                    _picked, _pverts, align_metrics = choose_alignment(
-                        cands, images, cameras)
-                    mesh.vertices = _o3d_c.utility.Vector3dVector(
-                        np.asarray(_pverts, dtype=np.float64).copy())
-                    mesh.triangles = _o3d_c.utility.Vector3iVector(tris_a)
-                    mesh.compute_vertex_normals()
-                    align_metrics = apply_align_status(align_metrics, True)
-                    log.info("照片纹理对齐（择优=%s）：%s", _picked, align_metrics)
-            except ControlPointError as exc:
-                # 清空 method：失败必须回退自动 ICP（否则对齐被跳过）
-                align_metrics = {"error": str(exc)}
-                log.warning("控制点对齐失败，回退自动 ICP：%s", exc)
-        if "method" not in align_metrics and not skip_align:
-            from h3d.geo_align import align_points_to_mesh
-            import open3d as _o3d
+
+        if not skip_align:
+            cands = [("identity", verts0.copy(), tris_full,
+                      {"method": "none", "reason": "未对齐（基准候选）"})]
+            gate_note = {}
+
+            ctrl_path = find_ctrl_file(task_root, item_id)
+            if ctrl_path and sparse_pts is not None:
+                try:
+                    controls = load_control_points(ctrl_path)
+                    images_map = {im["name"]: im for im in images}
+                    _before_ts = in_frame_ratio(verts0, images, cameras)
+                    cp_mesh, m_cp = align_two_stage(
+                        _mk_mesh(verts0), controls, images_map, cameras,
+                        sparse_pts)
+                    v_cp = np.asarray(cp_mesh.vertices, dtype=np.float64)
+                    m_cp = dict(m_cp)
+                    m_cp["in_frame_before"] = round(_before_ts, 4)
+                    m_cp["in_frame_after"] = round(
+                        in_frame_ratio(v_cp, images, cameras), 4)
+                    cands.append(("control_points", v_cp, tris_full, m_cp))
+                except ControlPointError as exc:
+                    gate_note["control_points_error"] = str(exc)
+                    log.warning("控制点对齐失败（不参与择优）：%s", exc)
+                except Exception as exc:  # noqa: BLE001
+                    gate_note["control_points_error"] = str(exc)
+                    log.warning("控制点对齐异常（不参与择优）：%s", exc)
+
             if sparse_pts is not None and len(sparse_pts) >= 4:
-                s, R, T, align_metrics = align_points_to_mesh(
-                    sparse_pts, mesh)
-                verts = np.asarray(mesh.vertices, dtype=np.float64)
-                # 对齐质量闸门（2026-10-31 真机 1.1.12）：自动 ICP 会把网格搬到
-                # 一个"自洽但错误"的位置（包围盒剩 2.03 倍、几何离点云 50 倍），
-                # 肉眼看不出来，只在 M4 指标上表现为岛内着色率从 98.9% 掉到
-                # 57.5%。判为无效时**保持原坐标系不动**——位姿与几何哪怕都错，
-                # 只要还"相对一致"就能出纹理；搬错则必然大面积投到图像外。
-                if align_metrics.get("accepted") is False:
-                    log.warning(
-                        "照片纹理自动 ICP 对齐被判无效，保持原坐标系：%s",
-                        align_metrics.get("reject_reason", ""))
-                    align_metrics = apply_align_status(align_metrics, False)
+                s_i, R_i, T_i, m_i = align_points_to_mesh(
+                    sparse_pts, _mk_mesh(verts0))
+                m_i = dict(m_i)
+                if m_i.get("accepted") is False:
+                    # 闸门判无效时不把它的结果当候选（返回的是恒等变换，等同于
+                    # identity），但把理由留下来——它是"为什么没有 ICP 候选"。
+                    gate_note["auto_icp_reject"] = m_i.get("reject_reason", "")
                 else:
-                    new_verts = (R.T @ (verts - T).T).T / s
-                    # 投影级验收（ADR-0009 D3）：几何**之间**相似度合格 ≠ 几何
-                    # 还在**相机视野里**。真机 2026-11-01 实测：对齐后 coverage
-                    # 21.22% -> 1.16%、用上的相机 20 台 -> 3 台，而上面那个
-                    # accepted 闸门判「通过」。判据用相对值——拒绝 = 保持原坐标系
-                    # = 等于没做对齐，永远是安全侧。
-                    _before = in_frame_ratio(verts0, images, cameras)
-                    _after = in_frame_ratio(new_verts, images, cameras)
-                    align_metrics["in_frame_before"] = round(_before, 4)
-                    align_metrics["in_frame_after"] = round(_after, 4)
-                    applied = not alignment_regressed(_before, _after)
-                    if applied:
-                        mesh.vertices = _o3d.utility.Vector3dVector(new_verts)
-                        mesh.compute_vertex_normals()
-                        align_metrics = apply_align_status(align_metrics, True)
-                        log.info("照片纹理自动 ICP 对齐：%s", align_metrics)
-                    else:
-                        align_metrics["reject_reason"] = (
-                            f"对齐后投影覆盖 {_before:.1%} -> {_after:.1%}"
-                            f"（几何被搬出相机视野）")
-                        align_metrics = apply_align_status(align_metrics, False)
-                        log.warning(
-                            "照片纹理自动 ICP 对齐被判无效，保持原坐标系："
-                            "投影覆盖 %.1f%% -> %.1f%%（相机数 %d）",
-                            _before * 100, _after * 100, len(images))
-                    # 自动导出有效控制点（创新点 2 实证）：激光系顶点 + 真实
-                    # 照片 uv（对齐后投影）。占位/无效控制点时启用，下次运行
-                    # 两阶段对齐使用（不再回退 ICP）。
-                    # **只在这次对齐通过质量判定后导出**：把一次错位的对齐
-                    # 固化成控制点，会让后续每一次运行都从错误答案出发。
-                    # 2026-11-01：加 `applied` —— 投影验收判无效时同样不能导出。
-                    if applied:
-                        try:
-                            from h3d.ctrl_auto import export_control_points_from_align
-                            out_ctrl = os.path.join(task_root, "00_ctrl", item_id,
-                                                    "control_points.json")
-                            res = export_control_points_from_align(
-                                verts0, new_verts, images, cameras, out_ctrl, n=8)
-                            if res:
-                                align_metrics["auto_control_points"] = res["n_points"]
-                                log.info("自动控制点导出：%d 点 -> %s",
-                                         res["n_points"], out_ctrl)
-                        except Exception as exc:  # noqa: BLE001
-                            log.warning("自动控制点导出失败（跳过）：%s", exc)
+                    v_i = (R_i.T @ (verts0 - T_i).T).T / s_i
+                    m_i["in_frame_before"] = round(
+                        in_frame_ratio(verts0, images, cameras), 4)
+                    m_i["in_frame_after"] = round(
+                        in_frame_ratio(v_i, images, cameras), 4)
+                    cands.append(("auto_icp", v_i, tris_full, m_i))
+
+            _picked, _pverts, align_metrics = choose_alignment(
+                cands, images, cameras)
+            align_metrics.update(gate_note)
+            mesh.vertices = _o3d_pick.utility.Vector3dVector(
+                np.asarray(_pverts, dtype=np.float64).copy())
+            mesh.triangles = _o3d_pick.utility.Vector3iVector(tris_full)
+            mesh.compute_vertex_normals()
+
+            if _picked == "identity":
+                align_metrics["reject_reason"] = (
+                    "所有对齐候选都不如不对齐（可见性未提升），保持原坐标系")
+                align_metrics = apply_align_status(align_metrics, False)
+                log.warning("照片纹理：对齐候选全部落选，保持原坐标系（%s）",
+                            align_metrics.get("align_candidates"))
+            else:
+                align_metrics = apply_align_status(align_metrics, True)
+                log.info("照片纹理对齐（择优=%s）：%s", _picked, align_metrics)
+
+            # 自动导出有效控制点（创新点 2 实证）：激光系顶点 + 真实照片 uv。
+            # **只在择优选中 auto_icp 时导出**：把控制点那条自己的结果再导出成
+            # 控制点，等于让错误答案自我强化（2026-11-03 就是这么把一个 90° 错
+            # 解固化下来的）。
+            if _picked == "auto_icp":
+                try:
+                    from h3d.ctrl_auto import export_control_points_from_align
+                    out_ctrl = os.path.join(task_root, "00_ctrl", item_id,
+                                            "control_points.json")
+                    res = export_control_points_from_align(
+                        verts0, np.asarray(_pverts, dtype=np.float64),
+                        images, cameras, out_ctrl, n=8)
+                    if res:
+                        align_metrics["auto_control_points"] = res["n_points"]
+                        log.info("自动控制点导出：%d 点 -> %s",
+                                 res["n_points"], out_ctrl)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("自动控制点导出失败（跳过）：%s", exc)
 
     # UV 展开 + 照片投影 + 泊松融合 + 导出
     #
