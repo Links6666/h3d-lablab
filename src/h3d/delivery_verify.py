@@ -52,6 +52,10 @@ ACCURACY_NUMERIC_SOURCES = {
     "纹理覆盖率": ("M4", "coverage_ratio", False),
     "异常面积(岛内)": ("M5", "anomaly_ratio", True),
     "图斑数": ("M5", "anomaly_regions", False),
+    # 纹理两列直接来自 M5 的质检记录（`_fmt_tex` 只做 round(4)）。
+    # 顶点色项目这两列是 `N/A` → 读不成数 → 自动跳过，不会误报。
+    "纹理清晰度": ("M5", "texture_sharpness", False),
+    "纹理接缝": ("M5", "texture_seam", False),
 }
 
 

@@ -48,7 +48,8 @@ ACC_HEADERS = [
 
 
 def add_accuracy_numbers(root, items, coverage=0.6148, rmse_mm=87.1479,
-                         texture_coverage=0.5865, anomaly=None):
+                         texture_coverage=0.5865, anomaly=None,
+                         sharpness=79.9149, seam=1.9684):
     """给每件补 M5 指标，并写一份**与 manifest 一致**的 accuracy.csv。
 
     调用后 `verify` 应报 `PASS 23 / WARN 0 / FAIL 0`（若 manifest 其余部分
@@ -62,7 +63,8 @@ def add_accuracy_numbers(root, items, coverage=0.6148, rmse_mm=87.1479,
         man["stages"][f"{item}/M5"] = {
             "status": "done", "outputs": [],
             "coverage": coverage, "rmse_mm": rmse_mm, "rmse_rel": 0.012845,
-            "anomaly_ratio": anomaly}
+            "anomaly_ratio": anomaly,
+            "texture_sharpness": sharpness, "texture_seam": seam}
         cells = {
             "文物编号": item,
             "中误差(mm)": rmse_mm,
@@ -72,6 +74,8 @@ def add_accuracy_numbers(root, items, coverage=0.6148, rmse_mm=87.1479,
             "异常面积(岛内)": anom_cell,
             "图斑数": "未筛查" if anomaly is None else "7",
             "纹理覆盖率": texture_coverage,
+            "纹理清晰度": sharpness,
+            "纹理接缝": seam,
             "判定": "pass",
         }
         with open(os.path.join(root, "80_export", item, "accuracy.csv"),
