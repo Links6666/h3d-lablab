@@ -30,7 +30,6 @@ from .mesh_io import (
     MESH_WRITE_EXT,
     SAMPLE_SEED,
     load_mesh,
-    seed_sampling,
     make_mesh,
     sample_surface,
     save_mesh,
@@ -51,6 +50,5 @@ __all__ = [
     "make_mesh",
     # 可复现采样
     "sample_surface",
-    "seed_sampling",
     "SAMPLE_SEED",
 ]

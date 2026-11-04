@@ -146,18 +146,6 @@ def make_mesh(vertices, triangles, normals=None):
 SAMPLE_SEED = 20261104
 
 
-def seed_sampling(seed: int = SAMPLE_SEED) -> None:
-    """固定 Open3D 的全局随机源（供「先定种子、再自己调采样」的老调用点用）。
-
-    新代码应该用 :func:`sample_surface`——它把「定种子 + 采样」绑在一起，
-    没法只做一半。这个函数存在只是为了不毁掉已经在用的调用点（对齐精化）。
-    """
-    try:
-        _o3d().utility.random.seed(int(seed))
-    except Exception:  # noqa: BLE001 - 不影响主流程
-        pass
-
-
 def sample_surface(mesh, n_samples: int, seed: int = SAMPLE_SEED):
     """**可复现的**网格表面均匀采样，返回 ``PointCloud``。
 
@@ -200,6 +188,5 @@ __all__ = [
     "save_mesh",
     "make_mesh",
     "sample_surface",
-    "seed_sampling",
     "SAMPLE_SEED",
 ]

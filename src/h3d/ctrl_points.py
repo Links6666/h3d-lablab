@@ -333,7 +333,8 @@ def refine_mesh_to_points(mesh, src_points: np.ndarray,
     from scipy.spatial import cKDTree
 
     import open3d as o3d
-    from h3d.geo_align import _seed_random, umeyama_similarity
+    from h3d.geo_align import umeyama_similarity
+    from h3d.io import sample_surface
 
     verts = np.asarray(mesh.vertices, dtype=np.float64)
     new_verts = verts.copy()
@@ -341,12 +342,12 @@ def refine_mesh_to_points(mesh, src_points: np.ndarray,
     s_applied = 1.0
     lo, hi = scale_band
     for _it in range(iterations):
-        # 每轮重定种子，保证同一输入同一结果
-        _seed_random(_REFINE_SEED + _it)
         work = o3d.geometry.TriangleMesh()
         work.vertices = o3d.utility.Vector3dVector(new_verts)
         work.triangles = mesh.triangles
-        surf = work.sample_points_uniformly(n_samples)
+        # 每轮换一个种子但**同输入同结果**：种子直接交给采样入口
+        # （``sample_surface`` 把「定种子 + 采样」绑死，中间插不进别的调用）
+        surf = sample_surface(work, n_samples, seed=_REFINE_SEED + _it)
         surf_pts = np.asarray(surf.points, dtype=np.float64)
         tree = cKDTree(src_points)
         d, idx = tree.query(surf_pts, k=1)

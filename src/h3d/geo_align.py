@@ -19,6 +19,7 @@ from typing import Optional
 import numpy as np
 
 from h3d.core import get_logger
+from h3d.io import sample_surface
 
 log = get_logger("geo_align")
 
@@ -39,19 +40,6 @@ _MIN_IMPROVE = 0.80
 #: 中位距离本身已小于网格对角线的 2% 时，视为本来就贴合（同源几何），
 #: 此时即使没有改善也接受——否则同源数据会被误拒，白丢一次对齐。
 _GOOD_NORM = 0.02
-
-
-def _seed_random(seed: int) -> None:
-    """固定 Open3D 全局随机种子（让网格表面采样可复现）。
-
-    实现已下沉到 :func:`h3d.io.seed_sampling` —— 「怎么让采样可复现」只该有
-    一个答案。原来这里有第二份实现（2026-11-03 加的），而 M5 的覆盖率/中误差
-    因为没走它，每次重跑都在漂（<1%，见 ADR-0020）。副本收敛后这种「同一件事
-    两个入口」的漏修会少一类。
-    """
-    from h3d.io import seed_sampling
-
-    seed_sampling(seed)
 
 
 def umeyama_similarity(src: np.ndarray, dst: np.ndarray):
@@ -167,7 +155,11 @@ def alignment_quality(src_before: np.ndarray, src_after: np.ndarray,
     diag_src = _robust_diag(src_after)
     ratio = diag_src / diag_mesh if diag_mesh > 0 else float("inf")
 
-    _seed_random(_SAMPLE_SEED)
+    # 注意：这里的 ``_sample_surface`` 是 ``np.linspace`` 索引抽样，**不碰
+    # Open3D 的随机源**，所以不需要（也不该）在这里设种子。原来那行
+    # ``_seed_random(_SAMPLE_SEED)`` 是上一版实现的遗留，它让读者以为
+    # 「这段代码依赖随机采样」——而实际换多少次种子，结果一字不差。
+    #
     # 采样点足够密才能当「表面」用：n_samples=3000 时最近邻距离本身就有
     # 网格平均边长的量级，会把「没对齐」误判成「对齐得还行」。
     tree = cKDTree(_sample_surface(mesh_verts, ref_samples))
@@ -262,9 +254,9 @@ def _icp_similarity_once(mesh, centred: np.ndarray, R0: np.ndarray,
     s, R, T = 1.0, np.asarray(R0, dtype=np.float64).copy(), M - R0 @ M
     n_keep = 0
     for _it in range(iterations):
-        _seed_random(_SAMPLE_SEED + _it)
-        surf = np.asarray(mesh.sample_points_uniformly(n_samples).points,
-                          dtype=np.float64)
+        surf = np.asarray(
+            sample_surface(mesh, n_samples, seed=_SAMPLE_SEED + _it).points,
+            dtype=np.float64)
         tree = cKDTree(surf)
         d, idx = tree.query(work, k=1)
         keep = d < np.percentile(d, inlier_percentile) * 2.0
@@ -279,9 +271,9 @@ def _icp_similarity_once(mesh, centred: np.ndarray, R0: np.ndarray,
         s = s * ds
         R = dR @ R
         T = ds * (dR @ T) + dT
-    _seed_random(_SAMPLE_SEED)
-    surf_final = np.asarray(mesh.sample_points_uniformly(n_samples).points,
-                            dtype=np.float64)
+    surf_final = np.asarray(
+        sample_surface(mesh, n_samples, seed=_SAMPLE_SEED).points,
+        dtype=np.float64)
     d_final, _ = cKDTree(surf_final).query(work, k=1)
     rmse = float(np.sqrt(np.mean(np.sort(d_final)[:max(n_keep, 1)] ** 2)))
     return {"s": s, "R": R, "T": T, "work": work, "rmse": rmse,
@@ -316,8 +308,7 @@ def align_points_to_mesh(src_points: np.ndarray, mesh,
     # 粗对齐初始化：质心对齐 + **鲁棒**包围盒尺度比（SfM 任意尺度，最近邻对
     # 尺度敏感；COLMAP 飞点会把 min/max 撑大数倍，必须用分位包围盒）
     # 固定采样种子：保证同一输入多次运行结果一致（可复现性，实机 2026-09-15）
-    _seed_random(_SAMPLE_SEED)
-    surface0 = mesh.sample_points_uniformly(n_samples)
+    surface0 = sample_surface(mesh, n_samples, seed=_SAMPLE_SEED)
     surf0 = np.asarray(surface0.points, dtype=np.float64)
     s0 = _robust_diag(surf0) / max(_robust_diag(src), 1e-9)
     C = src.mean(axis=0)                 # 源质心

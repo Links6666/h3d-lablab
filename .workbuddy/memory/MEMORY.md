@@ -11,7 +11,7 @@
 - `.venv_lab\Scripts\python.exe`（PySide6 6.11 / open3d 0.19 / trimesh / cv2 5.0）；colmap
   `E:\colmap\colmap-x64-windows-cuda\bin\colmap` 4.1.1；打包 `h3d_gui.spec`（onefile+launcher），
   打包版批量 `H3D.exe --batch <cfg>`（**不带 `-c`**）；Inno `D:\h3d_relic_test\InnoSetup7\ISCC.exe`。
-  当前 **1.1.20（r26）**，测试 1432 全绿（≈2.5 min），旧发行版留最近 3 个。
+  当前 **1.1.21（r27）**，测试 1435 全绿（≈2.5 min），旧发行版留最近 3 个。
   `git commit` 要带 `-c user.name=". Link" -c user.email=1530800288@qq.com`
   （仓库里 `user.name` 是空的，历史提交靠环境变量）。
 
@@ -91,7 +91,11 @@
 - `metric_units_reason` 必须与布尔一起落盘（manifest + `qc_metrics.json`）：只落
   布尔的话，「机器猜的 auto」与「人声明的 photogrammetry」事后长得一模一样，而
   两者可信度差一个量级。判门失败时 manifest 不写，`qc_metrics.json` 是唯一留档。
-- **表面采样一律走 `h3d.io.sample_surface(mesh, n, seed)`**：
+- **表面采样一律走 `h3d.io.sample_surface(mesh, n, seed)`，有守卫拦着**
+  （`tests/test_sampling_single_source.py`：除 `io/mesh_io.py` 外源码不许出现
+  `sample_points_uniformly(` / `utility.random.seed`）。r27 扫出 4 处，其中
+  `alignment_quality` 那行 `_seed_random` 是**空的**（那里是 linspace 索引抽样，
+  不碰 RNG）——「看起来有约束、实际没有」比缺失更糟。
   `mesh.sample_points_uniformly` **没有 seed 参数**（Open3D 0.19），同一输入两次
   结果不同。真机 M5 中误差 86.78 / 87.42 / 87.01（三次同一份数据）。
   **<1% 的漂移最危险**——不触发任何断言，又让两天前的报表对不上。
