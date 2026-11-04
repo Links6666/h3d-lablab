@@ -11,15 +11,14 @@
 - `.venv_lab\Scripts\python.exe`（PySide6 6.11 / open3d 0.19 / trimesh / cv2 5.0）；colmap
   `E:\colmap\colmap-x64-windows-cuda\bin\colmap` 4.1.1；打包 `h3d_gui.spec`（onefile+launcher），
   打包版批量 `H3D.exe --batch <cfg>`（**不带 `-c`**）；Inno `D:\h3d_relic_test\InnoSetup7\ISCC.exe`。
-  当前 **1.1.18（r24）**，测试 1403 全绿（≈2.5 min），旧发行版留最近 3 个。
+  当前 **1.1.19（r25）**，测试 1423 全绿（≈2.5 min），旧发行版留最近 3 个。
   `git commit` 要带 `-c user.name=". Link" -c user.email=1530800288@qq.com`
   （仓库里 `user.name` 是空的，历史提交靠环境变量）。
 
 ## 待办
 - **真实扫描件仍缺**：异源配准/双源融合/毫米级精度都要它背书；现有端到端只是**同源功能性验证**。
-- GUI 在 `00_raw` 只有 1 个文件时应提示「本件无法验证配准」（单站直通正确，用户会误判）。
-- ~~约束面板加「数据来源」~~ **r24 已做**（`runner.data_source`，ADR-0020）。剩余：
-  GUI 在 `00_raw` 只有 1 个文件时提示「本件无法验证配准」（报表侧 M2 已说，运行前没说）。
+- ~~GUI 单站提示~~ **r25 已做**（ADR-0021）：对话框长版 + 日志一行版，覆盖
+  「上次已确认不弹框」那条最常走的路。份数口径复用 `runner.discover_items`。
 - **S0 病害语义（AI）**：代码/环境随时能开（4GB 够 MobileSAM+YOLOv8n-seg），**卡在数据**：
   1.1.12 的 16 个候选区裁图全是「岛边界/材质交界」，无裂隙/起翘/脱落形态，残存彩绘仅 1.89%，
   硬标只得「彩绘/胎体」= D15 域分类。需一件病害形态明确的文物（2~3 类各若干实例）。
@@ -154,6 +153,10 @@
   命中复用 vmap/uvs+贴图+掩膜+**首件 metrics**（漏它会报 0 覆盖率）。
 
 ## GUI 工程
+- **界面文案改完要截图看一眼**：r25 两次都是"断言全绿、图上不对"——QLabel 是纯文本，
+  `**粗体**` 会原样印星号；`ElidedLabel.sizeHint` 在构造未完成/析构途中被 Qt 问到时
+  抛 AttributeError 往 stderr 喷栈（打包 windowed 版 stderr=None = 静默）。
+  已各加一条守卫测试（纯文本 / 可重入）。
 - **读模型必须容错**：Open3D 0.19 的 OBJ/GLB 走 ASSIMP，路径按 ANSI(GBK) → **中文路径必抛
   `UnicodeDecodeError`**；PLY 无碍。统一走 `gui/meshload`（非 ASCII 复制到临时目录重读，缓存，
   失败返 None）。

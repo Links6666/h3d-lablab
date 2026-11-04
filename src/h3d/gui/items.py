@@ -118,6 +118,33 @@ def discover_items(root_dir: str) -> list[str]:
     return items_from_manifest(root_dir) or items_from_raw(root_dir)
 
 
+def raw_station_counts(root_dir: str) -> dict[str, int]:
+    """每件文物的**输入几何份数**（= M1 的站点数），用于开跑前提示。
+
+    为什么要它（2026-11-04）：``00_raw/<件>/`` 只有一份几何时 M2 走**单站直通**
+    （恒等落盘、十几毫秒），日志写「M2 完成」、界面灯变绿——用户读成「配准成功」，
+    而 FPFH + RANSAC + ICP 一次都没跑过。报表侧已经写明了这件事，但那是跑完
+    才读得到的东西。
+
+    口径复用 :func:`h3d.runner.batch_processor.discover_items`，**不在这里重写**
+    「子目录=一件、目录内可嵌套批次」的规则。那份规则一改，这里的副本就会
+    悄悄算错（嵌套批次会被数成 0 站），而错的方向恰好是「该报的不报」。
+    """
+    try:
+        from h3d.runner.batch_processor import discover_items as _discover
+
+        raw = _raw_dir(root_dir)
+        if not os.path.isdir(raw):
+            return {}
+        # allow_photo_only=True：纯照片件也要出现在表里（份数 0），
+        # 调用方据此区分「没有几何」与「只有一份几何」。
+        tasks = _discover(raw, allow_photo_only=True)
+        return {t.item_id: len(getattr(t, "raw_paths", []) or [])
+                for t in tasks}
+    except Exception:  # noqa: BLE001 - 反查失败不该让界面打不开
+        return {}
+
+
 def is_delivered(root_dir: str, item_id: str) -> bool:
     """该文物是否已有交付目录（``交付成果/<item>`` 或旧 ``80_export/<item>``）。"""
     from h3d.core import paths
@@ -141,4 +168,4 @@ def primary_item(root_dir: str, fallback: str = "") -> str:
 
 
 __all__ = ["discover_items", "items_from_manifest", "items_from_raw",
-           "is_delivered", "primary_item"]
+           "is_delivered", "primary_item", "raw_station_counts"]

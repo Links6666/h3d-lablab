@@ -77,9 +77,12 @@ class ElidedLabel(QLabel):
     def sizeHint(self):  # noqa: N802
         from PySide6.QtCore import QSize
 
+        # Qt 会在 ``__init__`` 还没跑完 / 析构途中有可能来问尺寸，此时
+        # ``_min_chars`` 还不存在。硬取会往 stderr 抛 Python override 异常
+        # （打包 windowed 版 stderr=None，等于静默），所以这里必须容错。
         fm = self.fontMetrics()
-        return QSize(fm.horizontalAdvance("0" * self._min_chars) + 8,
-                     fm.height())
+        n = max(1, int(getattr(self, "_min_chars", 12)))
+        return QSize(fm.horizontalAdvance("0" * n) + 8, fm.height())
 
     # ---------------------------------------------------------- 绘制
     def paintEvent(self, event):  # noqa: N802 - Qt 命名
@@ -89,7 +92,9 @@ class ElidedLabel(QLabel):
         fm = QFontMetrics(self.font())
         rect = self.contentsRect()
         flags = int(self.alignment()) | int(Qt.AlignVCenter)
-        elided = fm.elidedText(self._full, self._mode, rect.width())
+        elided = fm.elidedText(getattr(self, "_full", ""),
+                              getattr(self, "_mode", Qt.ElideRight),
+                              rect.width())
         painter.setPen(self.palette().color(self.foregroundRole()))
         painter.drawText(rect, flags, elided)
         painter.end()

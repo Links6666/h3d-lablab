@@ -236,14 +236,45 @@ class ConstraintsDialog(QDialog):
     """
 
     def __init__(self, base: Constraints, n_photos: int = 0,
-                 n_items: int = 1, parent=None):
+                 n_items: int = 1, station_counts: Optional[dict] = None,
+                 parent=None):
         super().__init__(parent)
         self.setWindowTitle("确认本次生成约束")
         self.setModal(True)
         self._n_photos = n_photos
         self._n_items = n_items
+        self._station_counts = dict(station_counts or {})
         self._defaults = Constraints(scene=base.scene)   # 推荐值
         self._build(base)
+
+    # ---------------------------------------------------------- 单站提示
+    @staticmethod
+    def station_caution(station_counts: Optional[dict],
+                        brief: bool = False) -> str:
+        """只有 1 份几何的件要提前说一句（空字符串 = 不用提示）。
+
+        单站**不是缺陷**——中小型文物常只有一站扫描，M2 恒等直通是正确终态。
+        但用户会把日志里的「M2 完成」读成「配准通过了」，而 FPFH + RANSAC + ICP
+        一次都没跑过。提醒的重点不是"去修"，是"别把这个完成当验证"。
+
+        ``0`` 份不提示：那是纯照片件（几何来自 SfM），与"单站"是两回事，
+        混在一起报就是误报。
+
+        ``brief=True`` 给界面日志用一行版——它每次开跑都写，对话性质的
+        长解释不能刷屏；对话框里才铺开。
+        """
+        counts = dict(station_counts or {})
+        singles = sorted(k for k, v in counts.items() if v == 1)
+        if not singles:
+            return ""
+        shown = "、".join(singles[:3]) + ("…" if len(singles) > 3 else "")
+        if brief:
+            return (f"{len(singles)} 件只有 1 份几何（{shown}）：M2 恒等直通，"
+                    "配准（FPFH+RANSAC+ICP）未执行，其精度不能由本件背书")
+        return (f"下列 {len(singles)} 件只有 1 份几何（{shown}）：M2 会按单站恒等"
+                "直通——不发生任何配准变换，FPFH + RANSAC + ICP 在本件没有"
+                "被执行过。这是正常终态（不是缺陷），但配准精度无法从本件验证；"
+                "要验证需至少两份错位的同源几何。")
 
     # ---------------------------------------------------------- UI
     def _build(self, base: Constraints) -> None:
@@ -346,6 +377,12 @@ class ConstraintsDialog(QDialog):
         self.lbl_note.setWordWrap(True)
         self.lbl_note.setStyleSheet("QLabel{color:#f0a020;}")
         v.addWidget(self.lbl_note)
+        # 单站提示：与约束选择无关，开跑前一句，避免把「M2 完成」读成「配准通过」
+        self.lbl_station = QLabel(self.station_caution(self._station_counts))
+        self.lbl_station.setWordWrap(True)
+        self.lbl_station.setStyleSheet("QLabel{color:#8fb3d9;font-size:11px;}")
+        self.lbl_station.setVisible(bool(self.lbl_station.text()))
+        v.addWidget(self.lbl_station)
         self.lbl_eta = QLabel("")
         self.lbl_eta.setStyleSheet("QLabel{color:#9aa4b2;}")
         v.addWidget(self.lbl_eta)

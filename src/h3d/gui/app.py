@@ -712,18 +712,41 @@ class MainWindow(QMainWindow):
             c = from_project_config(self.cfg)
             self._sync_widgets(c, include_force=False)
             self.constraint_box.set_constraints(c)
+            self._log_station_caution(self._station_counts())
             return True
 
+        counts = self._station_counts()
         dlg = ConstraintsDialog(from_project_config(self.cfg),
                                 n_photos=self._n_photos(),
                                 n_items=max(1, len(self._all_items())),
+                                station_counts=counts,
                                 parent=self)
         if not dlg.exec():
             self._log("▶ 已取消：未确认生成约束，未启动管线")
             self.lbl_state.setText("● 已取消（未确认约束）")
             return False
         self._apply_constraints(dlg.constraints())
+        self._log_station_caution(counts)
         return True
+
+    def _log_station_caution(self, counts: dict) -> None:
+        """把「单站直通」写进界面日志——对话框关掉之后，日志是唯一留痕的地方。
+
+        还要覆盖「上次已确认过约束 → 不弹框」那条路径：回访用户走的正是它，
+        只在对话框里提示等于对最常走的路不提示。
+        """
+        caveat = ConstraintsDialog.station_caution(counts, brief=True)
+        if caveat:
+            self._log("⚠ " + caveat)
+
+    def _station_counts(self) -> dict:
+        """每件的输入几何份数（反查失败就返回空 = 不提示，不影响开跑）。"""
+        from h3d.gui.items import raw_station_counts
+
+        try:
+            return raw_station_counts(self.cfg.root_dir or "")
+        except Exception:  # noqa: BLE001 - 只是提示，不能挡住开跑
+            return {}
 
     def _edit_constraints(self) -> None:
         """「修改生成约束…」按钮：强制重开确认框（运行中不可用）。"""
@@ -732,12 +755,15 @@ class MainWindow(QMainWindow):
                                     "运行期间不能修改生成约束。\n"
                                     "如需更换参数，请先取消本次运行。")
             return
+        counts = self._station_counts()
         dlg = ConstraintsDialog(from_project_config(self.cfg),
                                 n_photos=self._n_photos(),
                                 n_items=max(1, len(self._all_items())),
+                                station_counts=counts,
                                 parent=self)
         if dlg.exec():
             self._apply_constraints(dlg.constraints())
+            self._log_station_caution(counts)
 
     def _apply_constraints(self, c) -> None:
         """把确认过的约束同时写到配置与控件上（两处必须一致）。"""
