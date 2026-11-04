@@ -141,10 +141,65 @@ def make_mesh(vertices, triangles, normals=None):
     return mesh
 
 
+#: 表面采样的默认种子。固定值是**判据的一部分**：凡是会写进报表被引用的
+#: 采样都必须可复现（见 :func:`sample_surface`）。
+SAMPLE_SEED = 20261104
+
+
+def seed_sampling(seed: int = SAMPLE_SEED) -> None:
+    """固定 Open3D 的全局随机源（供「先定种子、再自己调采样」的老调用点用）。
+
+    新代码应该用 :func:`sample_surface`——它把「定种子 + 采样」绑在一起，
+    没法只做一半。这个函数存在只是为了不毁掉已经在用的调用点（对齐精化）。
+    """
+    try:
+        _o3d().utility.random.seed(int(seed))
+    except Exception:  # noqa: BLE001 - 不影响主流程
+        pass
+
+
+def sample_surface(mesh, n_samples: int, seed: int = SAMPLE_SEED):
+    """**可复现的**网格表面均匀采样，返回 ``PointCloud``。
+
+    为什么必须定种子（2026-11-04 真机）
+    -----------------------------------
+    ``TriangleMesh.sample_points_uniformly`` 没有 ``seed`` 参数，用的是 Open3D
+    进程级随机源。同一份输入跑两次，采到的表面点不同，最近邻距离分布就变：
+
+    | 运行 | ``runner.data_source`` | M5 中误差（mm） |
+    |---|---|---|
+    | 1 | auto | 86.7811 |
+    | 2 | auto | 87.4155 |
+    | 3 | laser | 87.0148 |
+
+    三者等价，差异全部来自采样。**小于 1% 的漂移最危险**：小到不会触发任何
+    断言，又大到让「昨天那张表和今天这张表对不上」。这两个数字正是
+    ``accuracy.csv`` / HTML / 论文表里要被人引用并追问「怎么重跑出来」的。
+
+    同一个坑 2026-11-03 在**对齐精化**（``ctrl_points.refine_mesh_to_points``）
+    已经踩过一次并修好了；当时只修了那一条路径。所以采样入口收敛到这里，
+    新代码不要再直接调 ``mesh.sample_points_uniformly``。
+
+    参数
+    ----
+    mesh:      Open3D TriangleMesh（此函数是适配层，允许直接持有它）。
+    n_samples: 采样点数。
+    seed:      随机种子；换种子会换样本，**同种子必须同结果**。
+    """
+    o3d = _o3d()
+    if mesh is None or len(mesh.triangles) == 0 and len(mesh.vertices) == 0:
+        raise InputDataError("采样失败：网格为空")
+    o3d.utility.random.seed(int(seed))
+    return mesh.sample_points_uniformly(int(n_samples))
+
+
 __all__ = [
     "MESH_READ_EXT",
     "MESH_WRITE_EXT",
     "load_mesh",
     "save_mesh",
     "make_mesh",
+    "sample_surface",
+    "seed_sampling",
+    "SAMPLE_SEED",
 ]

@@ -28,8 +28,11 @@ from .pointcloud_io import (
 from .mesh_io import (
     MESH_READ_EXT,
     MESH_WRITE_EXT,
+    SAMPLE_SEED,
     load_mesh,
+    seed_sampling,
     make_mesh,
+    sample_surface,
     save_mesh,
 )
 
@@ -46,4 +49,8 @@ __all__ = [
     "load_mesh",
     "save_mesh",
     "make_mesh",
+    # 可复现采样
+    "sample_surface",
+    "seed_sampling",
+    "SAMPLE_SEED",
 ]

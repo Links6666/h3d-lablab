@@ -83,8 +83,12 @@ def hausdorff_distance(mesh_a, mesh_b, samples: int = 100000) -> float:
     对两网格各均匀采样 ``samples`` 点，计算双向最近邻距离的最大值
     （``max(d_ab, d_ba)``），单位与点云坐标一致（米）。
     """
-    a = mesh_a.sample_points_uniformly(int(samples))
-    b = mesh_b.sample_points_uniformly(int(samples))
+    from h3d.io import sample_surface
+
+    # 定种子采样：Hausdorff 取的是**最大值**，对采样位置极其敏感——
+    # 不定种子时同一对网格两次能差几个百分点（最大值统计的方差最大）。
+    a = sample_surface(mesh_a, samples)
+    b = sample_surface(mesh_b, samples)
     d_ab = a.compute_point_cloud_distance(b)
     d_ba = b.compute_point_cloud_distance(a)
     return float(max(max(d_ab), max(d_ba)))

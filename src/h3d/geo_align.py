@@ -42,12 +42,16 @@ _GOOD_NORM = 0.02
 
 
 def _seed_random(seed: int) -> None:
-    """固定 Open3D 全局随机种子（让网格表面采样可复现；API 缺失时静默跳过）。"""
-    try:
-        import open3d as o3d
-        o3d.utility.random.seed(int(seed))
-    except Exception:  # noqa: BLE001 - 不影响对齐功能
-        pass
+    """固定 Open3D 全局随机种子（让网格表面采样可复现）。
+
+    实现已下沉到 :func:`h3d.io.seed_sampling` —— 「怎么让采样可复现」只该有
+    一个答案。原来这里有第二份实现（2026-11-03 加的），而 M5 的覆盖率/中误差
+    因为没走它，每次重跑都在漂（<1%，见 ADR-0020）。副本收敛后这种「同一件事
+    两个入口」的漏修会少一类。
+    """
+    from h3d.io import seed_sampling
+
+    seed_sampling(seed)
 
 
 def umeyama_similarity(src: np.ndarray, dst: np.ndarray):

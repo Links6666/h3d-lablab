@@ -80,6 +80,11 @@ _SOURCE_CN = {
     # 拿不到第二份几何做交叉验证。「有文件」不等于「有激光基准」，于是既不
     # 敢写「激光扫描」，也没证据说它同源，单列一档把不确定性说出来。
     "laser_unverified": "00_raw（未与 SfM 交叉验证）",
+    # 2026-11-04：用户在生成约束里**声明**了 00_raw 的性质
+    # （``runner.data_source=photogrammetry``）——那是别的软件照片重建出来的
+    # 模型，不是激光扫描件。与 `laser_unverified` 的区别是「谁下的结论」：
+    # 这一档是采集事实，不是系统推断。
+    "declared_photogrammetry": "00_raw（用户声明为照片重建件）",
 }
 
 
@@ -360,13 +365,42 @@ def _findings(items: list[str],
                 "后重新三角化。")})
 
         mu = m5.get("metric_units")
+        units_reason = str(m5.get("metric_units_reason") or "")
         if mu is False:
-            out.append({"level": "info", "text": (
-                f"{_esc(item)}：无激光锚点，几何来自 SfM 稠密重建——坐标是**任意单位**，"
-                f"包围盒对角线 {_num(m5.get('model_bbox_diag'), 3)}（非米）。"
-                f"引精度请用<b>相对中误差 {_pct(m5.get('rmse_rel'), 2)}</b>"
-                "（中误差 / 对角线），它与尺度无关；"
-                "要出毫米级报告必须补尺度控制点（X2）或激光扫描件。")})
+            if units_reason == "declared_photogrammetry":
+                # 用户自己说清楚了来源，就不能再写「无激光锚点」——
+                # 那句话的意思是"你没给锚点"，而真相是"给的东西本来就不是锚点"。
+                out.append({"level": "info", "text": (
+                    f"{_esc(item)}：几何来源按<b>采集声明</b>处理——本次生成约束里"
+                    "已声明 00_raw 为<b>照片重建件</b>"
+                    "（<code>runner.data_source=photogrammetry</code>），"
+                    "因此<b>不主张米制语义</b>：中误差退出 5 mm 毫米门、按「模型单位」"
+                    "展示。这不是数据缺失，是口径声明——"
+                    f"引精度请用<b>相对中误差 {_pct(m5.get('rmse_rel'), 2)}</b>"
+                    "（中误差 / 对角线），它与尺度无关；"
+                    "要出毫米级报告需换激光扫描件或补尺度控制点（X2）。")})
+            else:
+                out.append({"level": "info", "text": (
+                    f"{_esc(item)}：无激光锚点，几何来自 SfM 稠密重建——坐标是**任意单位**，"
+                    f"包围盒对角线 {_num(m5.get('model_bbox_diag'), 3)}（非米）。"
+                    f"引精度请用<b>相对中误差 {_pct(m5.get('rmse_rel'), 2)}</b>"
+                    "（中误差 / 对角线），它与尺度无关；"
+                    "要出毫米级报告必须补尺度控制点（X2）或激光扫描件。")})
+
+        if m5.get("declared_source_conflict"):
+            # 用户选了「激光件」，系统却判出 00_raw 本身是照片重建——两者不可能
+            # 同时为真。按保守侧处理（不主张米制）**必须说出来**，否则用户以为
+            # 自己勾的选项没生效，下次还会这么配。
+            out.append({"level": "warn", "text": (
+                f"{_esc(item)}：<b>数据来源声明与证据冲突</b>——生成约束里声明 "
+                f"<code>data_source={_esc(m5.get('data_source_declared'))}</code>，"
+                f"但 M1 判出 00_raw 与 SfM 稠密模型近乎重合"
+                f"（<code>dense_source={_esc((m1 or {}).get('dense_source'))}</code>），"
+                "即 00_raw 本身很可能就是照片重建的产物。"
+                "系统已按<b>保守侧</b>处理：本件<b>不主张米制语义</b>，"
+                "中误差退出毫米门、按「模型单位」展示。"
+                "请核对 00_raw 里到底是什么：若确实是激光件，说明它与本系统 SfM "
+                "重建结果高度一致，仍需外部基准（控制点 / 标尺）才能宣称毫米级。")})
 
         novel = m1.get("dense_novel_ratio")
         if isinstance(novel, (int, float)) and novel < 0.15 and m1.get("dense_merged"):

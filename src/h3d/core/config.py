@@ -349,6 +349,26 @@ class RunnerConfig(_ConfigBase):
     #: 用户是否确认过约束。CLI 直跑不需要它（命令行参数本身就是显式选择）。
     constraints_confirmed: bool = Field(dtype=bool, default=False)
 
+    #: **数据来源声明**（2026-11-04）。这批 ``00_raw`` 里的几何到底是什么。
+    #:
+    #: 为什么必须让用户说：M5 原来只有一句 ``metric_units = bool(raw_paths)``
+    #: ——「00_raw 里有个文件」被当成「有激光基准」，于是报表印出「激光扫描 /
+    #: 中误差 3.21 mm」并进入毫米门。可那个文件完全可能是**别的软件照片重建**
+    #: 出来的（Metashape / RealityCapture 导出，坐标本就不是米）。
+    #:
+    #: r17 补的 ``laser_unverified`` / ``dual_source_duplicate`` 都是**事后推断**：
+    #: 必须同时有 SfM 稠密模型才判得出。而用户自己知道放的是什么，却无处声明。
+    #:
+    #: * ``auto`` — 旧行为（有 00_raw 即按米制），默认值，老项目数字不变；
+    #: * ``laser`` — 用户声明是激光扫描件，按米制判门；
+    #: * ``photogrammetry`` — 用户声明是照片重建件，**不主张米制**（退毫米门、
+    #:   报表印「模型单位」），与 00_raw 里有没有文件无关。
+    #:
+    #: 硬红线见 :func:`h3d.quality.gate.resolve_metric_units`：**证据压过声明**。
+    #: 声明 laser 而 M1 判出 raw 与 SfM 稠密近乎重合时，仍然不主张米制。
+    data_source: str = Field(dtype=str, default="auto",
+                             choices=["auto", "laser", "photogrammetry"])
+
 
 class ReportConfig(_ConfigBase):
     """报表输出参数（《软著方案》2.8 report 段 / 设计书 M6）。

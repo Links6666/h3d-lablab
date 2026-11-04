@@ -63,6 +63,84 @@ ACCURACY_HEADERS = [
 ]
 
 
+#: ``data_source`` 声明 → 米制语义。``auto`` 必须与旧实现**逐字等价**，否则
+#: 老项目重跑会出现「同一份数据换了数字」。
+_DECLARED_ALIASES = {"auto": "auto", "laser": "laser",
+                     "photogrammetry": "photogrammetry"}
+
+#: 判出「00_raw 本身就是照片重建产物」时 M1 落的 dense_source 取值。
+#: 声明 laser 撞上它 = 声明与证据冲突（见 :func:`resolve_metric_units`）。
+EVIDENCE_RAW_IS_SFM = "raw_looks_like_sfm"
+
+
+def resolve_metric_units(declared: str, has_raw: bool,
+                         dense_source: Optional[str] = None
+                         ) -> tuple[bool, str, bool]:
+    """把「数据来源声明 + 证据」解析成米制语义。
+
+    返回 ``(metric_units, reason, conflict)``：
+
+    * ``metric_units`` — 本件坐标能不能当米用（决定是否进 5 mm 毫米门、
+      报表印 mm 还是「模型单位」）；
+    * ``reason`` — 落进 metrics 的判据名，报表据此写因果，不用字符串猜；
+    * ``conflict`` — 声明与证据/输入矛盾（必须 WARN，且**已经**按保守侧降级）。
+
+    判据顺序（2026-11-04）：
+
+    1. 未知声明 → 按 ``auto``（schema 已挡非法值，这里只防内部调用）。
+    2. ``auto`` → 旧行为：``has_raw``。
+    3. ``photogrammetry`` → **一律不主张米制**，与 00_raw 有没有文件无关。
+       这是本函数存在的理由：用户知道自己放的是别的软件重建件。
+    4. ``laser`` → 要两个条件同时成立：
+       a. 真的有 00_raw（声明激光件却没输入 = 自相矛盾）；
+       b. M1 没有把它判成照片重建（``dense_source != raw_looks_like_sfm``）。
+
+    **证据压过声明**是硬红线。若声明能压过证据，用户勾一下「激光件」就能把
+    自证数据包装成米制结果——那比没有这个功能更糟。
+    """
+    key = _DECLARED_ALIASES.get(str(declared or "").strip().lower(), "auto")
+    src = str(dense_source or "")
+
+    if key == "photogrammetry":
+        return False, "declared_photogrammetry", False
+
+    if key == "laser":
+        if not has_raw:
+            return False, "declared_laser_without_raw", True
+        if src == EVIDENCE_RAW_IS_SFM:
+            return False, "declared_laser_conflicts_with_evidence", True
+        return True, "declared_laser", False
+
+    # auto
+    if has_raw:
+        return True, "auto_with_raw", False
+    return False, "auto_without_raw", False
+
+
+def scope_text(metric_units: bool, units_plausible: bool, rmse_reliable: bool,
+               reason: str = "") -> str:
+    """中误差口径的**唯一**文字结论（报表 / CSV / 论文表共用）。
+
+    「无量纲」的**原因**必须分开写（2026-11-04）：默认那句「（SfM 任意单位）」
+    说的是「几何来自 SfM」，而用户声明为照片重建件时几何其实来自 ``00_raw``，
+    只是那个 ``00_raw`` 也不是米制。两种情况下读者该做的事完全不同——
+
+    * SfM 任意单位 → 该去跑 SfM 稠密 / 补尺度控制点；
+    * 用户声明照片重建件 → 该换激光件（跑多少次 SfM 都不会变米制）。
+
+    写成同一句话，等于把「你少跑了一步」和「你本来就没有这个东西」混为一谈。
+    """
+    if not metric_units:
+        if reason == "declared_photogrammetry":
+            return "无量纲（用户声明照片重建件）"
+        return "无量纲（SfM 任意单位）"
+    if not units_plausible:
+        return "不判门（单位存疑）"
+    if not rmse_reliable:
+        return "不判门（参考稀疏）"
+    return "实测（参与 5 mm 判门）"
+
+
 def check_quality(metrics: dict[str, Any], cfg: QualityConfig) -> bool:
     """质量门判定：覆盖率 >= 阈值；中误差门仅在「有米制语义且参考足够密」时启用。
 
@@ -127,14 +205,10 @@ def build_report(
     # / 实测判门。老 manifest 没有 rmse_scope 时按两个布尔现推。
     scope = metrics.get("rmse_scope")
     if not scope:
-        if not metric_units:
-            scope = "无量纲（SfM 任意单位）"
-        elif not metrics.get("units_plausible", True):
-            scope = "不判门（单位存疑）"
-        elif not metrics.get("rmse_reliable"):
-            scope = "不判门（参考稀疏）"
-        else:
-            scope = "实测（参与 5 mm 判门）"
+        scope = scope_text(metric_units,
+                           bool(metrics.get("units_plausible", True)),
+                           bool(metrics.get("rmse_reliable")),
+                           str(metrics.get("metric_units_reason") or ""))
     record = {
         "item_id": item_id,
         "coverage": round(metrics["coverage"], 4),
@@ -154,6 +228,13 @@ def build_report(
         "rmse_unit": metrics.get("rmse_unit") or ("mm" if metric_units
                                                   else "模型单位"),
         "metric_units": metric_units,
+        # 「为什么是/不是米制」必须留档（2026-11-04）。判门失败时 manifest 不写，
+        # qc_metrics.json 是**唯一**能回答「这个 N/A 是没测还是按声明不主张米制」
+        # 的地方。只落 metric_units 布尔的话，auto 与 photogrammetry 事后无法区分。
+        "data_source_declared": metrics.get("data_source_declared"),
+        "metric_units_reason": metrics.get("metric_units_reason"),
+        "declared_source_conflict": bool(
+            metrics.get("declared_source_conflict", False)),
         "model_bbox_diag": metrics.get("model_bbox_diag"),
         "boundary_ratio": round(metrics["boundary_ratio"], 4),
         "mps_m": round(metrics["mps_m"], 6),

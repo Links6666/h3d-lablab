@@ -42,7 +42,8 @@ _PLAUSIBLE_DIAG_M = (0.02, 3.0)
 
 
 def run(mesh, ref_pcd, cfg: QualityConfig,
-        metric_units: bool = True) -> dict[str, Any]:
+        metric_units: bool = True,
+        metric_units_reason: str = "") -> dict[str, Any]:
     """质检流水线：计算几何质量指标并给出达标判定（不抛异常，判定留给调用方）。
 
     流程（设计书 §36.2）：估算参考点云 MPS（尺度自适应）-> 覆盖率（阈值 = k × MPS）
@@ -108,14 +109,12 @@ def run(mesh, ref_pcd, cfg: QualityConfig,
                     "scale.reference_diag 与输入点云的真实单位；本次中误差"
                     "不参与毫米门判定", diag, *_PLAUSIBLE_DIAG_M)
     #: 中误差口径的**单一**文字结论（报表 / CSV / 论文表共用同一判据）。
-    if not metric_units:
-        rmse_scope = "无量纲（SfM 任意单位）"
-    elif not units_plausible:
-        rmse_scope = "不判门（单位存疑）"
-    elif not rmse_reliable:
-        rmse_scope = "不判门（参考稀疏）"
-    else:
-        rmse_scope = "实测（参与 5 mm 判门）"
+    #: 文字本身由 :func:`h3d.quality.gate.scope_text` 决定 —— 这里不再手写一遍，
+    #: 否则「同口径两处措辞」迟早会分叉（2026-11-04 就是这里漏了声明那一档）。
+    from .gate import scope_text
+
+    rmse_scope = scope_text(metric_units, bool(units_plausible),
+                            bool(rmse_reliable), metric_units_reason)
 
     metrics: dict[str, Any] = {
         "coverage": coverage,

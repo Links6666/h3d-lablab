@@ -47,12 +47,33 @@ VOXEL_CHOICES = (("粗（基准 5 cm）", 0.05), ("中（基准 2 cm）", 0.02),
 #: 纹理图集边长
 TEX_CHOICES = (1024, 2048, 4096)
 
+#: 数据来源（2026-11-04）。决定 M5 按不按米制判门、报表印不印「mm」。
+#:
+#: 原来这件事由 ``bool(00_raw 里的文件)`` 猜。可那个文件完全可能是**别的软件
+#: 照片重建**出来的（Metashape / RealityCapture 导出，坐标是任意单位）——
+#: 系统猜错就会一路印出「激光锚定 / 3.21 mm」并被引进论文。用户自己知道放的是
+#: 什么，界面上却无处声明，这才是缺陷。
+SOURCE_CHOICES = (
+    ("自动判断（00_raw 有文件即按米制）", "auto"),
+    ("激光扫描件（按米制，参与 5 mm 判门）", "laser"),
+    ("照片重建件（不主张米制，报表按模型单位）", "photogrammetry"),
+)
+
+#: 取值 → 只读展示用短名
+SOURCE_CN = {"auto": "自动判断", "laser": "激光扫描件",
+             "photogrammetry": "照片重建件"}
+
 
 @dataclass
 class Constraints:
     """一次生成的全部约束（界面确认后即冻结）。"""
 
     scene: str = "scene2"
+    #: 数据来源声明（对应 ``config.yaml`` 的 ``runner.data_source``）。
+    #: 与 ``scene`` 的区别：``scene`` 说的是"这次走哪条技术路线"，
+    #: ``data_source`` 说的是"00_raw 里的几何是怎么来的"——后者决定坐标有没有
+    #: 米制语义，前者不决定。
+    data_source: str = "auto"
     dense: bool = True
     poisson_depth: int = 8
     voxel: float = 0.02
@@ -94,6 +115,12 @@ class Constraints:
         if self.scene == "scene2" and not self.dense:
             # 纯照片场景的几何**只能**来自稠密重建：关掉就没有几何来源。
             errs.append("纯照片场景必须开启稠密重建（否则没有几何来源）")
+        if self.scene == "scene2" and self.data_source == "laser":
+            # 纯照片场景要求照片重建，却声明 00_raw 是激光件 —— 两者不可能同时
+            # 为真。让它跑下去，M5 会按米制判门、报表印出毫米，而这个毫米数
+            # 没有任何外部基准支撑。
+            errs.append("纯照片场景不能声明「激光扫描件」——"
+                        "若确有激光数据请改选场景①（激光+照片）")
         return errs
 
     # ---------------------------------------------------------- 展示
@@ -104,6 +131,7 @@ class Constraints:
                     0.01: "细（基准 1 cm）"}
         rows = [
             ("场景", "①激光+照片" if self.scene == "scene1" else "②纯照片"),
+            ("数据来源", SOURCE_CN.get(self.data_source, str(self.data_source))),
             ("稠密重建", "开启" if self.dense else "关闭"),
             ("网格精度", depth_cn.get(int(self.poisson_depth),
                                       str(self.poisson_depth))),
@@ -128,6 +156,10 @@ class Constraints:
             out.append("4096² 图集显存/内存占用大，且烘焙时间约为 2048² 的 4 倍")
         if int(self.poisson_depth) >= 9:
             out.append("超精细面数可能到百万级，导出与预览都会明显变慢")
+        if self.data_source == "photogrammetry":
+            # 这是本次要用户**知情**的那个取舍：勾了它就拿不到毫米级结论。
+            out.append("声明为照片重建件：坐标不按米制解读，中误差退出 5 mm 毫米门、"
+                       "报表按「模型单位」展示（要毫米级需激光件或尺度控制点）")
         return out
 
 
@@ -145,6 +177,7 @@ def from_project_config(cfg: Any) -> Constraints:
         return snap
     return Constraints(
         scene=getattr(cfg, "scene", "scene2"),
+        data_source=getattr(cfg, "data_source", "auto") or "auto",
         dense=bool(getattr(cfg, "dense", True)),
         poisson_depth=int(getattr(cfg, "poisson_depth", 8)),
         voxel=float(getattr(cfg, "voxel", 0.02)),
@@ -158,6 +191,7 @@ def from_project_config(cfg: Any) -> Constraints:
 def apply_to_project_config(cfg: Any, c: Constraints) -> None:
     """把约束写回 :class:`ProjectConfig`（随后由 ``to_yaml`` 落盘）。"""
     cfg.scene = c.scene
+    cfg.data_source = c.data_source
     cfg.dense = bool(c.dense)
     cfg.poisson_depth = int(c.poisson_depth)
     cfg.voxel = float(c.voxel)
@@ -232,13 +266,26 @@ class ConstraintsDialog(QDialog):
         # 几何
         g1 = QGroupBox("几何重建")
         f1 = QGridLayout(g1)
-        f1.addWidget(QLabel("稠密重建"), 0, 0)
+        f1.addWidget(QLabel("数据来源"), 0, 0)
+        self.cb_source = QComboBox()
+        for label, _ in SOURCE_CHOICES:
+            self.cb_source.addItem(label)
+        self.cb_source.setCurrentIndex(
+            max(0, [v for _, v in SOURCE_CHOICES].index(base.data_source)
+                if base.data_source in [v for _, v in SOURCE_CHOICES] else 0))
+        self.cb_source.setToolTip(
+            "决定报表里的精度数字是不是毫米。00_raw 里放别的软件照片重建的"
+            "模型时请选「照片重建件」——否则系统会把非米制坐标当成激光锚定，"
+            "印出无法成立的中误差。")
+        f1.addWidget(self.cb_source, 0, 1)
+
+        f1.addWidget(QLabel("稠密重建"), 1, 0)
         self.cb_dense = QComboBox()
         self.cb_dense.addItems(["开启（质量高，耗时主要来源）", "关闭（快，稀疏点云插值）"])
         self.cb_dense.setCurrentIndex(0 if base.dense else 1)
-        f1.addWidget(self.cb_dense, 0, 1)
+        f1.addWidget(self.cb_dense, 1, 1)
 
-        f1.addWidget(QLabel("网格精度"), 1, 0)
+        f1.addWidget(QLabel("网格精度"), 2, 0)
         self.cb_depth = QComboBox()
         for label, _ in DEPTH_CHOICES:
             self.cb_depth.addItem(label)
@@ -246,16 +293,16 @@ class ConstraintsDialog(QDialog):
             max(0, [d for _, d in DEPTH_CHOICES].index(
                 int(base.poisson_depth)) if int(base.poisson_depth) in
                 [d for _, d in DEPTH_CHOICES] else 1))
-        f1.addWidget(self.cb_depth, 1, 1)
+        f1.addWidget(self.cb_depth, 2, 1)
 
-        f1.addWidget(QLabel("降采样"), 2, 0)
+        f1.addWidget(QLabel("降采样"), 3, 0)
         self.cb_voxel = QComboBox()
         for label, _ in VOXEL_CHOICES:
             self.cb_voxel.addItem(label)
         self.cb_voxel.setCurrentIndex(
             min(range(len(VOXEL_CHOICES)),
                 key=lambda i: abs(VOXEL_CHOICES[i][1] - float(base.voxel))))
-        f1.addWidget(self.cb_voxel, 2, 1)
+        f1.addWidget(self.cb_voxel, 3, 1)
         v.addWidget(g1)
 
         # 纹理与交付
@@ -319,8 +366,8 @@ class ConstraintsDialog(QDialog):
         self.btn_ok.clicked.connect(self._on_ok)
         self.btn_default.clicked.connect(self._on_defaults)
         self.btn_cancel.clicked.connect(self.reject)
-        for w in (self.cb_dense, self.cb_tex, self.cb_qc, self.cb_force,
-                  self.cb_depth):
+        for w in (self.cb_source, self.cb_dense, self.cb_tex, self.cb_qc,
+                  self.cb_force, self.cb_depth):
             w.currentIndexChanged.connect(self._refresh_note)
         for cb in self.chk_fmt.values():
             cb.toggled.connect(self._refresh_note)
@@ -330,6 +377,7 @@ class ConstraintsDialog(QDialog):
     def constraints(self) -> Constraints:
         c = Constraints(
             scene=self._defaults.scene,
+            data_source=SOURCE_CHOICES[self.cb_source.currentIndex()][1],
             dense=self.cb_dense.currentIndex() == 0,
             poisson_depth=DEPTH_CHOICES[self.cb_depth.currentIndex()][1],
             voxel=VOXEL_CHOICES[self.cb_voxel.currentIndex()][1],
@@ -364,6 +412,7 @@ class ConstraintsDialog(QDialog):
 
     def _on_defaults(self) -> None:
         d = self._defaults
+        self.cb_source.setCurrentIndex(0)      # 自动判断
         self.cb_dense.setCurrentIndex(0)
         self.cb_depth.setCurrentIndex(1)
         self.cb_voxel.setCurrentIndex(1)

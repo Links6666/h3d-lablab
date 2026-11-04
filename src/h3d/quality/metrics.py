@@ -75,7 +75,11 @@ def surface_coverage(mesh, ref_pcd, max_dist: float, samples: int = 50000) -> fl
 
     if len(mesh.vertices) == 0 or len(ref_pcd.points) == 0:
         return 0.0
-    pts = mesh.sample_points_uniformly(int(samples))
+    # 必须走 io 层的定种子采样：直接 mesh.sample_points_uniformly 会让同一个
+    # 项目每次重跑得到不同的覆盖率（真机 0.6335 / 0.6538 / 0.6305 就是它）。
+    from h3d.io import sample_surface
+
+    pts = sample_surface(mesh, samples)
     dists = np.asarray(pts.compute_point_cloud_distance(ref_pcd))
     return float(np.mean(dists <= max_dist))
 
@@ -92,7 +96,9 @@ def qc_rmse_units(mesh, ref_pcd, samples: int = 50000) -> float:
 
     if len(mesh.vertices) == 0 or len(ref_pcd.points) == 0:
         return float("nan")
-    pts = mesh.sample_points_uniformly(int(samples))
+    from h3d.io import sample_surface
+
+    pts = sample_surface(mesh, samples)
     dists = np.asarray(pts.compute_point_cloud_distance(ref_pcd))
     return float(np.sqrt(np.mean(np.square(dists))))
 

@@ -323,8 +323,23 @@ def _stage_preprocess(task: Task, cfg) -> StageResult:
                 task.item_id, _novel * 100, _DENSE_MERGE_MIN_NOVEL * 100)
     # 几何来源口径：场景② 没有激光基线，novel 无从计算（恒 None），
     # 报表里必须写清"这是唯一几何源"而不是留一个空指标。
+    #
+    # 2026-11-04：**用户声明优先于自动推断**（``runner.data_source``）。
+    # 推断链（novel 同源检测 / laser_unverified）都要求「本次同时有 SfM 稠密
+    # 模型」才判得出，而用户本来就知道自己放进去的是什么。声明放在最前面，
+    # 报表文字才不会因为「这次 SfM 有没有跑稠密」而变来变去。
+    declared = str(getattr(getattr(cfg, "runner", None), "data_source", "auto")
+                   or "auto")
+    metrics["data_source_declared"] = declared
     if not task.raw_paths:
         metrics["dense_source"] = "sfm_only"
+    elif declared == "photogrammetry":
+        # 00_raw 里放的是**别的软件照片重建**出来的模型：既不是激光，也不是
+        # 「本系统 SfM」。单列一档，报表才不会把它写成「激光扫描」。
+        metrics["dense_source"] = "declared_photogrammetry"
+        log.info("M1 几何来源按用户声明处理：%s 的 00_raw 声明为照片重建件"
+                 "（runner.data_source=photogrammetry）——本件不主张米制语义，"
+                 "M5 退出毫米门、报表按「模型单位」表述", task.item_id)
     elif metrics.get("dual_source_duplicate"):
         # 有 00_raw 但与 SfM 同源：既不是纯激光，也不是"激光+SfM 融合"。
         # 单列一个取值，报表才不会把自证件写成「激光扫描」。
@@ -720,14 +735,26 @@ def _stage_quality(task: Task, cfg) -> StageResult:
         pc = load_point_cloud(src)
         ref = pc if ref is None else ref + pc
 
-    # 尺度口径（2026-10-18 / 2026-10-26）：报表里的 rmse 单位写死 "mm"，但场景②
-    # （纯照片）的坐标是 SfM **任意单位**，没有激光锚点就没有"毫米"可言。
-    # 现在把「是否有度量基准」**在算之前**传给 quality.run —— 它据此决定
+    # 尺度口径（2026-10-18 / 2026-10-26 / 2026-11-04）：报表里的 rmse 单位写死
+    # "mm"，但场景②（纯照片）的坐标是 SfM **任意单位**，没有激光锚点就没有
+    # "毫米"可言。现在把「是否有度量基准」**在算之前**传给 quality.run ——
+    # 它据此决定
     #   · 有锚点：rmse_mm 是真实毫米，按 rmse_threshold_mm 判门；
     #   · 无锚点：rmse_mm 只是「模型单位×1000」，不判门，改报
     #     rmse_rel = rmse_units / 包围盒对角线（无量纲，唯一可对外引用的口径）。
-    metric_units = bool(task.raw_paths)
-    metrics = quality_run(mesh, ref, cfg.quality, metric_units=metric_units)
+    #
+    # 判据从「00_raw 有没有文件」升级为「用户声明 + 证据」（2026-11-04）：
+    # 文件存在只说明**有输入**，不说明那个输入是激光扫描件。用户可以把别的
+    # 软件照片重建的模型放进 00_raw 调试，报表却照印「激光锚定 / 3.21 mm」。
+    from h3d.quality.gate import resolve_metric_units
+
+    declared = str(getattr(getattr(cfg, "runner", None), "data_source", "auto")
+                   or "auto")
+    _m1 = task.metrics_of("M1") if hasattr(task, "metrics_of") else {}
+    metric_units, units_reason, units_conflict = resolve_metric_units(
+        declared, bool(task.raw_paths), (_m1 or {}).get("dense_source"))
+    metrics = quality_run(mesh, ref, cfg.quality, metric_units=metric_units,
+                          metric_units_reason=units_reason)
     try:
         import numpy as _np
         metrics["model_bbox_diag"] = round(float(_np.linalg.norm(
@@ -735,11 +762,27 @@ def _stage_quality(task: Task, cfg) -> StageResult:
     except Exception:  # noqa: BLE001 - 仅用于报表展示，失败留空
         metrics["model_bbox_diag"] = None
     metrics["metric_units"] = metric_units
+    # 判据本身也要落盘：报表要能说「为什么这件按模型单位」。只写 metric_units
+    # 的话，`auto` 与 `photogrammetry` 在报表上长得一样，读者分不出是系统猜的
+    # 还是用户声明的。
+    metrics["data_source_declared"] = declared
+    metrics["metric_units_reason"] = units_reason
+    metrics["declared_source_conflict"] = bool(units_conflict)
+    if units_conflict:
+        # 「证据压过声明」必须喊出来，否则用户以为自己选的选项没生效。
+        log.warning("数据来源声明与证据冲突：%s 声明 runner.data_source=%s，"
+                    "但本件判据为 %s（M1 dense_source=%s）——已按保守侧处理，"
+                    "**不主张米制语义**。若声明有误请改正；若声明无误，"
+                    "说明 00_raw 里的几何与 SfM 稠密模型同源，"
+                    "配准/精度/覆盖率三项都不能作为路线一（激光几何）的验证依据。",
+                    task.item_id, declared, units_reason,
+                    (_m1 or {}).get("dense_source") or "N/A")
     if not metric_units:
         _rel = metrics.get("rmse_rel")
-        log.warning("本件几何来自 SfM 重建（无激光锚点）：坐标是任意单位，"
-                    "rmse %.4f 模型单位（对角线的 %s），报表不再按毫米展示；"
+        log.warning("本件坐标不作米制解读（判据 %s）：rmse %.4f 模型单位"
+                    "（对角线的 %s），报表不再按毫米展示；"
                     "要出毫米级精度必须补尺度控制点（X2）或激光扫描件",
+                    units_reason,
                     float(metrics.get("rmse_units") or 0.0),
                     ("N/A" if _rel is None else f"{float(_rel) * 100:.2f}%"))
 
@@ -879,6 +922,13 @@ def _stage_quality(task: Task, cfg) -> StageResult:
         # 结果 HTML/CSV 一律按 mm 展示，纯照片项目的精度数字全是假的。
         "model_bbox_diag": metrics.get("model_bbox_diag"),
         "metric_units": metrics.get("metric_units"),
+        # 「为什么是/不是米制」（2026-11-04）。只落 metric_units 的话，
+        # ``auto``（系统按 00_raw 猜）与 ``photogrammetry``（用户声明）在报表上
+        # 长得一模一样，读者分不出这个口径是人定的还是机器定的。
+        "data_source_declared": metrics.get("data_source_declared"),
+        "metric_units_reason": metrics.get("metric_units_reason"),
+        "declared_source_conflict": bool(
+            metrics.get("declared_source_conflict", False)),
         # 口径标记必须跟着走（2026-10-26 真机）。这里是**手写白名单**，
         # quality.run 算出来的键不会自动进来——上一轮就是这么丢的：
         # rmse_reliable 从 r13 就一直在算，却从没进过 manifest，于是
@@ -1278,7 +1328,11 @@ def _load_any_as_cloud(path: str):
     # 固定 20 万点倒进一个几千面的小网格会把 MPS 压到亚毫米级，
     # 与参考期点云的密度差两个量级 —— 那算出来的「形变」是采样密度差。
     n = min(200_000, max(20_000, len(mesh.triangles) * 30))
-    return mesh.sample_points_uniformly(int(n))
+    # 定种子采样：X1 的「最大形变」是直接进 accuracy.csv 的数字，
+    # 采样一变它就变（M3C2 的尺度全部相对 MPS，样本换了 MPS 也换）。
+    from h3d.io import sample_surface
+
+    return sample_surface(mesh, n)
 
 
 @register_stage("X1")

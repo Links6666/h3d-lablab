@@ -56,6 +56,9 @@ class ProjectConfig:
 
     name: str = "h3d_project"
     scene: str = "scene1"              # scene1: 激光+照片 / scene2: 纯照片
+    #: 数据来源声明（2026-11-04）→ ``config.yaml`` 的 ``runner.data_source``。
+    #: ``auto`` / ``laser`` / ``photogrammetry``；决定坐标有没有米制语义。
+    data_source: str = "auto"
     root_dir: str = ""                 # 项目根（00_raw/00_photo 的父目录）
     item_id: str = "relic_001"
     laser_ply: str = ""                # 场景①激光点云文件
@@ -177,6 +180,20 @@ class ProjectConfig:
                                                       False))
         self.x1_enabled = bool(run.get("x1_enabled", False))
         self.x2_enabled = bool(run.get("x2_enabled", False))
+        # 数据来源声明：老项目没有这个键 → auto，行为与旧版逐字相同。
+        # 非法值（手写 yaml 拼错）不能让界面带着一个不存在的档位跑，
+        # 也不该静默改写成 auto 让用户以为自己的声明生效了 —— 回落 auto
+        # 并在日志里说清楚（GUI 侧 _start_run_inner 会把它写回 yaml，
+        # 所以这里必须给出可见痕迹）。
+        _ds = str(run.get("data_source") or "auto").strip().lower()
+        if _ds not in ("auto", "laser", "photogrammetry"):
+            from h3d.core import get_logger
+            get_logger("gui.config").warning(
+                "config.yaml 的 runner.data_source=%r 不是合法取值"
+                "（auto / laser / photogrammetry），已按 auto 处理——"
+                "本件将按「00_raw 有文件即米制」的旧口径判精度。", _ds)
+            _ds = "auto"
+        self.data_source = _ds
         # force_rerun 故意**不**读回：它是一次性意图，留在 yaml 里会让用户
         # 「打开历史项目 → 点一次生成」就莫名重跑 30 分钟。这里保持默认 False。
         self.quality_enabled = bool((data.get("quality") or {}).get(
@@ -298,6 +315,10 @@ class ProjectConfig:
         cfg["photo_texture"]["icp_align"] = bool(self.icp_align)
         cfg["runner"]["x1_enabled"] = self.x1_enabled
         cfg["runner"]["x2_enabled"] = self.x2_enabled
+        # 数据来源声明：**必须落盘**。子进程（H3D.exe --batch）只认 yaml，
+        # 界面里选了「照片重建件」而不写这里，M5 仍会按旧口径把非米制坐标
+        # 当毫米判门——正是这个功能要治的病。
+        cfg["runner"]["data_source"] = str(self.data_source or "auto")
         # 强制重算必须是**显式写 true**：子进程（H3D.exe --batch）只认 yaml，
         # 界面里的勾选不落盘就等于没勾（「假控件」的老毛病）。
         cfg["runner"]["force_rerun"] = bool(self.force_rerun)
