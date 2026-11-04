@@ -55,16 +55,42 @@ LEGACY_EXPORT_DIR = "80_export"
 #: 旧布局下报表目录名
 LEGACY_REPORT_DIR = "report"
 
-#: 阶段成果下的目录骨架（迁移时按此顺序搬运；未出现的跳过）
-_STAGE_CHILDREN = ("00_raw", "00_photo", "00_ctrl", "10_clean", "10_dense",
-                   "20_registered", "30_dense", "50_tex", "60_qc", "70_report",
-                   "90_meta", "99_runs", "output")
-#: 2026-11-03 补 `10_clean` / `20_registered` / `60_qc`：它们是**当前**阶段的目录
-#: （M1 / M2 / X3 就写在这里），而这张迁移清单是手写的，一直漏着。真机上 GUI
-#: 打开旧布局项目后自动迁移，这三个目录留在项目根，而进程内 `stage_root()`
-#: 已指向 `阶段成果` → 新布局里找不到 M1/M2/X3 的产物。
-#: 目录名散落在 runner（`os.path.join(task.root, "10_clean", ...)`）与 cli 的手写
-#: 清单里各一份，这里**只能是全集的副本**——所以新增阶段目录时三处都要对一遍。
+#: 阶段成果下的目录**登记表**：逻辑名 → 目录名。**唯一真源**。
+#:
+#: 新增一个阶段目录时**只改这里**——迁移清单与 `h3d init` 都从它派生，
+#: `tests/test_stage_dirs_single_source.py` 会拦住"改了代码没登记"的情况。
+#:
+#: 为什么要有这张表（2026-11-03 真机）：目录名原来散成多份手写清单，且漂向
+#: **相反**的方向——`paths._STAGE_CHILDREN`（迁移）漏了 `10_clean` /
+#: `20_registered` / `60_qc`，`cli` 的初始化清单漏了 `10_dense`。结果：迁移把
+#: 三个当前阶段目录留在项目根（新布局里找不到 M1/M2/X3 的产物），而 `h3d init`
+#: 建出来的项目根本没有 `10_dense`。
+STAGE_DIRS = {
+    "raw": "00_raw",
+    "photo": "00_photo",
+    "ctrl": "00_ctrl",
+    # 00_ref：两期对比（X1/X4）的**参考期几何**，用户手工放置。守卫测试抓到的
+    # 真实遗漏——它原来不在任何清单里，迁移会把参考期数据留在项目根，
+    # 而 X1 之后会报「缺参考期」SKIPPED（数据没丢，但用不上了）。
+    "ref": "00_ref",
+    # 00_ref：两期对比（X1/X4）的**参考期几何**，用户手工放置。守卫测试抓到的
+    # 真实遗漏——它原来不在任何清单里，迁移会把参考期数据留在项目根，
+    # 而 X1 之后会报「缺参考期」SKIPPED（数据没丢，但用不上了）。
+    "ref": "00_ref",
+    "clean": "10_clean",
+    "dense": "10_dense",
+    "registered": "20_registered",
+    "mesh": "30_dense",
+    "tex": "50_tex",
+    "qc": "60_qc",
+    "report": "70_report",
+    "meta": "90_meta",
+    "runs": "99_runs",
+    "output": "output",
+}
+
+#: 阶段成果下的目录骨架（迁移与初始化按此顺序；由登记表派生，**不要手写**）
+_STAGE_CHILDREN = tuple(STAGE_DIRS.values())
 
 #: 判定"这确实是个 H3D 项目"的痕迹（**故意不含** ``output`` 与 ``report``，
 #: 理由见 :func:`looks_like_project`）

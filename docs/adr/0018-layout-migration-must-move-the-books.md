@@ -69,12 +69,42 @@ FAIL 13 条。
 | 补齐三个目录 + 重写 6 份账本 | `verify` → `PASS 23 / WARN 0 / FAIL 0` |
 | 重写 `config.yaml` | `runner.manifest` 指到 `阶段成果\output\run_manifest.json` |
 
+## D5：目录名收敛到一张登记表（2026-11-04）
+
+上一节的病根是「目录名有多份手写副本，且漂向相反方向」：
+
+| 副本 | 缺什么 |
+|---|---|
+| `paths._STAGE_CHILDREN`（迁移） | `10_clean` / `20_registered` / `60_qc` |
+| `cli._cmd_init`（初始化） | `10_dense` / `00_ref` |
+
+两张清单一份多一份少，谁都不完整。现在只留一张：
+
+```python
+STAGE_DIRS = {"raw": "00_raw", ..., "ref": "00_ref", "output": "output"}
+_STAGE_CHILDREN = tuple(STAGE_DIRS.values())      # 迁移用
+# h3d init 也遍历 STAGE_DIRS.values()             # 初始化用
+```
+
+加三条守卫测试（`tests/test_stage_dirs_single_source.py`）：
+
+1. 登记表的每个目录都必须在迁移清单里（防 `10_clean` 那种漏）
+2. 迁移清单不许出现登记表以外的目录（防清单悄悄加东西）
+3. **源码里出现的 `\d\d_[a-z]+` 字面量必须都已登记**（防"改了代码没登记"）
+
+第 3 条当场抓到一个真实遗漏：`00_ref`——两期对比（X1/X4）的**参考期几何**
+目录，用户手工放置。它原来不在任何清单里，迁移会把参考期数据留在项目根，
+之后 X1 报「缺参考期 00_ref/<件>/*.ply」SKIPPED：**数据没丢，但用不上了。**
+
+这也是「守卫测试值不值」的最好证据：它不是形式主义，第一天就报了一个人没
+注意到的东西。真机 `h3d init` 从 12 个目录变成 14 个。
+
 ## 未决
 
 - 用户如果用的是**更早版本迁移过的**项目，需要手动跑一次
   `paths.migrate_legacy(项目根)` 才能修好账本（GUI 不会再自动触发，闸门在那里
   是对的）。没有为这件事加 CLI 子命令——`h3d verify` 会把症状报出来，但不该
   在没有用户确认时改写他的账本。
-- 目录清单仍有三处副本（`paths._STAGE_CHILDREN`、`cli.py` 的 validate 清单、
-  `runner` 里的字面量）。彻底收敛需要一个「阶段 → 目录」的单一真源，属于下一轮
-  的重构，不是这次能顺手做的。
+- 147 处调用点仍用字面量拼路径（`os.path.join(task.root, "10_clean", …)`）。
+  全量改成 `paths.STAGE_DIRS["clean"]` 会动 40 个文件、收益仅是"更好看"，
+  **不做**；守卫测试已经能拦住漂移，那才是要防的东西。

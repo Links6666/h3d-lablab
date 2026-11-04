@@ -145,10 +145,8 @@ def _cmd_init(path: str) -> int:
     # 下沉到 阶段成果/；交付模型与报表进 交付成果/。写说明文件是因为用户
     # 打开项目第一眼只能看到两个目录名，得有个地方解释"模型在哪"。
     lay = paths.ensure_layout(path)
-    stage_dirs = ["00_raw", "00_photo", "00_ctrl", "10_clean", "20_registered",
-                  "30_dense", "50_tex", "60_qc", "70_report", "90_meta",
-                  "99_runs", "output"]
-    for d in stage_dirs:
+    # 目录清单从 paths.STAGE_DIRS 派生（原来这里另写了一份，漏了 10_dense）
+    for d in paths.STAGE_DIRS.values():
         os.makedirs(os.path.join(lay["stage"], d), exist_ok=True)
     print(f"已初始化项目目录结构：{os.path.abspath(path)}")
     print(f"  阶段成果：{lay['stage']}")
