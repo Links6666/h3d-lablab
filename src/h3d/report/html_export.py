@@ -614,10 +614,10 @@ _TEMPLATE = """<!DOCTYPE html>
 <table>
   <tr><th>文物编号</th><th>图集</th><th>参与相机</th><th>图集像素利用率</th>
       <th>UV 岛占比</th><th>岛内填充率</th><th>正面可见且入画</th><th>几何-位姿对齐</th>
-      <th>平均亮度</th><th>多视角色差</th>
+      <th>平均亮度</th><th>多视角色差</th><th>多视角重叠</th>
       <th>法线校正</th><th>像素换算</th>
       <th>异常面积（岛内）</th><th>图斑数</th><th>图集摘要</th><th>判定</th></tr>
-  <tr><td colspan="16" class="note">
+  <tr><td colspan="17" class="note">
     <b>口径</b>：「正面可见且入画」= 至少一台相机与法线夹角 &lt;73°（cos&gt;0.3）
     <b>且</b>投影落在该图像幅内，两个条件都满足才算。它和「只看画幅」、
     「只看夹角」是三个不同的量，数值会差很多，引用时别混用。
@@ -630,7 +630,10 @@ _TEMPLATE = """<!DOCTYPE html>
     <td class="num{{ ' fail' if row.frame_warn else '' }}">{{ row.in_frame }}</td>
     <td class="{{ 'fail' if row.align_warn else '' }}">{{ row.align }}</td>
     <td class="num">{{ row.luma }}</td>
-    <td class="num">{{ row.consistency }}</td><td>{{ row.flipped }}</td>
+    <td class="num">{{ row.consistency }}</td>
+    <td class="num">{{ row.overlap }}<br>
+        <span class="mono-note">≥2 台：{{ row.overlap_multi }}</span></td>
+    <td>{{ row.flipped }}</td>
     <td class="num">{{ row.pixel_scale }}</td>
     <td class="num">{{ row.anomaly_ratio }}<br>
         <span class="mono-note">σ_L≈{{ row.anomaly_sigma }} · k={{ row.anomaly_k }}</span></td>
@@ -639,7 +642,7 @@ _TEMPLATE = """<!DOCTYPE html>
     <td class="{{ row.cls }}">{{ row.verdict }}</td>
   </tr>
   {% else %}
-  <tr><td colspan="16">无贴图数据（M4 未执行）</td></tr>
+  <tr><td colspan="17">无贴图数据（M4 未执行）</td></tr>
   {% endfor %}
 </table>
 <p class="footnote">
@@ -995,6 +998,10 @@ def generate_html(manifest: RunManifest,
                 or m4["icp_align"].get("accepted") is False)),
             "luma": _num(m4.get("texture_mean_luma"), 1),
             "consistency": _num(m4.get("multiview_color_std"), 2),
+            # 重叠度与上一列配对：色差小 + 重叠度高 = 融合稳；色差小 + 重叠度≈1
+            # = 只有一台相机在看（没分歧自然没色差），单视角硬投影。
+            "overlap": _num(m4.get("texture_overlap"), 2),
+            "overlap_multi": _pct(m4.get("texture_multi_view_ratio")),
             "flipped": _yes(m4.get("normal_flipped")),
             "pixel_scale": _num((m4.get("pixel_scale") or [None])[0], 4),
             # X3 单期异常筛查的结论挂在 M5 的 metrics 上（X3 在 M5 之前跑，

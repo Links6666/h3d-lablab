@@ -726,6 +726,15 @@ def project_photos_to_texture(mesh, uv, faces, images, cameras, photo_dir,
     # 2026-11-02 真机：30 台里 19 台的 R/t 在任何一张照片上都投不出模型，
     # 权重恒为 0；但系统只报 projected_cameras=11，看不出"19 台白拍了"。
     seen_per_cam = np.zeros(len(images), dtype=np.int64)
+    # 每个纹素**有几个相机给出了非零权重**（M5「纹理重叠度」的数据源，
+    # 设计书 §17.3）。与 ``occluded`` 那类「相机×纹素」事件计数不同，
+    # 这是**按纹素去重**的：一个纹素被 5 台相机看到就记 5，被 1 台记 1。
+    #
+    # 为什么非要这个数：``multiview_color_std`` 只说明"融合进去的几台相机
+    # 意见差多少"，读不出"到底有没有第二台相机参与"。整片纹素全靠单相机
+    # 硬投影时，色差恒等于 0（只有一台，没有分歧）——那是最该报警的情况，
+    # 却也是这个指标最漂亮的情况。两者必须配对读。
+    contrib = np.zeros(size * size, dtype=np.int16)
     cons_sum = 0.0
     cons_n = 0
     occluded = 0
@@ -820,6 +829,9 @@ def project_photos_to_texture(mesh, uv, faces, images, cameras, photo_dir,
         cons_sum += float(dev[valid].mean())
         cons_n += 1
         np.add.at(usage, order[:, 0][valid], 1)
+        # 按纹素去重：这一批里每个着色纹素有**几台**相机给了非零权重
+        contrib[flat[start:stop][valid]] = (
+            (W[valid] > 0).sum(axis=1).astype(np.int16))
         idx = flat[start:stop]
         image[idx[valid]] = col[valid]
         painted[idx[valid]] = True
@@ -845,6 +857,11 @@ def project_photos_to_texture(mesh, uv, faces, images, cameras, photo_dir,
     painted_ratio = float(pre_mask.mean())
     fill_ratio = (painted_ratio / utilization) if utilization > 0 else 0.0
     luma = float(tmap[pre_mask].mean()) if pre_mask.any() else 0.0
+    # 纹理重叠度（设计书 §17.3）：只在**真着色**纹素上统计，不外扩/不填洞——
+    # 填出来的纹素没有相机看过，算进去会把重叠度稀释成好看的假数。
+    _c = contrib[painted].astype(np.float64)
+    overlap_mean = round(float(_c.mean()), 2) if _c.size else None
+    overlap_multi = round(float((_c >= 2).mean()), 4) if _c.size else None
     if painted_ratio < 0.6 * utilization:
         log.warning("UV 岛内着色率仅 %.1f%%（图集利用率 %.1f%%）——"
                     "存在大面积无可见相机的纹素，请检查位姿/遮挡",
@@ -883,6 +900,12 @@ def project_photos_to_texture(mesh, uv, faces, images, cameras, photo_dir,
         "back_facing_texels": int(back_mask.sum()),
         "occluded_texels": int(occl_mask.sum()),
         "multiview_color_std": round(cons_sum / cons_n, 2) if cons_n else None,
+        # 纹理重叠度：平均每个着色纹素有**几台**相机参与，以及有 ≥2 台的纹素占比。
+        # 与上一行配对读：``multiview_color_std`` 小 + 重叠度高 = 融合得稳；
+        # ``multiview_color_std`` 小 + 重叠度≈1 = **只有一台相机在看**（没有分歧
+        # 也就没有色差），这是单视角硬投影，接缝与漏色都无从缓解。
+        "texture_overlap": overlap_mean,
+        "texture_multi_view_ratio": overlap_multi,
         "texture_mean_luma": round(float(luma), 2),
         "camera_hist": {names[i]: int(usage[i]) for i in np.argsort(-usage)[:5]
                         if usage[i] > 0},

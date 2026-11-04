@@ -11,7 +11,7 @@
 - `.venv_lab\Scripts\python.exe`（PySide6 6.11 / open3d 0.19 / trimesh / cv2 5.0）；colmap
   `E:\colmap\colmap-x64-windows-cuda\bin\colmap` 4.1.1；打包 `h3d_gui.spec`（onefile+launcher），
   打包版批量 `H3D.exe --batch <cfg>`（**不带 `-c`**）；Inno `D:\h3d_relic_test\InnoSetup7\ISCC.exe`。
-  当前 **1.1.19（r25）**，测试 1423 全绿（≈2.5 min），旧发行版留最近 3 个。
+  当前 **1.1.20（r26）**，测试 1432 全绿（≈2.5 min），旧发行版留最近 3 个。
   `git commit` 要带 `-c user.name=". Link" -c user.email=1530800288@qq.com`
   （仓库里 `user.name` 是空的，历史提交靠环境变量）。
 
@@ -143,6 +143,12 @@
 - UV 逐纹素光栅化；遮挡**降权不硬剔除**（0.05，硬剔除 79.7%→47.8%）；退化三角形回退点质心。
   **法线朝向须相机投票**（`consistent_tangent_plane` 只保相对一致，68% 反向）；泊松掩膜不可用
   亮度阈值，用 `_L1.0_mask.png`；`_bleed` 须零边界平移。
+- **`texture_overlap` 必须与 `multiview_color_std` 配对读**（r26，ADR-0022）：
+  色差小 + 重叠度高 = 融合稳；色差小 + 重叠度≈1 = **只有一台相机在看**（没分歧
+  自然没色差），单视角硬投影——最该报警的情况恰好是色差最漂亮的时候。
+  按纹素去重（不是相机×纹素事件），只在真着色纹素上算（不外扩不填洞），
+  缺键是 None 不是 0。真机 relic_001：overlap 5.77 / multi 98.4% / color_std 40.44
+  → 根子不是"看不到"而是 11 台之间色调差太多。
 - **质量口径**：`coverage_ratio`=图集像素利用率、`atlas_utilization`=岛占比、`fill_ratio=`两者之比；
   真判据看**岛内填充率**（<85% 才是法线/遮挡/位姿问题）。碎片化 `component_metrics`（>3 块且最大
   <60% WARNING）；三平面 RANSAC 27.8%→86.6%（未实装）。

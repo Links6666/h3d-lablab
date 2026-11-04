@@ -63,7 +63,10 @@ log = get_logger("texture.atlas_cache")
 # v4（2026-11-03）：metrics 新增 normal_flip_fraction（法线一致性诊断）。
 # 缓存会复用「首件 metrics」，旧缓存里没这个键 → 永远 None 且不报错。
 # v5（2026-11-03）：metrics 新增 camera_id_used（逐纹素胜出相机诊断）。
-CACHE_VERSION = 5
+# v6（2026-11-04）：metrics 新增 texture_overlap / texture_multi_view_ratio
+# （纹理重叠度，设计书 §17.3）。同样是「键集合变了必须升版本」——
+# 不升的话旧缓存会一直被复用，新指标永远 None 且不报错。
+CACHE_VERSION = 6
 
 _CACHE_REL = os.path.join("99_runs", "atlas_cache")
 

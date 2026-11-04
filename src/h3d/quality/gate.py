@@ -242,6 +242,10 @@ def build_report(
         "texture_seam": metrics.get("texture_seam"),
         "texture_coverage": metrics.get("texture_coverage"),
         "texture_ok": metrics.get("texture_ok"),
+        # 纹理重叠度（设计书 §17.3）也进审计留档：判门失败时 manifest 不写，
+        # qc_metrics.json 是唯一能回答「这件是不是单视角硬投影」的地方。
+        "overlap": metrics.get("overlap"),
+        "texture_multi_view_ratio": metrics.get("texture_multi_view_ratio"),
         # X3 单期异常筛查（参考信息；缺键时保持 None，报表印 N/A——不能印 0）
         "anomaly_ratio": metrics.get("anomaly_ratio"),
         "anomaly_regions": metrics.get("anomaly_regions"),

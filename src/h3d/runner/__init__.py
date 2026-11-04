@@ -806,6 +806,12 @@ def _stage_quality(task: Task, cfg) -> StageResult:
                          mask_path=mask_png,
                          atlas_utilization=m4.get("atlas_utilization"))
     metrics.update(tq)
+    # 纹理重叠度（设计书 §17.3）：数据只能来自 M4 —— 它是唯一看过「每个纹素
+    # 有几台相机参与」的地方。M5 不重算（那要再投一次影，几十秒）。
+    # 缺键 = M4 没跑或老项目没这个指标 → 保持 None，报表印 N/A；**不能填 0**，
+    # 0 会被读成「没有任何相机参与」，与"没量"是两回事。
+    metrics["overlap"] = m4.get("texture_overlap")
+    metrics["texture_multi_view_ratio"] = m4.get("texture_multi_view_ratio")
     metrics["texture_atlas"] = (os.path.basename(tex_png) if tex_png else None)
     if not tq["texture_available"]:
         # 不可评估必须说清原因，否则报表上只是一片 N/A（读起来像"全合格"）
@@ -917,6 +923,11 @@ def _stage_quality(task: Task, cfg) -> StageResult:
         # 覆盖率口径来源：mask = 真实着色掩膜（可靠）；luma = 亮度阈值兜底
         # （暗色器物会被低估）。审计时必须能看出用的是哪一种。
         "texture_mask_source": tq.get("mask_source"),
+        # 纹理重叠度（设计书 §17.3）。必须与 ``multiview_color_std`` 配对读：
+        # 色差小 + 重叠度高 = 融合稳；色差小 + 重叠度≈1 = 只有一台相机在看
+        # （没有分歧自然没有色差），那是单视角硬投影，接缝与漏色都无从缓解。
+        "overlap": metrics.get("overlap"),
+        "texture_multi_view_ratio": metrics.get("texture_multi_view_ratio"),
         # 尺度口径必须进 manifest：报表要据此把 rmse/mps 的单位写成
         # 「任意单位」而不是 mm（2026-10-18）。原先只写进 quality 报告，
         # 结果 HTML/CSV 一律按 mm 展示，纯照片项目的精度数字全是假的。

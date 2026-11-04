@@ -94,3 +94,109 @@ class TestLoadCaptureMeta:
         cams, imgs = load_capture_meta(out)
         assert len(cams) == 1 and len(imgs) == 3
         assert imgs[0]["R"].shape == (3, 3)
+
+
+class TestTextureOverlap:
+    """纹理重叠度（设计书 §17.3）：每个着色纹素有**几台**相机参与。
+
+    为什么这个数必须存在
+    --------------------
+    ``multiview_color_std`` 只说明"融合进去的几台相机意见差多少"，读不出
+    "到底有没有第二台相机参与"。整片纹素全靠单相机硬投影时，色差**恒等于 0**
+    （只有一台，没有分歧）——那是最该报警的情况，却也是这个指标最漂亮的情况。
+    两个数必须配对读。
+
+    这也是 ``quality.run`` 里 ``"overlap": None`` 那条 N/A 的正主：设计书写了
+    这个指标，代码一直没算。
+    """
+
+    def _project(self, tmp_path, n):
+        mesh = _sphere_mesh()
+        new_mesh, uv, faces = unwrap_mesh(mesh)
+        cameras, images = _make_meta(n=n)
+        photo_dir = str(tmp_path / f"p{n}")
+        _write_photos(photo_dir, n=n)
+        img, metrics = project_photos_to_texture(
+            new_mesh, uv, faces, images, cameras, photo_dir,
+            size=128, top_k=3, samples_per_tri=4)
+        return metrics
+
+    def test_overlap_is_reported(self, tmp_path):
+        m = self._project(tmp_path, n=4)
+        assert m["texture_overlap"] is not None
+        assert 1.0 <= m["texture_overlap"] <= 4.0
+        assert 0.0 < m["texture_multi_view_ratio"] <= 1.0
+
+    def test_more_cameras_means_more_overlap(self, tmp_path):
+        """单调性：换相机数必须换结果，否则这个键就是一个常数。"""
+        few = self._project(tmp_path, n=4)["texture_overlap"]
+        many = self._project(tmp_path, n=8)["texture_overlap"]
+        assert many > few + 0.5, (few, many)
+
+    def test_two_cameras_cannot_exceed_two(self, tmp_path):
+        """上限由相机数决定：2 台相机不可能有 3 台参与。"""
+        m = self._project(tmp_path, n=2)
+        assert m["texture_overlap"] <= 2.0
+
+    def test_overlap_and_multi_ratio_are_consistent(self, tmp_path):
+        """定义必须自洽：均值 ≥ 1 + 「有 ≥2 台」的那部分比例。
+
+        均值 = 1 + (1/n)Σ(c_i − 1)，而 c_i ≥ 2 的纹素每个至少贡献 1，
+        所以 overlap ≥ 1 + multi_ratio 恒成立。自洽性断言比拍一个具体数字
+        更能挡住"以后改算法改坏了"。
+        """
+        m = self._project(tmp_path, n=6)
+        assert m["texture_overlap"] >= 1.0 + m["texture_multi_view_ratio"] - 1e-9
+
+
+class TestTextureOverlap:
+    """纹理重叠度（设计书 §17.3）：每个着色纹素有**几台**相机参与。
+
+    为什么这个数必须存在
+    --------------------
+    ``multiview_color_std`` 只说明"融合进去的几台相机意见差多少"，读不出
+    "到底有没有第二台相机参与"。整片纹素全靠单相机硬投影时，色差**恒等于 0**
+    （只有一台，没有分歧）——那是最该报警的情况，却也是这个指标最漂亮的情况。
+    两个数必须配对读。
+
+    这也是 ``quality.run`` 里 ``"overlap": None`` 那条 N/A 的正主：设计书写了
+    这个指标，代码一直没算。
+    """
+
+    def _project(self, tmp_path, n):
+        mesh = _sphere_mesh()
+        new_mesh, uv, faces = unwrap_mesh(mesh)
+        cameras, images = _make_meta(n=n)
+        photo_dir = str(tmp_path / f"p{n}")
+        _write_photos(photo_dir, n=n)
+        img, metrics = project_photos_to_texture(
+            new_mesh, uv, faces, images, cameras, photo_dir,
+            size=128, top_k=3, samples_per_tri=4)
+        return metrics
+
+    def test_overlap_is_reported(self, tmp_path):
+        m = self._project(tmp_path, n=4)
+        assert m["texture_overlap"] is not None
+        assert 1.0 <= m["texture_overlap"] <= 4.0
+        assert 0.0 < m["texture_multi_view_ratio"] <= 1.0
+
+    def test_more_cameras_means_more_overlap(self, tmp_path):
+        """单调性：换相机数必须换结果，否则这个键就是一个常数。"""
+        few = self._project(tmp_path, n=4)["texture_overlap"]
+        many = self._project(tmp_path, n=8)["texture_overlap"]
+        assert many > few + 0.5, (few, many)
+
+    def test_two_cameras_cannot_exceed_two(self, tmp_path):
+        """上限由相机数决定：2 台相机不可能有 3 台参与。"""
+        m = self._project(tmp_path, n=2)
+        assert m["texture_overlap"] <= 2.0
+
+    def test_overlap_and_multi_ratio_are_consistent(self, tmp_path):
+        """定义必须自洽：均值 ≥ 1 + 「有 ≥2 台」的那部分比例。
+
+        均值 = 1 + (1/n)Σ(c_i − 1)，而 c_i ≥ 2 的纹素每个至少贡献 1，
+        所以 overlap ≥ 1 + multi_ratio 恒成立。自洽性断言比拍一个具体数字
+        更能挡住"以后改算法改坏了"。
+        """
+        m = self._project(tmp_path, n=6)
+        assert m["texture_overlap"] >= 1.0 + m["texture_multi_view_ratio"] - 1e-9

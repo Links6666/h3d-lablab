@@ -129,7 +129,11 @@ def run(mesh, ref_pcd, cfg: QualityConfig,
         "rmse_scope": rmse_scope,
         "boundary_ratio": boundary_ratio(mesh),
         "mps_m": mps,
-        "overlap": None,  # 多视角纹理重叠（M4 未实现，N/A）
+        # 纹理重叠度（设计书 §17.3）：数据源只有一个 —— M4 的
+        # ``texture_overlap``（它是唯一看过「每个纹素有几台相机参与」的地方）。
+        # M5 在这里占位 None，随后由 runner 用 M4 指标覆盖；缺键就保持 None，
+        # 报表印 N/A。**不能填 0** —— 0 会被读成「没有任何相机参与」。
+        "overlap": None,
         "max_distance_m": max_dist,
         "ok": check_quality(
             {"coverage": coverage, "rmse_mm": rmse_units * 1000.0,
