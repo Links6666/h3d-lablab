@@ -28,33 +28,35 @@ _ms.loader.exec_module(_mvi)
 _H3D_VER = _mvi.build()
 print(f'[h3d.spec] PE 版本资源已刷新：{_H3D_VER}')
 
+# 2026-11-04：`h3d.*` 改为**自动收集**，不再手写清单。
+# 手写清单已漂过两次：先是 h3d.core.lockfile / h3d.health（函数内延迟 import
+# 抓不到），这次是当天新增的 h3d.delivery_verify、以及整批 h3d.anomaly.*
+# （X3 阶段）和 h3d.archive.*——打包版跑到 X3 就会 ModuleNotFoundError。
+# 第三方包没法按包名枚举，仍手写（见下面的清单）。
+import sys as _sys
+_sys.path.insert(0, _os.path.join(_HERE, 'src'))
+from PyInstaller.utils.hooks import collect_submodules  # noqa: E402
+_H3D_MODULES = collect_submodules('h3d')
+print(f'[h3d.spec] h3d 子模块自动收集：{len(_H3D_MODULES)} 个')
+
 a = Analysis(
     ['src/h3d/gui/launcher.py'],
     pathex=['src'],
     binaries=[],
     datas=[('assets/h3d_icon_v3.ico', 'assets'), ('assets/h3d_icon_v3.png', 'assets')],
     hiddenimports=[
-        'h3d.cli', 'h3d.gui.app', 'h3d.gui.wizard', 'h3d.gui.welcome',
-        'h3d.gui.history', 'h3d.gui.config_edit', 'h3d.gui.runner',
-        'h3d.gui.logparse', 'h3d.gui.preview', 'h3d.gui.export',
-        'h3d.gui.advanced', 'h3d.gui.demo', 'h3d.gui.report_view',
-        'h3d.gui.viewer3d', 'h3d.gui.launcher', 'h3d.gui.resources',
-        'h3d.gui.items',
-        'h3d.sfm_solve', 'h3d.runner', 'h3d.runner.batch_processor',
-        'h3d.runner.task', 'h3d.io', 'h3d.core', 'h3d.core.config',
-        'h3d.core.scale', 'h3d.core.media',
-        # 2026-11-01：阶段清单的唯一真源（ADR-0007）。report/gui 三处都在**模块
-        # 顶层** import 它，静态分析本该抓得到；登记是因为这个模块还以
-        # `from h3d.core.stages import STAGE_ORDER` 的形式被 h3d.core 之外引用，
-        # 漏登记的代价是打包版起来就 ImportError（与 lockfile 同类，宁多勿少）。
-        'h3d.core.stages',
-        # r6.2：数据根单实例锁。run() 里是**函数内延迟 import**
-        # （from h3d.core.lockfile import acquire_run_lock），PyInstaller 静态
-        # 分析抓不到；不显式声明则打包版调用时 ModuleNotFoundError，表现是
-        # 「一开始跑就崩」而不是锁生效。
-        'h3d.core.lockfile',
-        # 2026-10-18：带纹理 GLB 必须由 trimesh 写（Open3D 会静默丢弃纹理与 UV）。
-        # trimesh 由 h3d.texture.uv 内部延迟导入，PyInstaller 静态分析抓不到。
+        # 本项目模块由 collect_submodules('h3d') 自动收集（见文件头）
+        *_H3D_MODULES,
+        # 下面只剩**第三方**：没法按包名枚举，必须手写。
+        # 这些都是「函数内延迟 import / 运行时才用到」的包，PyInstaller 的静态
+        # 分析抓不到，漏了就是打包版报 ModuleNotFoundError。
+        #
+        # 历史上真正漏过的（现在已由 collect_submodules 覆盖，留作教训）：
+        #   h3d.core.lockfile  数据根单实例锁 → 「一开始跑就崩」
+        #   h3d.health.*       启动自检 → 少跑检查项，「自检全绿但什么都没查」
+        #   h3d.preprocess.background  M1 几何清理 → M1 阶段崩
+        #   h3d.anomaly.*      X3 阶段 → 打包版跑到 X3 才崩（2026-11-04 发现）
+        #   h3d.delivery_verify  核验按钮 → 「点了没反应」
         'trimesh', 'trimesh.exchange.gltf', 'trimesh.visual.material',
         'trimesh.visual.texture',
         # r7.1：几何清理/法线朝向在 M1 里是**函数内延迟 import**
@@ -65,16 +67,8 @@ a = Analysis(
         # run_preflight 内部**函数级 import**（避免 import h3d.health 时就有
         # 依赖），PyInstaller 抓不到 —— 不登记则打包版一启动就少跑检查项
         # （自检"全绿"但什么都没查，比报错更危险）。
-        'h3d.health', 'h3d.health._boot', 'h3d.health._project',
         'psutil',
-        'h3d.preprocess', 'h3d.preprocess.background',
-        'h3d.preprocess.normal_estimate', 'h3d.mesh',
-        'h3d.photo_texture', 'h3d.quality', 'h3d.publish',
-        'h3d.thesis_tables', 'h3d.ctrl_points', 'h3d.ctrl_auto',
-        'h3d.geo_align', 'h3d.change', 'h3d.novel_calib',
-        'h3d.subset_model', 'h3d.incremental_depth', 'h3d.colour',
-        'h3d.texture', 'h3d.report', 'h3d.report.html_export',
-        'h3d.report.plot_gen', 'matplotlib.backends.backend_qtagg',
+        'matplotlib.backends.backend_qtagg',
         'matplotlib.backends.backend_agg', 'sklearn.neighbors',
         'sklearn.utils', 'yaml', 'jinja2', 'pypdf', 'PIL',
     ],

@@ -38,9 +38,28 @@
 
 守卫测试不是形式主义：`00_ref` 就是它第一天报出来的。
 
+### 打包链路（先真打一次包才发现）
+
+真打两次（各约 3.5 分钟、238 MB onefile），抓到三个只在打包版出现的缺陷
+（ADR-0019）：
+
+1. **`hiddenimports` 手写清单漂了**：漏了 `h3d.anomaly.*`（X3 阶段 →
+   ModuleNotFoundError）、`h3d.archive.*`、`h3d.delivery_verify`（核验按钮点了
+   没反应）。改为 `collect_submodules('h3d')` 自动收集 111 个模块，只留第三方手写。
+2. **打包版 CLI 透传白名单漂了**：缺 `verify`/`archive`/`anomaly`/`anomaly-track`
+   → `H3D.exe verify <目录>` 被当成无参启动 GUI。改为从 CLI parser 派生。
+3. **两个 schema 撞同名文件**：`runner.manifest`（阶段账本，键 `stages`）与 M6 的
+   `90_meta/delivery_manifest.json`（交付摘要，键 `deliveries`）。配置指错时
+   **M6 每跑一次就把 30 条阶段记录换成 0 条**，断点续跑全废。M6 现在拒绝覆盖，
+   核验改为按「最完整」挑账本（阶段数 + 产物在磁盘的个数）。
+
+打包版实测：`--version` → 1.1.17；`verify` → PASS 23；`--batch` → 3 件全完成、
+X3 阶段真执行。
+
 ### 测试
 
-1348 项全绿（新增 11 项：目录登记 3、版本一致 3、数值核对 2、核验出口 3）。
+1359 项全绿（新增 22 项：目录登记 3、版本一致 3、数值核对 2、核验出口 3、
+打包清单 4、CLI 透传 3、清单撞名 4）。
 
 ### 未决（都需要新数据）
 

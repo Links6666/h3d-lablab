@@ -27,4 +27,9 @@ report:
 
 runner:
   workers: 1
-  manifest: D:/h3d_relic_test/90_meta/delivery_manifest.json
+  # 必须是**阶段账本**，不能是 90_meta/delivery_manifest.json（那是 M6 的交付
+  # 摘要，schema 不同）。指错了 M6 会把账本覆盖成 0 条阶段记录。
+  # 这个项目的阶段账本历史地落在 90_meta/delivery_manifest.json（有 stages、
+  # 11 条记录、产物 0 缺失）。改名属数据整理，暂不动；M6 现在会**拒绝**
+  # 覆盖它并留 WARNING，所以账本不会再被弄没。
+  manifest: D:/h3d_relic_test/阶段成果/90_meta/delivery_manifest.json

@@ -21,12 +21,36 @@ import sys
 import traceback
 
 
-#: 打包版需要透传给 ``h3d.cli`` 的参数（第一个位置）。``--batch`` / ``--report``
-#: 是历史入口，单独处理以保持兼容。
-_CLI_PASSTHROUGH = {
-    "-h", "--help", "--version",
-    "init", "validate", "batch", "report", "doctor",
-}
+#: 永远透传的固定标志
+_PASSTHROUGH_FLAGS = ("-h", "--help", "--version")
+#: 缓存（首次调用时从 CLI parser 派生，见 cli_passthrough）
+_CLI_PASSTHROUGH = None
+
+
+def cli_passthrough() -> set:
+    """打包版要交给 ``h3d.cli`` 的第一个参数集合。
+
+    从 CLI 的 parser **派生**，不再手写——这份白名单已漂过（2026-11-04 实测
+    缺 ``verify`` / ``archive`` / ``anomaly`` / ``anomaly-track``）：打包版
+    ``H3D.exe verify <目录>`` 会被当成**无参启动 GUI**，用户以为什么都没发生。
+    而 ``verify`` 正是那一版新加的命令。
+
+    派生失败时退回历史白名单：宁可少支持一个子命令，也不能让 GUI 起不来。
+    """
+    global _CLI_PASSTHROUGH
+    if _CLI_PASSTHROUGH is not None:
+        return _CLI_PASSTHROUGH
+    subs = set()
+    try:
+        from h3d.cli import _build_parser
+        for act in _build_parser()._actions:
+            if act.__class__.__name__.endswith("SubParsersAction"):
+                subs = set(act.choices)
+                break
+    except Exception:  # noqa: BLE001 - 派不出来不能拖垮启动
+        subs = {"init", "validate", "batch", "report", "doctor"}
+    _CLI_PASSTHROUGH = set(_PASSTHROUGH_FLAGS) | subs
+    return _CLI_PASSTHROUGH
 
 
 class _Tee:
@@ -204,7 +228,7 @@ def main(argv: list | None = None) -> int:
     # 打包版长期只认 --batch/--report，其余参数一律进 GUI：``H3D.exe --version``
     # 会**开出一个窗口然后挂住**（巡检 2026-10-23 实测，脚本里表现为永久阻塞），
     # ``doctor`` / ``validate`` 同样开窗口。CLI 子命令必须原样透传。
-    if argv and (argv[0] in _CLI_PASSTHROUGH):
+    if argv and (argv[0] in cli_passthrough()):
         return _run_cli(argv)
     # GUI 模式：先装崩溃诊断（无声闪退写日志）
     from h3d.gui.diag import install_crash_guard

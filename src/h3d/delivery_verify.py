@@ -159,14 +159,46 @@ def meta_dir(root):
     return os.path.join(root, "90_meta")
 
 
+def _ledger_score(man):
+    """账本「有多了解这个项目」：阶段记录数、其中产物还在磁盘的个数。"""
+    st = man.get("stages") or man.get("items") or {}
+    if not isinstance(st, dict):
+        return (0, 0)
+    n = len(st)
+    alive = sum(1 for e in st.values()
+                for p in ((e or {}).get("outputs") or [])
+                if isinstance(p, str) and os.path.exists(p))
+    return (n, alive)
+
+
 def load_manifest(root):
+    """读**阶段账本**：在候选里挑「最完整」的那份，而不是按文件名排队。
+
+    两个坑都真踩过：
+      · `90_meta/delivery_manifest.json` 是 M6 的**交付摘要**（键 `deliveries`），
+        原来优先读它 → 报告「manifest 里没有任何阶段记录」，把正常项目判成坏的；
+      · 反过来盲信 `run_manifest.json` 也不行：探针脚本会各自写一份残缺账本
+        （真机 relic_001 的 `90_meta/run_manifest.json` 只有 6 条、M4 覆盖率还是
+        0.0010 的陈年值），照着它核验会把正确产物判成对不上。
+
+    判据取「阶段记录数 + 产物还在磁盘的个数」，谁更了解这个项目用谁。
+    """
     md = meta_dir(root)
-    for name in ("delivery_manifest.json", "run_manifest.json"):
-        p = os.path.join(md, name)
-        if os.path.isfile(p):
+    cands = [os.path.join(md, n) for n in
+             ("run_manifest.json", "delivery_manifest.json")]
+    best, best_score = (None, None), (0, 0)
+    for p in cands:
+        if not os.path.isfile(p):
+            continue
+        try:
             with open(p, encoding="utf-8") as fh:
-                return p, json.load(fh)
-    return None, None
+                man = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        score = _ledger_score(man)
+        if score > best_score:
+            best, best_score = (p, man), score
+    return best if best[0] else (None, None)
 
 
 def _field(entry, name):

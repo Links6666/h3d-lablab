@@ -25,4 +25,5 @@ report:
 
 runner:
   workers: 1
-  manifest: output/_build/batch3/阶段成果/90_meta/delivery_manifest.json
+  # 必须是阶段账本（键 stages），不是 M6 的交付摘要（键 deliveries）
+  manifest: output/_build/batch3/阶段成果/90_meta/run_manifest.json

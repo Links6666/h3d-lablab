@@ -915,6 +915,25 @@ def _stage_quality(task: Task, cfg) -> StageResult:
     return StageResult("M5", TaskStatus.DONE, reports, manifest_metrics)
 
 
+def _delivery_manifest_path(out_path: str, ledger_path: str) -> str | None:
+    """M6 交付清单的输出路径；与**阶段账本**撞名时返回 ``None``（拒绝写）。
+
+    两个文件长得像但 schema 完全不同：
+      · ``runner.manifest``（默认 ``output/run_manifest.json``）＝阶段账本，键 ``stages``
+      · ``90_meta/delivery_manifest.json``＝交付摘要，键 ``deliveries``
+
+    2026-11-04 真机：配置把 ``runner.manifest`` 指到了 ``delivery_manifest.json``，
+    M6 读不到 ``deliveries``（那是账本）→ 按空清单重建 → **账本被 0 条阶段记录
+    覆盖**。断点续跑全废，``h3d verify`` 报「没有任何阶段记录」。
+    宁可这次不写交付摘要（少一份汇总），也不能把账本弄没。
+    """
+    if not out_path:
+        return None
+    if ledger_path and os.path.abspath(out_path) == os.path.abspath(ledger_path):
+        return None
+    return out_path
+
+
 @register_stage("M6")
 def _stage_publish(task: Task, cfg) -> StageResult:
     """M6 发布与溯源：交付包归档（导出模型 + 元数据快照 + 质检报告，主线收官）。
@@ -1022,7 +1041,17 @@ def _stage_publish(task: Task, cfg) -> StageResult:
         "meta": meta_path,
         "config_hash": config_hash,
     })
-    delivery_manifest = build_delivery_manifest(entries, dm_path)
+    _dm_out = _delivery_manifest_path(dm_path, getattr(cfg.runner, "manifest", ""))
+    if _dm_out is None:
+        log.warning(
+            "M6 跳过交付清单写出：路径 %s 与阶段账本（runner.manifest）是同一个"
+            "文件，写下去会把 30 条阶段记录换成一份交付摘要——断点续跑就废了。"
+            "请把 runner.manifest 改成 output/run_manifest.json。", dm_path)
+        delivery_manifest = dm_path        # 已在 outputs 里，路径照记（文件仍是账本）
+        stage_metrics.setdefault("M6", {})["delivery_manifest_skipped"] = \
+            "path_collides_with_run_manifest"
+    else:
+        delivery_manifest = build_delivery_manifest(entries, _dm_out)
 
     outputs = (models + [meta_path, delivery_manifest]
                + ([atlas] if atlas else []) + ([qc_report] if qc_report else []))
