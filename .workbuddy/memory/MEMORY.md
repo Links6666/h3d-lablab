@@ -11,12 +11,15 @@
 - `.venv_lab\Scripts\python.exe`（PySide6 6.11 / open3d 0.19 / trimesh / cv2 5.0）；colmap
   `E:\colmap\colmap-x64-windows-cuda\bin\colmap` 4.1.1；打包 `h3d_gui.spec`（onefile+launcher），
   打包版批量 `H3D.exe --batch <cfg>`（**不带 `-c`**）；Inno `D:\h3d_relic_test\InnoSetup7\ISCC.exe`。
-  当前 1.1.13（r17），旧发行版留最近 3 个。
+  当前 **1.1.18（r24）**，测试 1403 全绿（≈2.5 min），旧发行版留最近 3 个。
+  `git commit` 要带 `-c user.name=". Link" -c user.email=1530800288@qq.com`
+  （仓库里 `user.name` 是空的，历史提交靠环境变量）。
 
 ## 待办
 - **真实扫描件仍缺**：异源配准/双源融合/毫米级精度都要它背书；现有端到端只是**同源功能性验证**。
 - GUI 在 `00_raw` 只有 1 个文件时应提示「本件无法验证配准」（单站直通正确，用户会误判）。
-- 约束面板加「数据来源」（激光件/照片重建件）：勾后者即不当米制、不自称激光锚定。
+- ~~约束面板加「数据来源」~~ **r24 已做**（`runner.data_source`，ADR-0020）。剩余：
+  GUI 在 `00_raw` 只有 1 个文件时提示「本件无法验证配准」（报表侧 M2 已说，运行前没说）。
 - **S0 病害语义（AI）**：代码/环境随时能开（4GB 够 MobileSAM+YOLOv8n-seg），**卡在数据**：
   1.1.12 的 16 个候选区裁图全是「岛边界/材质交界」，无裂隙/起翘/脱落形态，残存彩绘仅 1.89%，
   硬标只得「彩绘/胎体」= D15 域分类。需一件病害形态明确的文物（2~3 类各若干实例）。
@@ -79,6 +82,25 @@
   文本里禁裸 `<`。
 - **手写白名单陷阱**：`runner.manifest_metrics` 是手写 dict，上游算出的键不写进去 → 报表全读不到
   （r16 七处缺陷根因）。新增指标三处同步：计算处 → 白名单 → 模板。
+
+## 数据来源与可复现（r24 起，ADR-0020）
+- **「00_raw 有文件」≠「有激光基准」**。`metric_units` 由 `runner.data_source`
+  （auto/laser/photogrammetry）+ M1 证据共同决定（`quality.gate.resolve_metric_units`）。
+  `auto` 必须与旧实现逐字等价；`photogrammetry` 恒不主张米制。
+  **证据压过声明**：声明 laser 而 M1 判出 `raw_looks_like_sfm` → 仍不主张米制 +
+  `declared_source_conflict` + WARN。声明是把判断权交回用户，**不是**后门。
+- `metric_units_reason` 必须与布尔一起落盘（manifest + `qc_metrics.json`）：只落
+  布尔的话，「机器猜的 auto」与「人声明的 photogrammetry」事后长得一模一样，而
+  两者可信度差一个量级。判门失败时 manifest 不写，`qc_metrics.json` 是唯一留档。
+- **表面采样一律走 `h3d.io.sample_surface(mesh, n, seed)`**：
+  `mesh.sample_points_uniformly` **没有 seed 参数**（Open3D 0.19），同一输入两次
+  结果不同。真机 M5 中误差 86.78 / 87.42 / 87.01（三次同一份数据）。
+  **<1% 的漂移最危险**——不触发任何断言，又让两天前的报表对不上。
+- 核验账本候选 = `90_meta/` **和** `阶段成果/output/run_manifest.json`（后者是
+  `RunnerConfig.manifest` 默认值，GUI 一键生成也写这里）。只搜前者会把健康项目
+  判成坏的，而且**只在项目"健康"时才报错**（有问题的项目先因别的原因失败，被盖住）。
+- 口径文字单一实现 = `quality.gate.scope_text`（原来 `quality.run` 与
+  `build_report` 各写一遍，加声明那一档时只改了 fallback 那份）。
 
 ## 跨层契约
 - **终态五态** done/fail/skipped(+`skip_kind`)/disabled/键不存在=未执行；分母=件数×阶段数−未启用。
