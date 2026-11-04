@@ -171,6 +171,29 @@ def _ledger_score(man):
     return (n, alive)
 
 
+def _ledger_candidates(root):
+    """阶段账本可能落在哪：``90_meta`` 与 ``output`` 两处都要看。
+
+    只找 ``90_meta`` 会把**正常项目判成坏的**（2026-11-04 实测）：runner 的默认
+    账本位置是 ``<阶段根>/output/run_manifest.json``（``RunnerConfig.manifest``
+    的默认值就是 ``output/run_manifest.json``），GUI 一键生成也写这里；而
+    ``90_meta`` 只放 M6 的交付摘要与元数据快照。于是一个刚跑完的项目
+    ``h3d verify`` 报「找不到 manifest」——验收工具自己先不可靠了。
+    """
+    cands = [os.path.join(meta_dir(root), n) for n in
+             ("run_manifest.json", "delivery_manifest.json")]
+    for base in (os.path.join(root, "output"),
+                 os.path.join(root, "阶段成果", "output")):
+        cands.append(os.path.join(base, "run_manifest.json"))
+    seen, out = set(), []
+    for p in cands:
+        key = os.path.normcase(os.path.abspath(p))
+        if key not in seen:
+            seen.add(key)
+            out.append(p)
+    return out
+
+
 def load_manifest(root):
     """读**阶段账本**：在候选里挑「最完整」的那份，而不是按文件名排队。
 
@@ -183,11 +206,8 @@ def load_manifest(root):
 
     判据取「阶段记录数 + 产物还在磁盘的个数」，谁更了解这个项目用谁。
     """
-    md = meta_dir(root)
-    cands = [os.path.join(md, n) for n in
-             ("run_manifest.json", "delivery_manifest.json")]
     best, best_score = (None, None), (0, 0)
-    for p in cands:
+    for p in _ledger_candidates(root):
         if not os.path.isfile(p):
             continue
         try:
