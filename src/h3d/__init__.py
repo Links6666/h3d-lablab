@@ -8,9 +8,14 @@
     from h3d import core
 """
 
-#: 版本号**唯一来源**（2026-10-18 统一）：此前 __version__ 是 0.1.0、
-#: pyproject 是 1.0.0、发行包是 v1.1.0、报表页脚还把 0.1.0 写死在模板里，
-#: 四处不一致。改版本只改这里 + pyproject，报表/CLI 全部跟着变。
-__version__ = "1.1.13"
+#: 版本号**唯一来源**。报表页脚、CLI、`pyproject.toml` 全部从这一行派生
+#: （pyproject 用 `dynamic = ["version"]` → `attr = "h3d.__version__"`）。
+#:
+#: 2026-11-04 修：注释原来写「改版本只改这里 + pyproject」——**"改两处"不是唯一
+#: 来源**，实测已漂成 pyproject 1.1.12 / 本文件 1.1.13 / CHANGELOG 1.1.16。
+#: 现在只有这一行是真的，另外两处要么派生、要么由测试对着它校验。
+#: 改版本时：改这一行 + 在 CHANGELOG 顶部加同号条目（`tests/test_version_single_source.py`
+#: 会拦住漏改）。
+__version__ = "1.1.17"
 
 __all__ = ["__version__"]

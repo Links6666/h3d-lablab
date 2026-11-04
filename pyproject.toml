@@ -10,7 +10,9 @@ norecursedirs = ["py4dgeo-1.2.0", "output", "docs", "examples", "notebooks", "*.
 
 [project]
 name = "h3d"
-version = "1.1.12"
+# 版本号只有一处真源：h3d.__version__（src/h3d/__init__.py）。
+# 原来这里静态写着 1.1.12、包里是 1.1.13、CHANGELOG 已到 1.1.16——三处漂。
+dynamic = ["version"]
 description = "中小型文物三维建模自动化系统(路线E)"
 requires-python = ">=3.10"
 dependencies = [
@@ -35,6 +37,9 @@ dev = ["pytest>=8.0", "mypy>=1.8"]
 
 [project.scripts]
 h3d = "h3d.cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "h3d.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
