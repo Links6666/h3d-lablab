@@ -24,6 +24,14 @@ ACCENT = colors.HexColor("#8a5a2b")
 RULE = colors.HexColor("#d8d4cc")
 
 
+def _version() -> str:
+    """作者字段里的版本号取自 h3d.__version__（别再手抄一遍——它漂过）。"""
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+    import h3d
+    return h3d.__version__
+
+
 def setup_fonts():
     pdfmetrics.registerFont(TTFont("MSYH", "C:/Windows/Fonts/msyh.ttc",
                                    subfontIndex=0))
@@ -65,6 +73,40 @@ def build_styles(F, FB):
     }
 
 
+def join_wrapped(parts):
+    """把被硬换行切开的同一段文字拼回去。
+
+    为什么需要：本文的 Markdown 是**硬换行**的（每行 ~40 个汉字），而
+    reportlab 的 Paragraph 会自己排版。按行各建一个 Paragraph 的后果是
+    ①每行都成了独立段落（左边缘参差）；②跨行的 ``**粗体**`` 配不上对，
+    星号被原样印出来（第一版 PDF 第 6 页就是这样）。
+
+    拼接规则：中文之间直接相连，ASCII 字母数字之间补一个空格——否则
+    ``sample_points_uniformly`` 这种单词会在换行处被粘成一坨。
+    """
+    out = ""
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        if out and out[-1].isascii() and out[-1].isalnum() \
+                and part[0].isascii() and part[0].isalnum():
+            out += " "
+        out += part
+    return out
+
+
+def _is_plain(ln: str) -> bool:
+    """这一行是不是「可以跟上下行拼成一段」的普通正文。"""
+    if not ln.strip():
+        return False
+    if ln.startswith(("```", "|", "### ", "## ", "# ", "> ")):
+        return False
+    if re.match(r"^\d+\.\s", ln) or ln.startswith("- "):
+        return False
+    return True
+
+
 def table_flow(rows, S, width):
     ncol = max(len(r) for r in rows)
     rows = [r + [""] * (ncol - len(r)) for r in rows]
@@ -95,7 +137,7 @@ def main():
                             leftMargin=20 * mm, rightMargin=20 * mm,
                             topMargin=18 * mm, bottomMargin=16 * mm,
                             title="方法学：让自动化系统的数字可信",
-                            author="H3D 1.1.16-r22")
+                            author=f"H3D {_version()}")
     width = A4[0] - 40 * mm
     story = []
     lines = text.split("\n")
@@ -126,6 +168,32 @@ def main():
                 i += 1
             story.append(table_flow(rows, S, width))
             story.append(Spacer(1, 7))
+            continue
+        # 普通正文 / 列表项：把硬换行拼回一段（见 join_wrapped 的说明）
+        m_item = re.match(r"^(\d+)\.\s+(.*)$", ln)
+        if m_item or ln.startswith("- "):
+            head = m_item.group(2) if m_item else ln[2:]
+            bullet = (m_item.group(1) + ".") if m_item else "\u2022"
+            chunk = [head]
+            j = i + 1
+            while j < len(lines) and lines[j].strip() \
+                    and lines[j].startswith(("  ", "\t")) \
+                    and _is_plain(lines[j]):
+                chunk.append(lines[j])
+                j += 1
+            story.append(Paragraph(esc(join_wrapped(chunk)), S["li"],
+                                   bulletText=bullet))
+            i = j
+            continue
+        if _is_plain(ln):
+            chunk = [ln]
+            j = i + 1
+            while j < len(lines) and _is_plain(lines[j]) \
+                    and not lines[j].startswith(("  ", "\t")):
+                chunk.append(lines[j])
+                j += 1
+            story.append(Paragraph(esc(join_wrapped(chunk)), S["body"]))
+            i = j
             continue
         if ln.startswith("### "):
             story.append(Paragraph(esc(ln[4:]), S["h3"]))
