@@ -11,7 +11,7 @@
 - `.venv_lab\Scripts\python.exe`（PySide6 6.11 / open3d 0.19 / trimesh / cv2 5.0）；colmap
   `E:\colmap\colmap-x64-windows-cuda\bin\colmap` 4.1.1；打包 `h3d_gui.spec`（onefile+launcher），
   打包版批量 `H3D.exe --batch <cfg>`（**不带 `-c`**）；Inno `D:\h3d_relic_test\InnoSetup7\ISCC.exe`。
-  当前 **1.1.21（r27）**，测试 1435 全绿（≈2.5 min），旧发行版留最近 3 个。
+  当前 **1.1.22（r28）**，测试 1437 全绿（≈2.5 min），旧发行版留最近 3 个。
   `git commit` 要带 `-c user.name=". Link" -c user.email=1530800288@qq.com`
   （仓库里 `user.name` 是空的，历史提交靠环境变量）。
 
@@ -53,6 +53,12 @@
 - **尺度初始化禁用 min/max 包围盒**（COLMAP 飞点把 6.19 撑到 47.83）；用 **99% 分位**。
 - **「合格」的对齐也可能不如「不做」**：先问 `already_aligned`（中位距离 <1% 对角线跳过）。
   被拒 → **回退恒等**，不得从失败对齐导出控制点。
+- **RANSAC 从没定过种子**（r28，ADR-0024）：同一份输入注入 120°，**17 次里 3 次
+  解出 179° 翻转解**（fitness 0.52，中位间距仍只 0.75% 所以间距判据放行）。
+  翻转候选从 RANSAC 解派生 → 初值一歪三个候选一起歪。已 `io.rng.seed_rng` 定种子
+  （错解 5 次未再复现），但**初值选择仍有进程间差异**（5 次里 1 次选中 ransac）。
+  `fitness<0.55` 仍**只标不拦**（low_confidence）→ 待用户定 A/B/C 方案。
+  查"是不是回归"时 3 次样本不够：本例失败率 18%，r23 的 4 次全对只是运气。
 - **ICP 单初值在轴对称物上解出翻转解**（30°→166.58°，fitness 0.336 还越过 0.2 失败门）→ 多初值
   （RANSAC+绕两主轴 180°）取 fitness 最高；`fitness<0.55` 落 `low_confidence`（不判失败但必须
   可见）。修复后 7/30/90/120/180° ≤0.02°。

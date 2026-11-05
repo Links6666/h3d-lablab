@@ -20,8 +20,11 @@ import os
 import re
 
 ROOT = os.path.join(os.path.dirname(__file__), "..", "src", "h3d")
-#: 适配层是唯一允许直接碰 Open3D 采样 API 的地方
-ALLOWED = {os.path.join("io", "mesh_io.py")}
+#: 采样 API 只允许在「采样实现」里出现（`sample_surface` 的实现处）
+ALLOWED_SAMPLING = {os.path.join("io", "mesh_io.py")}
+#: 随机源只允许在 `io/rng.py` 里碰 —— 比采样更严一格：
+#: 「定种子」与「采样」是两个动作，各有一个入口，谁也别替谁做
+ALLOWED_RNG = {os.path.join("io", "rng.py")}
 
 
 def _sources():
@@ -63,7 +66,7 @@ class TestSamplingHasOneEntry:
     def test_no_direct_open3d_sampling_outside_the_adapter(self):
         offenders = []
         for rel, path in _sources():
-            if rel in ALLOWED:
+            if rel in ALLOWED_SAMPLING:
                 continue
             for code in _code_lines(path):
                 if re.search(r"\.sample_points_uniformly\s*\(", code) \
@@ -77,7 +80,7 @@ class TestSamplingHasOneEntry:
     def test_no_raw_open3d_rng_seeding_outside_the_adapter(self):
         offenders = []
         for rel, path in _sources():
-            if rel in ALLOWED:
+            if rel in ALLOWED_RNG:
                 continue
             for code in _code_lines(path):
                 if "utility.random.seed" in code:
@@ -87,8 +90,9 @@ class TestSamplingHasOneEntry:
             "「先定种子、后自己采样」的两个语句，中间插一行就断：\n  "
             + "\n  ".join(offenders))
 
-    def test_the_adapter_actually_exposes_the_entry(self):
-        from h3d.io import SAMPLE_SEED, sample_surface
+    def test_the_adapter_actually_exposes_the_entries(self):
+        from h3d.io import SAMPLE_SEED, sample_surface, seed_rng
 
         assert callable(sample_surface)
+        assert callable(seed_rng)
         assert isinstance(SAMPLE_SEED, int)

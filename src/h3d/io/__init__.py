@@ -25,6 +25,7 @@ from .pointcloud_io import (
     load_all,
     save_point_cloud,
 )
+from .rng import DEFAULT_SEED, seed_rng
 from .mesh_io import (
     MESH_READ_EXT,
     MESH_WRITE_EXT,
@@ -51,4 +52,7 @@ __all__ = [
     # 可复现采样
     "sample_surface",
     "SAMPLE_SEED",
+    # 随机源（RANSAC 等非采样算法用）
+    "seed_rng",
+    "DEFAULT_SEED",
 ]

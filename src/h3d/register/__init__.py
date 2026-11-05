@@ -54,6 +54,18 @@ _FALLBACK_DISTANCE_RATIO = 2.0
 #: 当成功，一路合格到交付。
 _LOW_CONFIDENCE_FITNESS = 0.55
 
+#: RANSAC 的随机种子（2026-11-05）。**不定种子会让同一份输入跑出不同结果**：
+#: 真机点云注入 120° 旋转，17 次里 3 次解出 179° 翻转解（fitness 0.52），
+#: 其余 14 次正确（fitness 1.00）。配准结果会被写进报表与交付元数据，
+#: 不可复现就等于不可引用（与 M5 采样定种子同一个理由，ADR-0020/0023）。
+_RANSAC_SEED = 20261105
+
+#: RANSAC 的随机种子（2026-11-05）。**不定种子会让同一份输入跑出不同结果**：
+#: 真机点云注入 120° 旋转，17 次里 3 次解出 179° 翻转解（fitness 0.52），
+#: 其余 14 次正确（fitness 1.00）。配准结果会被写进报表与交付元数据，
+#: 不可复现就等于不可引用（与 M5 采样定种子同一个理由，ADR-0020/0023）。
+_RANSAC_SEED = 20261105
+
 
 def _rotation_about(center: np.ndarray, axis: np.ndarray,
                     theta: float) -> np.ndarray:
@@ -155,6 +167,18 @@ def run(source, target, cfg: RegisterConfig) -> dict:
             or not target.has_points():
         from h3d.core import InputDataError
         raise InputDataError("配准输入点云为空（0 点）")
+
+    # 0) 定种子：RANSAC 内部用 Open3D 的进程级随机源。不定种子时同一份
+    #    输入两次可能给出**不同的初值**，进而选出不同的翻转解。
+    from h3d.io import seed_rng
+
+    seed_rng(_RANSAC_SEED)
+
+    # 0) 定种子：RANSAC 内部用 Open3D 的进程级随机源。不定种子时同一份
+    #    输入两次可能给出**不同的初值**，进而选出不同的翻转解。
+    from h3d.io import seed_rng
+
+    seed_rng(_RANSAC_SEED)
 
     # 1) FPFH 特征（内部自动补齐法线）
     f_src = compute_fpfh(source, cfg.fpfh_radius)

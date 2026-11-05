@@ -177,7 +177,10 @@ def sample_surface(mesh, n_samples: int, seed: int = SAMPLE_SEED):
     o3d = _o3d()
     if mesh is None or len(mesh.triangles) == 0 and len(mesh.vertices) == 0:
         raise InputDataError("采样失败：网格为空")
-    o3d.utility.random.seed(int(seed))
+    # 「怎么种子」只在本包 rng.py 里实现一次
+    from .rng import seed_rng
+
+    seed_rng(seed)
     return mesh.sample_points_uniformly(int(n_samples))
 
 
