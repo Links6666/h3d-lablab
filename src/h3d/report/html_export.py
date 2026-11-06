@@ -91,6 +91,40 @@ _SOURCE_CN = {
 # --------------------------------------------------------------------------- #
 # 数值格式化（核心：一切缺失 / nan / inf 统一成 N/A，绝不把 "nan" 印进表格）
 # --------------------------------------------------------------------------- #
+#: 阶段号的**对外名称**（2026-11-06，ADR-0027）。对内仍用 ``STAGE_ORDER`` 里的
+#: 代码 id（与 manifest 键一一对应），对外一律换成这张表——
+#: 用户按指南写论文，指南的 ``X2`` 就是这里的「异常检测」，而代码里它叫 ``X3``。
+#: ``X2``（色差评估）必须一起给出中文名，否则表里会出现两个「X2」。
+#: **只映射会撞号的两个**：代码 `X3` = 指南 `X2`（异常检测）、代码 `X2` = 色差评估。
+#: S1/P1/M1–M6 本来就没有歧义，不动——映射面越小，波及越少。
+_STAGE_PUBLIC = {
+    "X3": "X2 异常检测",
+    "X2": "色差评估",
+}
+
+
+def public_stage(stage_id: str) -> str:
+    """阶段号 → 给读者看的名字。没登记的原样返回（M1–M6 本来就自解释）。"""
+    return _STAGE_PUBLIC.get(str(stage_id), str(stage_id))
+
+
+#: 阶段号的**对外名称**（2026-11-06，ADR-0027）。对内仍用 ``STAGE_ORDER`` 里的
+#: 代码 id（与 manifest 键一一对应），对外一律换成这张表——
+#: 用户按指南写论文，指南的 ``X2`` 就是这里的「异常检测」，而代码里它叫 ``X3``。
+#: ``X2``（色差评估）必须一起给出中文名，否则表里会出现两个「X2」。
+#: **只映射会撞号的两个**：代码 `X3` = 指南 `X2`（异常检测）、代码 `X2` = 色差评估。
+#: S1/P1/M1–M6 本来就没有歧义，不动——映射面越小，波及越少。
+_STAGE_PUBLIC = {
+    "X3": "X2 异常检测",
+    "X2": "色差评估",
+}
+
+
+def public_stage(stage_id: str) -> str:
+    """阶段号 → 给读者看的名字。没登记的原样返回（M1–M6 本来就自解释）。"""
+    return _STAGE_PUBLIC.get(str(stage_id), str(stage_id))
+
+
 def _num(value: Any, digits: int = 1, scale: float = 1.0,
          suffix: str = "", default: str = "N/A") -> str:
     """安全数值格式化：None / 非数值 / nan / inf 一律返回 ``default``。"""
@@ -532,6 +566,7 @@ _TEMPLATE = """<!DOCTYPE html>
   <b>处理文物</b>：{{ n_items }} 件　<b>配置哈希</b>：<span class="meta">{{ config_sha }}</span><br>
   <b>阶段统计</b>：完成 {{ n_done }}　失败 {{ n_fail }}　跳过 {{ n_skipped }}
   　未启用 {{ n_disabled }}　未执行 {{ n_pending }}
+  <br><b>完成率</b>：{{ n_done }}/{{ n_evaluated }}（{{ done_pct }}）
   <br><span class="meta">分母 {{ n_evaluated }} = {{ n_items }} 件 × {{ n_stages }} 阶段
   − 未启用 {{ n_disabled }}（配置关闭的阶段不计入评估范围）</span>
 </div>
@@ -653,7 +688,7 @@ _TEMPLATE = """<!DOCTYPE html>
   低于 85% 说明岛内大量纹素没采到颜色（法线朝向 / 遮挡 / 位姿问题）。
 </p>
 <p class="footnote">
-  <b>异常面积 / 图斑数（X3 单期筛查）的读法</b>：它是<b>相对量</b>，不是病害面积。
+  <b>异常面积 / 图斑数（X2 单期筛查）的读法</b>：它是<b>相对量</b>，不是病害面积。
   图斑数是<b>待人工复核处数</b>，不是「查出了这么多病害」——它只说「这片区域与
   它所在那块岛的常见起伏明显不同」，为什么不同（掉彩、泛碱、光照、补色）不在
   这一层的判定范围里。
@@ -878,7 +913,7 @@ def generate_html(manifest: RunManifest,
                 # 在表里根本找不到对应两行（2026-10-18 实机）。
                 n_pending += 1
                 stage_rows.append({
-                    "item": item, "stage": stage_id,
+                    "item": item, "stage": public_stage(stage_id),
                     "status": "未执行", "cls": "skip",
                     "elapsed": "—",
                     "note": ("上游阶段失败，未运行" if item_failed
@@ -901,7 +936,7 @@ def generate_html(manifest: RunManifest,
             else:
                 n_pending += 1
             stage_rows.append({
-                "item": item, "stage": stage_id,
+                "item": item, "stage": public_stage(stage_id),
                 "status": label, "cls": cls,
                 "elapsed": _num(entry.get("elapsed_s"), 2, default="—"),
                 "note": _stage_note(entry),
@@ -1166,6 +1201,8 @@ def generate_html(manifest: RunManifest,
         n_skipped=n_skipped,
         n_disabled=n_disabled,
         n_evaluated=n_evaluated,
+        # 分母为 0（全是未启用阶段）时印「—」，不要印 0.0%
+        done_pct=(f"{100.0 * n_done / n_evaluated:.1f}%" if n_evaluated else "—"),
         no_metric_units=no_metric_units,
         rmse_unit=rmse_unit,
         mps_unit=mps_unit,

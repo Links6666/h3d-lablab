@@ -144,6 +144,22 @@ def accuracy_column_drift():
     return [c for c in ACCURACY_NUMERIC_SOURCES if c not in known]
 
 
+#: HTML 里内嵌的图表是 data URI（base64）。**在原始 HTML 里搜关键字会被它骗过**：
+#: 随机 base64 串里出现 "X3" 的概率不低（batch3 的报表里就有 34 处），于是
+#: 「HTML 覆盖 X3」这项检查哪怕阶段行真的丢了也会 PASS。判据必须先把图片剥掉。
+_DATA_URI = re.compile(r"data:[-\w.]+/[\w.+-]+;base64,[A-Za-z0-9+/=\s]+")
+
+
+def html_text(path):
+    """读 HTML 并剥掉内嵌图片，用于关键字核对（不是给人看的文本）。"""
+    try:
+        with open(path, encoding="utf-8", errors="ignore") as fh:
+            raw = fh.read()
+    except OSError:
+        return ""
+    return _DATA_URI.sub(" [img] ", raw)
+
+
 def meta_dir(root):
     """阶段元数据目录：新布局在 <root>/阶段成果/90_meta，旧布局在 <root>/90_meta。
 
@@ -508,12 +524,20 @@ def main(root, quiet: bool = False):
                          "或 manifest 缺对应指标）")
 
     if html:
-        txt = open(html[0], encoding="utf-8", errors="ignore").read()
+        txt = html_text(html[0])
         m = re.search(r"(\d+)\s*/\s*(\d+)|完成率[^\d]{0,8}(\d+)", txt)
         warn(m is not None, "HTML 里有完成率/分母",
              "HTML 里找不到完成率/分母，无法核对阶段数")
+        # 阶段号的**对外名称**（2026-11-06，ADR-0027）：报表里 X3 写作
+        # 「X2 异常检测」、X2 写作「色差评估」。核验要按对外名找，
+        # 同时保留裸 id 以兼容旧报表（旧版直接印 stage id）。
+        from h3d.report.html_export import public_stage
+
         for stage in ("X3", "X1", "X2"):
-            warn(stage in txt, f"HTML 覆盖 {stage}", f"HTML 里没有 {stage} 行")
+            label = public_stage(stage)
+            hit = label in txt or stage in txt
+            warn(hit, f"HTML 覆盖 {stage}",
+                 f"HTML 里没有 {stage} 行（对外名「{label}」也没找到）")
 
     # ---------- 5) 报表数字能否从 manifest 复算 ----------
     cov = None

@@ -96,7 +96,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_arch_inh.add_argument("--json", action="store_true", help="以 JSON 输出")
 
     p_anom = sub.add_parser(
-        "anomaly", help="X3 单期纹理异常检测（单次采集的快速筛查）")
+        "anomaly", help="X2 单期纹理异常检测（单次采集的快速筛查；代码内部编号 X3）")
     p_anom.add_argument("-p", "--path", default=".",
                         help="项目根或其「阶段成果」目录（默认当前目录）")
     p_anom.add_argument("--item", default="", help="只跑某一件（默认全部）")
@@ -602,7 +602,7 @@ def _cmd_anomaly_track(args) -> int:
 
 
 def _cmd_anomaly(args) -> int:
-    """``h3d anomaly``：对单期 UV 图集做无监督异常筛查（X3）。
+    """``h3d anomaly``：对单期 UV 图集做无监督异常筛查（对外称 X2，代码内部编号 X3）。
 
     只做编排：找输入、逐件调用、把结论翻译成退出码。判据全在
     :func:`h3d.anomaly.detect_atlas_anomalies` 里，命令行不重复实现。

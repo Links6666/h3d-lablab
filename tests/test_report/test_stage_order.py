@@ -46,8 +46,13 @@ class TestHtmlListsEveryRegisteredStage:
         path = generate_html(_manifest_with_ext_stages(tmp_path), None,
                              str(tmp_path / "r.html"))
         txt = open(path, encoding="utf-8").read()
+        # 状态表按**对外名称**印阶段（ADR-0027：代码 X3 = 指南 X2 异常检测），
+        # 所以按 public_stage() 查，而不是拿代码 id 直接比字面
+        from h3d.report.html_export import public_stage
+
         for stage in ("X3", "X1", "X2"):
-            assert f">{stage}<" in txt, f"状态表缺 {stage} 行"
+            label = public_stage(stage)
+            assert f">{label}<" in txt, f"状态表缺 {stage} 行（对外名 {label}）"
 
     def test_denominator_counts_all_stages(self, tmp_path):
         """分母 = 件数 × 阶段数，阶段数必须等于实际注册的阶段数。
