@@ -31,3 +31,18 @@
 - **git push 需沙箱外 + 清代理**：`dangerouslyDisableSandbox` 下加 `-c http.proxy= -c https.proxy=`。
   `git fetch` 的 `A..B` 只是 ref 变化，判分叉看 `rev-list --count` 双向。
 - Bash heredoc 会把 `\\` 转成 `/`：批量替换路径时逐行核对命中数，否则验证产物写进真实项目目录（踩过）。
+
+## PDF 排版（`scripts/make_method_pdf.py`，通用 md → A4 PDF）
+- **用法**：`python scripts/make_method_pdf.py <src.md> [out.pdf]`，无参数=方法学那篇；
+  标题取 md 第一个 `# `；版本号取 `h3d.__version__`（手抄过，漂了）。
+- 四条踩过的坑，改渲染器时别退回去：
+  1. **代码块行首缩进会被 Paragraph 折掉** → `_code_line()` 把空格换成 `&nbsp;`
+     （JSON 层次与目录树全靠它；只在有缩进内容时才暴露）。
+  2. **正文/列表/引用块必须按「块」聚合**（`join_wrapped`）：逐行建 Paragraph 会变成
+     「一行一段」，且跨行的 `**粗体**` 配不上对、星号原样印出。
+  3. **表格单元格里禁裸 `|`**（哪怕在行内代码里）：会被当成分隔符 → 整张表错列。
+     自检：同一张表每行的 `split("|")` 长度必须一致。
+  4. **三列表格第一列要给到 21%**，否则英文标识符被硬切成 `norma / l_agreement`；
+     长标识符（>12 字符）宁可写中文名，把英文挪到解释列。
+- 样式已开 `wordWrap="CJK"`（中文按字断、标点不落行首）与行内代码 7.8pt。
+- 交付前自检：`pymupdf` 数页数、`t.count("**")==0`、无 `锟`/`\ufffd`，再渲染 2–3 页看图。

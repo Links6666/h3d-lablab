@@ -43,7 +43,8 @@ def setup_fonts():
 def esc(t: str) -> str:
     t = t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     # 行内代码与粗体
-    t = re.sub(r"`([^`]+)`", r'<font face="MSYH" color="#8a5a2b">\1</font>', t)
+    t = re.sub(r"`([^`]+)`",
+               r'<font face="MSYH" size="7.8" color="#8a5a2b">\1</font>', t)
     t = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", t)
     return t
 
@@ -57,17 +58,18 @@ def build_styles(F, FB):
         "h3": ParagraphStyle("h3", fontName=FB, fontSize=11, leading=16,
                              textColor=INK, spaceBefore=8, spaceAfter=3),
         "body": ParagraphStyle("body", fontName=F, fontSize=9.6, leading=15,
-                               textColor=INK, spaceAfter=4),
+                               textColor=INK, spaceAfter=4, wordWrap="CJK"),
         "quote": ParagraphStyle("quote", fontName=F, fontSize=9.2, leading=14,
                                 textColor=GREY, leftIndent=10,
-                                borderPadding=(0, 0, 0, 8), spaceAfter=5),
+                                borderPadding=(0, 0, 0, 8), spaceAfter=5,
+                                wordWrap="CJK"),
         "li": ParagraphStyle("li", fontName=F, fontSize=9.6, leading=15,
                              textColor=INK, leftIndent=12, bulletIndent=2,
-                             spaceAfter=2),
+                             spaceAfter=2, wordWrap="CJK"),
         "cell": ParagraphStyle("cell", fontName=F, fontSize=8.4, leading=12,
-                               textColor=INK),
+                               textColor=INK, wordWrap="CJK"),
         "cellh": ParagraphStyle("cellh", fontName=FB, fontSize=8.4, leading=12,
-                                textColor=colors.white),
+                                textColor=colors.white, wordWrap="CJK"),
         "code": ParagraphStyle("code", fontName=F, fontSize=8.4, leading=12,
                                textColor=INK, leftIndent=8),
     }
@@ -118,12 +120,49 @@ def _is_plain(ln: str) -> bool:
     return True
 
 
+def _dw(text: str) -> int:
+    """显示宽度：中日韩全角字算 2，其余算 1。列宽分配要用它，不能用 len()。"""
+    import unicodedata
+
+    text = re.sub(r"[`*]", "", text)
+    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+               for ch in text)
+
+
+def _col_widths(rows, ncol, width):
+    """按内容长度分配列宽。
+
+    等宽列在「三列、且一列只有术语」的表上会把术语挤断成两行，
+    又把空话那一列留出一大片白。这里用「表头与该列 p75 内容的显示宽度」
+    做权重，再夹在 10%~52% 之间——上限是为了防止某一列把整行吃掉。
+    """
+    if ncol <= 1:
+        return [width] * ncol
+    w = []
+    for c in range(ncol):
+        vals = sorted(_dw(r[c]) for r in rows[1:]) or [4]
+        typical = vals[min(len(vals) - 1, int(len(vals) * 0.75))]
+        w.append(float(max(4, _dw(rows[0][c]), typical)))
+    # 下限 0.21：三列表（术语/解释/作用）的第一列只有几个字，按内容比例算会被挤到
+    # 10%，英文标识符被硬切成 "norma / l_agreement"。四列以上的表内容通常比较均衡，
+    # 用 0.12 就够，抬太高反而浪费。
+    lo = 0.21 if ncol <= 3 else 0.12
+    total = sum(w)
+    frac = [x / total for x in w]
+    for _ in range(4):                      # 反复归一，直到每个都在 [lo, 0.52]
+        frac = [min(0.52, max(lo, f)) for f in frac]
+        s = sum(frac)
+        frac = [f / s for f in frac]
+    return [width * f for f in frac]
+
+
 def table_flow(rows, S, width):
     ncol = max(len(r) for r in rows)
     rows = [r + [""] * (ncol - len(r)) for r in rows]
     body = [[Paragraph(esc(c), S["cellh"] if i == 0 else S["cell"])
              for c in r] for i, r in enumerate(rows)]
-    t = Table(body, colWidths=[width / ncol] * ncol, repeatRows=1, hAlign="LEFT")
+    t = Table(body, colWidths=_col_widths(rows, ncol, width),
+              repeatRows=1, hAlign="LEFT")
     t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), ACCENT),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
@@ -241,7 +280,16 @@ def main(argv=None):
             story.append(Paragraph(esc(ln[2:]), S["h1"]))
             story.append(Spacer(1, 2))
         elif ln.startswith("> "):
-            story.append(Paragraph(esc(ln[2:]), S["quote"]))
+            # 引用块也要按块聚合：逐行建 Paragraph 会让每行变成一个独立段落，
+            # 行距被拉开一倍，读起来像「一首诗」而不是一句话。
+            chunk = [ln[2:]]
+            j = i + 1
+            while j < len(lines) and lines[j].startswith("> "):
+                chunk.append(lines[j][2:])
+                j += 1
+            story.append(Paragraph(esc(join_wrapped(chunk)), S["quote"]))
+            i = j
+            continue
         elif re.match(r"^\d+\.\s", ln):
             story.append(Paragraph(esc(re.sub(r"^\d+\.\s*", "", ln)),
                                    S["li"], bulletText=ln.split(".")[0] + "."))
