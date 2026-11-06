@@ -423,6 +423,11 @@ def _stage_register(task: Task, cfg) -> StageResult:
         # 方向反了），报表必须能看出这次配准是否可信（1.1.12 端到端实测）。
         metrics[f"icp_init_s{i:02d}"] = res.get("icp_init")
         metrics[f"low_confidence_s{i:02d}"] = bool(res.get("low_confidence"))
+        # 朝向判据（2026-11-05，ADR-0025）：fitness 只说明"贴不贴"，
+        # 法线一致性才说明"方向对不对"。**必须在这里显式转手**——M2 的 metrics
+        # 是手写挑选的（r16 那个坑：上游算得再对，不写进这里报表也读不到）。
+        metrics[f"normal_agreement_s{i:02d}"] = res.get("normal_agreement")
+        metrics["normal_agreement"] = metrics[f"normal_agreement_s{i:02d}"]
         metrics["icp_init"] = metrics[f"icp_init_s{i:02d}"]
         metrics["low_confidence"] = bool(
             metrics["low_confidence"] or res.get("low_confidence"))

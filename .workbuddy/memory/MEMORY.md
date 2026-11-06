@@ -11,7 +11,7 @@
 - `.venv_lab\Scripts\python.exe`（PySide6 6.11 / open3d 0.19 / trimesh / cv2 5.0）；colmap
   `E:\colmap\colmap-x64-windows-cuda\bin\colmap` 4.1.1；打包 `h3d_gui.spec`（onefile+launcher），
   打包版批量 `H3D.exe --batch <cfg>`（**不带 `-c`**）；Inno `D:\h3d_relic_test\InnoSetup7\ISCC.exe`。
-  当前 **1.1.22（r28）**，测试 1437 全绿（≈2.5 min），旧发行版留最近 3 个。
+  当前 **1.1.23（r29）**，测试 1446 全绿（≈2.5 min），旧发行版留最近 3 个。
   `git commit` 要带 `-c user.name=". Link" -c user.email=1530800288@qq.com`
   （仓库里 `user.name` 是空的，历史提交靠环境变量）。
 
@@ -57,7 +57,11 @@
   解出 179° 翻转解**（fitness 0.52，中位间距仍只 0.75% 所以间距判据放行）。
   翻转候选从 RANSAC 解派生 → 初值一歪三个候选一起歪。已 `io.rng.seed_rng` 定种子
   （错解 5 次未再复现），但**初值选择仍有进程间差异**（5 次里 1 次选中 ransac）。
-  `fitness<0.55` 仍**只标不拦**（low_confidence）→ 待用户定 A/B/C 方案。
+  已按用户选的 **C 方案**落地（r29，ADR-0025）：`normal_agreement` = ICP 内点上
+  两云法线（各自归一到外向约定）点积均值；闸门条件 = `na<-0.2 且 fitness<0.55`。
+  真机正解 +0.98/+0.85（低重叠）、翻转 −0.37~−0.60。**必须先做外向归一**：
+  source/target 法线符号可能整体相反（实测 +1 / −1），不归一会把正解算成 −0.98。
+  **近凸/轴对称物上判不出**（翻转与正解几何等价）——这是已知边界，不拦。
   查"是不是回归"时 3 次样本不够：本例失败率 18%，r23 的 4 次全对只是运气。
 - **ICP 单初值在轴对称物上解出翻转解**（30°→166.58°，fitness 0.336 还越过 0.2 失败门）→ 多初值
   （RANSAC+绕两主轴 180°）取 fitness 最高；`fitness<0.55` 落 `low_confidence`（不判失败但必须

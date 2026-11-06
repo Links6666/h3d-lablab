@@ -60,11 +60,39 @@ _LOW_CONFIDENCE_FITNESS = 0.55
 #: 不可复现就等于不可引用（与 M5 采样定种子同一个理由，ADR-0020/0023）。
 _RANSAC_SEED = 20261105
 
+#: 朝向判据的**死区**：法线一致性 < −0.2 才判「方向相反」。
+#: 不取 0 的原因：这个量是逐点法线点积的均值，在小型/近球状的合成点云上会在
+#: 0 附近抖（构件噪声、法线定向不稳），拿 0 当门会误杀正确解（实测一次端到端
+#: 测试因此偶发失败）。而真机翻转解是 −0.37 ~ −0.60，正确解是 +0.85 ~ +0.98，
+#: 中间这条 0.2 的死区只是「分不清」，不该拦。
+_FLIP_MARGIN = 0.2
+
+#: 朝向判据的**死区**：法线一致性 < −0.2 才判「方向相反」。
+#: 不取 0 的原因：这个量是逐点法线点积的均值，在小型/近球状的合成点云上会在
+#: 0 附近抖（构件噪声、法线定向不稳），拿 0 当门会误杀正确解（实测一次端到端
+#: 测试因此偶发失败）。而真机翻转解是 −0.37 ~ −0.60，正确解是 +0.85 ~ +0.98，
+#: 中间这条 0.2 的死区只是「分不清」，不该拦。
+_FLIP_MARGIN = 0.2
+
 #: RANSAC 的随机种子（2026-11-05）。**不定种子会让同一份输入跑出不同结果**：
 #: 真机点云注入 120° 旋转，17 次里 3 次解出 179° 翻转解（fitness 0.52），
 #: 其余 14 次正确（fitness 1.00）。配准结果会被写进报表与交付元数据，
 #: 不可复现就等于不可引用（与 M5 采样定种子同一个理由，ADR-0020/0023）。
 _RANSAC_SEED = 20261105
+
+#: 朝向判据的**死区**：法线一致性 < −0.2 才判「方向相反」。
+#: 不取 0 的原因：这个量是逐点法线点积的均值，在小型/近球状的合成点云上会在
+#: 0 附近抖（构件噪声、法线定向不稳），拿 0 当门会误杀正确解（实测一次端到端
+#: 测试因此偶发失败）。而真机翻转解是 −0.37 ~ −0.60，正确解是 +0.85 ~ +0.98，
+#: 中间这条 0.2 的死区只是「分不清」，不该拦。
+_FLIP_MARGIN = 0.2
+
+#: 朝向判据的**死区**：法线一致性 < −0.2 才判「方向相反」。
+#: 不取 0 的原因：这个量是逐点法线点积的均值，在小型/近球状的合成点云上会在
+#: 0 附近抖（构件噪声、法线定向不稳），拿 0 当门会误杀正确解（实测一次端到端
+#: 测试因此偶发失败）。而真机翻转解是 −0.37 ~ −0.60，正确解是 +0.85 ~ +0.98，
+#: 中间这条 0.2 的死区只是「分不清」，不该拦。
+_FLIP_MARGIN = 0.2
 
 
 def _rotation_about(center: np.ndarray, axis: np.ndarray,
@@ -208,11 +236,37 @@ def run(source, target, cfg: RegisterConfig) -> dict:
 
     # 5) 质量评估
     metrics = evaluate_registration(icp)
+    # 朝向判据（2026-11-05，ADR-0025）：fitness 只回答「贴不贴」，回答不了
+    # 「方向对不对」。近似轴对称的造像被解成 179° 翻转时，几何贴合得很好
+    # （中位间距 0.75% 对角线）、fitness 也可能不低，只有法线方向是反的。
+    from .evaluate import normal_agreement
+
+    metrics["normal_agreement"] = normal_agreement(
+        source, target, icp.transformation, cfg.icp_distance,
+        cfg.fpfh_radius)
     metrics["transformation"] = np.asarray(icp.transformation, dtype=np.float64)
     metrics["ransac_fitness"] = float(ransac.fitness)
     metrics["icp_init"] = icp_init
     if icp_trials:
         metrics["icp_trials"] = icp_trials
+    # 朝向闸门：法线一致性为负 = 解到了「翻转的版本」。这是 fitness 看不见的
+    # 那一维——真机 179° 翻转解 fitness 0.52、中位间距仅 0.75% 对角线，两个
+    # 距离类判据都放行，只有方向是反的。宁可判失败，也不让反向几何进下游
+    # （M3 会按错位姿合并点云）。
+    # 两个条件**同时**成立才判失败，这是 C 与 A 的分界：
+    #   fitness 低 + 方向反 → 是翻转解（真机：0.52 / −0.52）→ 拒绝
+    #   fitness 低 + 方向正 → 合法的低重叠（实测 0.23 / +0.85）→ 只标 low_confidence
+    #   fitness 高 + 方向反 → 物体本身近似对称，翻转与正解不可区分 → 不拦
+    #                        （拦了也只是二选一，没有更好的解可选）
+    _na = metrics.get("normal_agreement")
+    if (_na is not None and _na < -_FLIP_MARGIN
+            and metrics.get("fitness", 1.0) < _LOW_CONFIDENCE_FITNESS):
+        raise RegistrationError(
+            f"配准方向相反（法线一致性 {_na:+.3f} < -{_FLIP_MARGIN}）："
+            f"几何贴合但朝向被解成"
+            f"翻转版本（ICP 初值={icp_init}，fitness={metrics['fitness']:.3f}）。"
+            "请检查两站点云的法线朝向，或提供控制点（X2）约束朝向")
+
     if metrics["fitness"] < _LOW_CONFIDENCE_FITNESS:
         # 不判失败（真实低重叠场景确实存在），但必须留痕：报表与交付元数据
         # 要能看出"这次配准可信度低"，而不是只看到一个漂亮的 rmse。
