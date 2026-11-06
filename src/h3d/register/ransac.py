@@ -22,6 +22,11 @@ def _o3d():
     return o3d
 
 
+#: RANSAC 的随机种子。放在**消费者**这里而不是编排层：`global_registration`
+#: 是唯一真正抽样的地方，种子跟着它走才不会「换个调用方就漏定」。
+RANSAC_SEED = 20261105
+
+
 def global_registration(source, target, source_fpfh, target_fpfh,
                         max_correspondence_distance: float,
                         ransac_n: int = 4, max_iteration: int = 100000):
@@ -39,6 +44,12 @@ def global_registration(source, target, source_fpfh, target_fpfh,
     ----
     RegistrationResult（含 4x4 transformation / fitness / inlier_rmse）。
     """
+    # RANSAC 用 Open3D 的进程级随机源：**谁消费随机，谁负责定种子**。
+    # 不定种子时同一份输入跨进程会给出不同初值（实测 120° 注入 17 次里 3 次
+    # 解出 179° 翻转解，ADR-0024）。
+    from h3d.io import seed_rng
+
+    seed_rng(RANSAC_SEED)
     for pcd, name in ((source, "source"), (target, "target")):
         if pcd is None or not pcd.has_points():
             raise InputDataError(f"{name} 点云为空（0 点），无法粗配准")

@@ -11,7 +11,7 @@
 - `.venv_lab\Scripts\python.exe`（PySide6 6.11 / open3d 0.19 / trimesh / cv2 5.0）；colmap
   `E:\colmap\colmap-x64-windows-cuda\bin\colmap` 4.1.1；打包 `h3d_gui.spec`（onefile+launcher），
   打包版批量 `H3D.exe --batch <cfg>`（**不带 `-c`**）；Inno `D:\h3d_relic_test\InnoSetup7\ISCC.exe`。
-  当前 **1.1.23（r29）**，测试 1446 全绿（≈2.5 min），旧发行版留最近 3 个。
+  当前 **1.1.24（r30）**，测试 1448 全绿（≈2.5 min），旧发行版留最近 3 个。
   `git commit` 要带 `-c user.name=". Link" -c user.email=1530800288@qq.com`
   （仓库里 `user.name` 是空的，历史提交靠环境变量）。
 
@@ -53,6 +53,12 @@
 - **尺度初始化禁用 min/max 包围盒**（COLMAP 飞点把 6.19 撑到 47.83）；用 **99% 分位**。
 - **「合格」的对齐也可能不如「不做」**：先问 `already_aligned`（中位距离 <1% 对角线跳过）。
   被拒 → **回退恒等**，不得从失败对齐导出控制点。
+- **随机消费者已清点完毕**（r30，ADR-0026）：M5 采样 / 对齐精化 / M2 RANSAC /
+  M1 平面剔除（`segment_plane`，默认 max_planes=0 所以"潜伏"，跨进程实测差 1 个
+  内点）/ M3 泊松（早已 n_threads=1）。**种子跟消费者走**（`RANSAC_SEED` 在
+  `ransac.py` 不在编排层）。守卫 `TestStochasticCallsAreSeeded`：文件里出现随机
+  API 就**同一文件**必须有 `seed_rng(`/`sample_surface(`——它第一次跑就抓到
+  `ransac.py`（种子当时在编排层）。
 - **RANSAC 从没定过种子**（r28，ADR-0024）：同一份输入注入 120°，**17 次里 3 次
   解出 179° 翻转解**（fitness 0.52，中位间距仍只 0.75% 所以间距判据放行）。
   翻转候选从 RANSAC 解派生 → 初值一歪三个候选一起歪。已 `io.rng.seed_rng` 定种子

@@ -87,6 +87,10 @@ def _voxel_index(points, voxel: float):
     return np.asarray([int(t[0]) for t in trace], dtype=np.int64)
 
 
+#: 平面剔除（RANSAC）的随机种子。跨进程可复现的前提。
+_BG_SEED = 20261106
+
+
 def remove_background(pcd,
                       max_planes: int = 0,
                       plane_dist_frac: float = 0.005,
@@ -159,6 +163,13 @@ def remove_background(pcd,
         metrics["bg_note"] = "包围盒退化，跳过背景剔除"
         return pcd, metrics
 
+    # 定种子：`segment_plane` 是 RANSAC，用 Open3D 的进程级随机源。跨进程实测
+    # 同一份输入会解出 29999 / 30000 个内点（差 1 个），平面模型几乎相同——
+    # **这正是本项目最防的那类漂移**：小到不触发断言，又足以让两次运行的
+    # 点数/报表对不上。与 M5 采样（ADR-0020）、M2 配准（ADR-0024）同一个病。
+    from h3d.io import seed_rng
+
+    seed_rng(_BG_SEED)
     work = o3d.geometry.PointCloud(pcd)
     removed = 0
     for _ in range(int(max(0, max_planes))):

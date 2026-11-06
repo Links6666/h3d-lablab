@@ -96,3 +96,35 @@ class TestSamplingHasOneEntry:
         assert callable(sample_surface)
         assert callable(seed_rng)
         assert isinstance(SAMPLE_SEED, int)
+
+
+#: 会消耗 Open3D 随机源的 API。用到它们的模块必须**自己**把种子定住。
+_STOCHASTIC = ("segment_plane(", "registration_ransac", "sample_points_uniformly(",
+               "sample_points_poisson_disk(", "cluster_dbscan(")
+#: 这两个模块是「种子/采样」的实现处，本身不重复调用 seed_rng
+_SEED_IMPL = {os.path.join("io", "rng.py"), os.path.join("io", "mesh_io.py")}
+
+
+class TestStochasticCallsAreSeeded:
+    """用了随机 API 的模块，必须在同一文件里出现 `seed_rng(` 或 `sample_surface(`。
+
+    为什么这条守卫比"禁止直调"更根本：直调被禁了，但**忘了定种子**照样会漂。
+    本项目已经在这种形态上踩过四次——M5 采样（ADR-0020）、四处直调（ADR-0023）、
+    M2 的 RANSAC（ADR-0024）、M1 的平面剔除（ADR-0026，跨进程差 1 个内点）。
+    四次都是「代码能跑、数能出、测试全绿」。
+    """
+
+    def test_every_stochastic_module_seeds(self):
+        offenders = []
+        for rel, path in _sources():
+            if rel in _SEED_IMPL:
+                continue
+            code = "\n".join(_code_lines(path))
+            if not any(k in code for k in _STOCHASTIC):
+                continue
+            if "seed_rng(" in code or "sample_surface(" in code:
+                continue
+            offenders.append(rel)
+        assert not offenders, (
+            "这些模块调用了随机的 Open3D API 却没有定种子（同输入会漂）：\n  "
+            + "\n  ".join(offenders))

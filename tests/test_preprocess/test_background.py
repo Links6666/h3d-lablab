@@ -182,3 +182,77 @@ class TestDensityAdaptiveClustering:
         assert m["bg_clusters"] > 0, f"聚类被跳过了：{m['bg_note']}"
         assert m["bg_kept_ratio"] < 1.0, "远处碎片应被剔掉"
         assert len(out.points) >= len(dense) * 0.9
+
+
+class TestPlaneRemovalIsReproducible:
+    """平面剔除用了 RANSAC —— 没定种子时同一份输入两次会掉点不同。
+
+    这是「随机算法 + 结果进报表 + 没种子」的第四个消费者
+    （前三个：M5 采样 r24、四处直调 r27、M2 配准 r28）。
+    默认 ``max_planes=0`` 不走这条路，但配置里 ``bg_max_planes`` 一开就会走，
+    所以它是**潜伏**的不确定性——这种最容易被漏掉。
+    """
+
+    def _floor_plus_object(self):
+        """地面（大平面）+ 上方一个团块：`max_planes=1` 应剔掉地面。"""
+        rng = np.random.default_rng(3)
+        floor = np.column_stack([
+            rng.uniform(-1.0, 1.0, 30000),
+            rng.uniform(-1.0, 1.0, 30000),
+            rng.normal(0.0, 0.002, 30000),          # z≈0 的薄平面
+        ])
+        obj = rng.normal(scale=0.08, size=(4000, 3))
+        obj[:, 2] += 0.45                            # 悬在地面上方
+        return _pcd(np.vstack([floor, obj]))
+
+    def test_same_input_same_points(self):
+        pcd = self._floor_plus_object()
+        # min_remain_frac 放低：本夹具剔掉地面后只剩约 12%，走默认 0.20 会触发
+        # 回滚（那是保护逻辑，会把两次的差异掩盖掉，测不出东西）
+        a, ma = remove_background(pcd, max_planes=1, min_remain_frac=0.05)
+        b, mb = remove_background(pcd, max_planes=1, min_remain_frac=0.05)
+        assert ma["bg_removed_planes"] == mb["bg_removed_planes"] == 1
+        assert ma["bg_rollback"] is False
+        pa = np.asarray(a.points)
+        pb = np.asarray(b.points)
+        assert pa.shape == pb.shape, (
+            f"同一份输入两次剔平面后点数不同：{pa.shape[0]} vs {pb.shape[0]}")
+        # 点序可能因 inlier 选择顺序不同，按字典序排完再比
+        assert np.array_equal(pa[np.lexsort(pa.T)], pb[np.lexsort(pb.T)])
+
+
+class TestPlaneRemovalIsReproducible:
+    """平面剔除用了 RANSAC —— 没定种子时同一份输入两次会掉点不同。
+
+    这是「随机算法 + 结果进报表 + 没种子」的第四个消费者
+    （前三个：M5 采样 r24、四处直调 r27、M2 配准 r28）。
+    默认 ``max_planes=0`` 不走这条路，但配置里 ``bg_max_planes`` 一开就会走，
+    所以它是**潜伏**的不确定性——这种最容易被漏掉。
+    """
+
+    def _floor_plus_object(self):
+        """地面（大平面）+ 上方一个团块：`max_planes=1` 应剔掉地面。"""
+        rng = np.random.default_rng(3)
+        floor = np.column_stack([
+            rng.uniform(-1.0, 1.0, 30000),
+            rng.uniform(-1.0, 1.0, 30000),
+            rng.normal(0.0, 0.002, 30000),          # z≈0 的薄平面
+        ])
+        obj = rng.normal(scale=0.08, size=(4000, 3))
+        obj[:, 2] += 0.45                            # 悬在地面上方
+        return _pcd(np.vstack([floor, obj]))
+
+    def test_same_input_same_points(self):
+        pcd = self._floor_plus_object()
+        # min_remain_frac 放低：本夹具剔掉地面后只剩约 12%，走默认 0.20 会触发
+        # 回滚（那是保护逻辑，会把两次的差异掩盖掉，测不出东西）
+        a, ma = remove_background(pcd, max_planes=1, min_remain_frac=0.05)
+        b, mb = remove_background(pcd, max_planes=1, min_remain_frac=0.05)
+        assert ma["bg_removed_planes"] == mb["bg_removed_planes"] == 1
+        assert ma["bg_rollback"] is False
+        pa = np.asarray(a.points)
+        pb = np.asarray(b.points)
+        assert pa.shape == pb.shape, (
+            f"同一份输入两次剔平面后点数不同：{pa.shape[0]} vs {pb.shape[0]}")
+        # 点序可能因 inlier 选择顺序不同，按字典序排完再比
+        assert np.array_equal(pa[np.lexsort(pa.T)], pb[np.lexsort(pb.T)])

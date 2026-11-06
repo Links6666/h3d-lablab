@@ -1,5 +1,51 @@
 # CHANGELOG
 
+## v1.1.24-r30 (2026-11-06) —— 随机消费者清点完毕；守卫升到「用了随机 API 就必须定种子」
+
+r28/r29 修完 M2 之后问：还有没有别的随机消费者没定种子。清点结果如下。
+
+| 消费者 | 随机 API | 状态 |
+|---|---|---|
+| M5 采样 | `sample_points_uniformly` | r24 修 |
+| 对齐精化 / X1 / hausdorff | 同上 | r27 收敛 4 处 |
+| M2 配准 | `registration_ransac_*` | r28 修 |
+| **M1 平面剔除** | `segment_plane` | **这次修** |
+| M3 泊松 | `create_from_point_cloud_poisson` | 早已按 `n_threads=1` 处理并留档 |
+
+### M1 这一处是"潜伏"的
+
+`remove_background` 默认 `max_planes=0`（不剔平面），所以**默认配置下这条 RANSAC
+根本不跑**——跑测试、跑真机都看不出来。但 `bg_max_planes` 一开就走，而它的输出
+正是 M2 的输入。
+
+跨进程实测（地面 3 万点 + 悬空团块 4 千点）：
+
+| | 内点数 | 剩余点数 |
+|---|---|---|
+| 修前 · 进程 1 | **29999** | 3940 |
+| 修前 · 进程 2/3 | 30000 | 3939 |
+| 修后（三次） | 30000 | **3939，哈希三次相同** |
+
+平面模型几乎一样，差的只是**一个点**落在面内还是面外。**这正是最防的那类漂移**：
+小到不触发断言，又足以让两次运行的点数/覆盖率/报表对不上。
+
+### 种子下沉到消费者
+
+`RANSAC_SEED` 从 `register.run()` 编排层移进 `register/ransac.py::global_registration`
+——**谁消费随机，谁负责定种子**。`global_registration` 是公开函数，未来任何新调用方
+（探针脚本、别的阶段）都会绕开编排层；种子跟着消费者走才不会被"换个入口就漏定"。
+
+### 守卫升级（这才是长期收益）
+
+r27 的守卫只禁 `sample_points_uniformly` 直调。但**直调被禁了、忘了定种子照样会漂**
+（M2 与 M1 都不是"直调采样"的问题）。新守卫：任何文件出现
+`segment_plane(` / `registration_ransac` / `sample_points_uniformly(` /
+`sample_points_poisson_disk(` / `cluster_dbscan(` 之一，**同一文件**必须出现
+`seed_rng(` 或 `sample_surface(`。
+
+跑起来第一件事就抓到 `register/ransac.py`——种子当时在编排层，消费者自己没有。
+这条守卫检查的是「随机与种子是否在同一个文件里」，而不是「有没有人在某个地方调过」。
+
 ## v1.1.23-r29 (2026-11-06) —— 朝向北：用「法线一致性」拦翻转解，不拿 fitness 一刀切
 
 ADR-0024 把「低可信解该不该拦」留成 A/B/C 三方案，选了 C。
