@@ -96,6 +96,17 @@ def join_wrapped(parts):
     return out
 
 
+def _code_line(text: str) -> str:
+    """代码块的一行：转义 + 把行首空格换成不断行空格（否则缩进会被折掉）。"""
+    import re as _re
+
+    out = esc(text.rstrip())
+    m = _re.match(r"^( +)", out)
+    if m:
+        out = "&nbsp;" * len(m.group(1)) + out[len(m.group(1)):]
+    return out
+
+
 def _is_plain(ln: str) -> bool:
     """这一行是不是「可以跟上下行拼成一段」的普通正文。"""
     if not ln.strip():
@@ -128,7 +139,31 @@ def table_flow(rows, S, width):
     return t
 
 
-def main():
+def _title_from(src: str) -> str:
+    """取 markdown 第一个 `# ` 当 PDF 元数据标题（不再手抄一遍）。"""
+    try:
+        with open(src, encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("# "):
+                    return line[2:].strip()
+    except OSError:
+        pass
+    return os.path.splitext(os.path.basename(src))[0]
+
+
+def main(argv=None):
+    global SRC, OUT
+    import argparse
+
+    ap = argparse.ArgumentParser(description="把 docs 下的 markdown 排成 A4 PDF")
+    ap.add_argument("src", nargs="?", default=SRC, help="源 .md（默认：方法学）")
+    ap.add_argument("out", nargs="?", default=None, help="输出 .pdf（默认同名）")
+    args = ap.parse_args(argv)
+    SRC = os.path.abspath(args.src)
+    OUT = os.path.abspath(args.out or os.path.splitext(SRC)[0] + ".pdf")
+    if not os.path.isfile(SRC):
+        print(f"[E100] 源文件不存在：{SRC}")
+        return 2
     F, FB = setup_fonts()
     S = build_styles(F, FB)
     text = open(SRC, encoding="utf-8").read()
@@ -136,7 +171,7 @@ def main():
     doc = SimpleDocTemplate(OUT, pagesize=A4,
                             leftMargin=20 * mm, rightMargin=20 * mm,
                             topMargin=18 * mm, bottomMargin=16 * mm,
-                            title="方法学：让自动化系统的数字可信",
+                            title=_title_from(SRC),
                             author=f"H3D {_version()}")
     width = A4[0] - 40 * mm
     story = []
@@ -153,7 +188,9 @@ def main():
             while j < len(lines) and not lines[j].startswith("```"):
                 block.append(lines[j])
                 j += 1
-            story.append(Paragraph("<br/>".join(esc(b) for b in block),
+            # 代码块必须保留**行首缩进**：JSON 层次与目录树全靠它读。
+            # reportlab 的 Paragraph 会把连续空格折成一个，所以换成 &nbsp;。
+            story.append(Paragraph("<br/>".join(_code_line(b) for b in block),
                                    S["code"]))
             story.append(Spacer(1, 4))
             i = j + 1
@@ -216,6 +253,7 @@ def main():
 
     doc.build(story)
     print(f"已生成 {OUT}（{os.path.getsize(OUT) / 1024:.0f} KB）")
+    return 0
 
 
 if __name__ == "__main__":
