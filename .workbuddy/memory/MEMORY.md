@@ -32,7 +32,7 @@
   泊松留洞 + 22.3% 纹素靠反面填充，需补低机位/俯拍；稀疏特征弱（30 张 13,990 点、
   track 3.95）→ 补侧向硬光/偏振。**对标文献每类 100–200 张，30 张是最大单点差距。**
 - **`io/mvs` 契约已建**（r32，ADR-0028）：`plan(req) -> MvsPlan(steps/fused_path/
-  progress)`，命令只在 `io/mvs` 里拼（AST 守卫拦回填）。
+  progress)`，命令只在 `io/mvs` 里拼（AST 守卫）。
 - **后端身份已落盘**（r33，ADR-0029）：S1 metrics → 资产 params → `content_key` params
   → verify（缺标识 WARN）。**只写 params 不写 content_key = 假落地**（复用仍按旧键命中）。
   **不动 `stage_input_key`**：会让存量项目全量重跑，且版本不是「输入」。账本有**扁平
@@ -61,9 +61,13 @@
   包入口 `h3d/__init__.py` 顶部。代价 RANSAC 0.30→0.47s。**7° 档现「稳定地失败」**
   （30.00°/fit .2588）——r34 的「6/10 通过」是多线程随机蒙对的。**7° 难是 FPFH 分辨率
   极限**，要改 FPFH 不是改种子。30/90/120/180 无回归。**7° 的 FAIL 不许改绿。**
-- **`normal_filter` 只能剔除不能加权**（r34，ADR-0030）：Open3D ICP 不收逐点权重。
-  点云用 `|n̂·n̄|` 而非 `(dot+1)/2`（符号逐点随机）；**先 orient 再算更糟**（散点云 c 被
-  抹到 0.9+）。**筛选只用于求变换**，fitness 分母必须回原始点数。默认 0（关闭）。
+- **多初值必须含恒等变换**（r36，ADR-0032）：RANSAC 的「半对」初值（fitness 0.33）
+  **比恒等更糟**——真机 7° 档从 RANSAC 初值收敛到 29.99° 误差，从恒等则 0.03°。
+  候选 = ransac + 2×flip180 + identity，取 fitness 最高。**fitness 打平时保留先出现的**
+  （`_TIE_EPS=1e-6`，否则比浮点末位 → 可复现性失效）。
+- **`normal_filter` 只能剔除不能加权**（r34，ADR-0030）：Open3D ICP 不收逐点权重；
+  点云用 `|n̂·n̄|` 而非 `(dot+1)/2`；**先 orient 再算更糟**（散点云 c 被抹到 0.9+）。
+  **筛选只用于求变换**，fitness 分母回原始点数。默认 0。
 - **随机消费者已清点完毕**（ADR-0026）：M5 采样 / 对齐精化 / M2 RANSAC / M1 平面剔除
   （`segment_plane`，默认 `max_planes=0` 所以「潜伏」，跨进程实测差 1 个内点）/ M3 泊松
   （早已 `n_threads=1`）。**种子跟消费者走**（`RANSAC_SEED` 在 `ransac.py` 不在编排层）。
@@ -98,13 +102,13 @@
   而 M1 判出 `raw_looks_like_sfm` → 仍不主张米制 + `declared_source_conflict` + WARN。
   声明是把判断权交回用户，**不是**后门。
 - `metric_units_reason` 必须与布尔一起落盘（manifest + `qc_metrics.json`）：只落布尔的话，
-  「机器猜的 auto」与「人声明的 photogrammetry」事后一样。判门失败时 manifest 不写，
+  「机器猜的 auto」与「人声明的」事后一样。判门失败时 manifest 不写，
   `qc_metrics.json` 是唯一留档。
 - **自证闭环**：`dense_novel_ratio<0.15` 且有 00_raw → `dual_source_duplicate=True`、
   `dense_source=raw_looks_like_sfm`，配准/精度/覆盖率三项都不可引用。
 - **`texture_carrier` ≠ `_delivered`**：M4 自动补导 OBJ（carrier 恒 obj），M6 只复制
   `publish.formats`；只勾 ply 时图集 PNG 孤立（报表须显示「无（图集孤立）」）。
-- **诊断文本走 `|safe`**：`autoescape` 会把 `<b>` 印成实体；文本里禁裸 `<`。
+- **诊断文本走 `|safe`**：`autoescape` 会把 `<b>` 印成实体。
 - **手写白名单陷阱**（r16，已踩三次）：`runner.manifest_metrics`、M2 的 metrics、
   阶段清单都是**手写挑选**，上游算得再对，不写进白名单就等于没算，而报表照样正常。
   新增指标三处同步：计算处 → 白名单 → 模板。`normal_agreement` 第一次就漏了白名单，闸门成摆设。
@@ -112,11 +116,10 @@
   各写一遍，加声明那一档时只改了 fallback 那份）。
 - 核验账本候选 = `90_meta/` **和** `阶段成果/output/run_manifest.json`（GUI 一键生成写这里）。
   只搜前者会把健康项目判成坏的。
-- **外部文献的 mm 与我们的 % 不可比**（r34 期）：0.515 mm 是「到 HandySCAN 真值的距离」，
-  `rmse_rel` 9.07% 是「模型到自己点云的自洽度」——差距首先是**有没有尺子**。它 Final RMS
-  0.3–0.8 mm 说明评估本身都带 0.3 mm 不确定度 → 更小的「提升」不成立。**先解决尺子。**
-  另：文献评估的行动项**不带判据就会消失**（v1.1.11 提 5 条只落地 1 条）。
-- **覆盖产物前先确认账本非空**：`RunManifest.load` 对坏路径静默返回空账本，用它重生成报表
+- **外部文献的 mm 与我们的 % 不可比**：0.515 mm 是「到真值的距离」，`rmse_rel` 9.07%
+  是「模型到自己点云的自洽度」——差距首先是**有没有尺子**。文献评估的行动项
+  **不带判据就会消失**（v1.1.11 提 5 条只落地 1 条）。
+- **覆盖产物前先确认账本非空**：`RunManifest.load` 对坏路径静默返回空账本，重生成报表
   会把好报表覆盖成空表（r31 踩过，verify 从 23/0/0 掉到 21/2）。
 
 ## 跨层契约
@@ -143,14 +146,13 @@
 - **阶段清单唯一真源 = `h3d.core.stages.STAGE_ORDER`**（ADR-0007）：
   `S1→M1→M2→M3→M4→P1→X3→X1→X2→M5→M6`。收敛前有**八份手写副本**，其中四份不认识 X3
   → 状态表没 X3 行、分母少一个阶段而不报错。**改顺序动的是分母、GUI 阶段条、续跑上游键。**
-- **X1 的两列由 M5 的 `build_report` 直接写**（不事后追加）：X1 移到 M5 之前后
-  「M5 已生成 accuracy.csv」这个前提反了。三态：`未标定` / `N/A`（没跑）/ 数字。
+- **X1 的两列由 M5 的 `build_report` 直接写**（不事后追加）。三态：`未标定`/`N/A`/数字。
 
 ## 输出布局（paths.py 唯一出口）
 
 - `阶段成果/` + `交付成果/`（`report/`+`<件号>/`）由 `paths.py` 唯一出口，各处不许自己拼。
 - **`task.root` 下沉为「阶段成果」**；新老判据看这层是否叫它（**不是看 00_raw 在不在**）。
-- **迁移必须有 `looks_like_project()` 闸门**（`output`/`report` 是通用名，否则整棵搬走，踩过）。
+- **迁移必须有 `looks_like_project()` 闸门**（`output`/`report` 是通用名，否则整棵搬走）
 
 ## 贴图 / 几何
 
@@ -187,8 +189,8 @@
 - **界面文案改完要截图看一眼**：QLabel 是纯文本，`**粗体**` 会原样印星号；
   `ElidedLabel.sizeHint` 在构造未完成/析构途中被 Qt 问到时抛 AttributeError 往 stderr 喷栈
   （windowed 版 stderr=None = 静默）。已各加守卫测试（纯文本 / 可重入）。
-- **读模型必须容错**：Open3D 0.19 的 OBJ/GLB 走 ASSIMP，按 ANSI(GBK) 解路径 → **中文路径必抛
-  `UnicodeDecodeError`**；PLY 无碍。统一走 `gui/meshload`（非 ASCII 复到临时目录重读，失败返 None）。
+- **读模型必须容错**：Open3D 0.19 的 OBJ/GLB 走 ASSIMP，按 ANSI(GBK) 解路径 →
+  **中文路径必抛 `UnicodeDecodeError`**；PLY 无碍。统一走 `gui/meshload`。
 - **Qt 槽里异常不外传**（windowed 版 stderr=None 全静默）→ 槽内关键路径必须 try/except +
   可见日志。踩过：预览抛错 → 槽内后续全不执行 =「跑完了但界面空」。`QThread.run()` 同理。
 - **窗口跳变 = 最小尺寸随文字变**：`QLabel.minimumSizeHint()`=整段文字宽，`QProgressBar.setFormat`

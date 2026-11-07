@@ -62,6 +62,15 @@ _LOW_CONFIDENCE_FITNESS = 0.55
 #: 只损失「明确性」，不损失判定力。
 _FLIP_MARGIN = 0.2
 
+#: 候选初值的「平手」判据（ADR-0032）。fitness 与 rmse 都是浮点，两个候选在
+#: 数值上打平时（差额小于它）**保留先出现的那个**，不去比末位。
+#:
+#: 为什么必须这样：加了 identity 候选之后，它与 ransac 候选可能收敛到**同一个解**，
+#: fitness 完全相同、rmse 只差 1e-17。原来的 `(fitness, -rmse) > (...)` 会拿
+#: 浮点末位当判据——同一份输入两次运行可能选中不同候选，`icp_init` 也就跟着变，
+#: 可复现性（ADR-0031）当场失效。实测由 `test_fitness_and_init_also_match` 抓到。
+_TIE_EPS = 1e-6
+
 #: 按法向一致性筛选时，筛完至少要留下这个比例的点（ADR-0030）。
 #: 低于它说明「半个模型都被判成法向不一致」——那多半是法向本身不可靠，
 #: 此时硬筛等于「用半件去配整件」，比不筛更差。
@@ -116,6 +125,15 @@ def _icp_multi_init(source, target, init: np.ndarray, cfg: RegisterConfig):
         cands.append((f"flip180_axis{i + 1}",
                       _rotation_about(center, axis, np.pi) @ np.asarray(
                           init, np.float64)))
+    # 恒等变换也是一份候选（ADR-0032）。反直觉但实测：
+    #   RANSAC fitness 0（彻底失败）→ 走回退路径拿到恒等 → ICP 收敛正确
+    #   RANSAC fitness 0.33（半对） → 直接用它的解       → ICP 收敛到 29.99° 误差
+    #   RANSAC fitness ≥0.73（基本对）→ 直接用它的解     → 正确
+    # 也就是说 **「半对」的初值比「没有初值」更糟**：145° 的错初值把 ICP 带进
+    # 另一个极小，而恒等离真值只差注入角（7°），仍在吸引域内。
+    # 加进来不改变选择逻辑——仍然取 fitness 最高者，恒等只在它确实更好时胜出
+    # （真机 7° 档：恒等收敛后 fitness 1.0000，RANSAC 候选只有 0.2589）。
+    cands.append(("identity", np.eye(4, dtype=np.float64)))
 
     best = None
     best_tag = "ransac"
@@ -129,8 +147,14 @@ def _icp_multi_init(source, target, init: np.ndarray, cfg: RegisterConfig):
             continue
         tried.append({"init": tag, "fitness": round(float(r.fitness), 4),
                       "rmse": round(float(r.inlier_rmse), 6)})
-        if best is None or (r.fitness, -r.inlier_rmse) > (best.fitness,
-                                                          -best.inlier_rmse):
+        # 明显更好才替换：fitness 高出一个死区，或 fitness 打平但 rmse 明显更小。
+        # 平手时保留先出现的（候选顺序 ransac → flip180 → identity），
+        # 这样「谁胜出」不取决于浮点末位（见 _TIE_EPS 的说明）。
+        if best is None:
+            best, best_tag = r, tag
+        elif (r.fitness > best.fitness + _TIE_EPS
+              or (abs(r.fitness - best.fitness) <= _TIE_EPS
+                  and r.inlier_rmse < best.inlier_rmse - _TIE_EPS)):
             best, best_tag = r, tag
     return best, best_tag, tried
 
