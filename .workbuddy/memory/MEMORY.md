@@ -7,7 +7,7 @@
 
 ## 环境
 
-- 中小型文物（5~30cm）三维建模自动化系统，硕论，全开源，量词「件」。阶段 M1–M6 +
+- 文物三维建模自动化系统（5~30cm），硕论，全开源。阶段 M1–M6 +
   S1(COLMAP) + P1/X1/X2(可选)；业务层禁 import Open3D（走 `h3d.io`）。
 - `.venv_lab\Scripts\python.exe`（PySide6 6.11 / open3d 0.19 / trimesh / cv2 5.0）；
   colmap `E:\colmap\colmap-x64-windows-cuda\bin\colmap` 4.1.1；打包 `h3d_gui.spec`
@@ -19,7 +19,7 @@
 
 ## 待办（都是**数据**阻塞，不是代码）
 
-- **真实扫描件缺**：异源配准/双源融合/毫米级精度都靠它背书；现有端到端只是同源功能性验证。
+- **真实扫描件缺**：异源配准/双源融合/毫米级精度都靠它背书；端到端只是同源功能性验证。
 - **真实两期数据缺**：X1 与 X4 都是唯一缺口。X1 侧另欠 `30_dense` 反向 6895mm 的内容核对。
 - **色卡缺**：X2 阻塞在采集规范（ArUco 贴几个/贴哪、色卡与文物相对位置、要不要灰卡）。
   「ArUco 中心=色卡角」不成立（标记对称，中心在角上必压色块）；格点 vs 格中心待定。
@@ -32,8 +32,11 @@
   泊松留洞 + 22.3% 纹素靠反面填充，需补低机位/俯拍；稀疏特征弱（30 张 13,990 点、
   track 3.95）→ 补侧向硬光/偏振。**对标文献每类 100–200 张，30 张是最大单点差距。**
 - **`io/mvs` 契约已建**（r32，ADR-0028）：`plan(req) -> MvsPlan(steps/fused_path/
-  progress)`，命令只在 `io/mvs` 里拼（AST 守卫拦回填）。**`backend_id/version` 还没进
-  资产元数据**——那是 X1 第六项约定（后端版本冻结）的前置。
+  progress)`，命令只在 `io/mvs` 里拼（AST 守卫拦回填）。
+- **后端身份已落盘**（r33，ADR-0029）：S1 metrics → 资产 params → `content_key` params
+  → verify（缺标识 WARN）。**只写 params 不写 content_key = 假落地**（复用仍按旧键命中）。
+  **不动 `stage_input_key`**：会让存量项目全量重跑，且版本不是「输入」。账本有**扁平
+  （record）与嵌套（entry["metrics"]）两种形状**，两种都要认。
 - **COLMAP 稠密重建不可逐位复现**（r32）：同输入同代码两次，点数 130,921 vs **130,929**、
   1.87% 点位置不同、max **1.0e-3 × 对角线** → `fused.ply` **哈希相同不能当判据**（正常输入
   上恒假）；改统计口径（点数差 ≤0.1% + 中位距离 0 + max ≤2e-3 diag，
@@ -64,9 +67,9 @@
 - **朝向用「法线一致性」拦，不拿 fitness 一刀切**（ADR-0025，用户选的 C 方案）：
   `normal_agreement` = ICP 内点上两云法线（各自归一到外向约定）点积均值；
   闸门 = `na < -0.2 且 fitness < 0.55`。真机正解 +0.98/+0.85（低重叠 0.23）、翻转 −0.37~−0.60。
-  **必须先做外向归一**（source/target 符号可能整体相反，实测 +1/−1，不归一会把正解算成 −0.98）。
+  **必须先做外向归一**（实测符号可整体相反，不归一会把正解算成 −0.98）。
   **近凸/轴对称物上判不出**（翻转与正解几何等价）——已知边界，不拦。
-  查「是不是回归」时 3 次样本不够：本例失败率 18%，r23 的 4 次全对只是运气。
+  查回归时 3 次样本不够（本例失败率 18%，r23 的 4 次全对只是运气）。
 - **ICP 单初值在轴对称物上解出翻转解**（30°→166.58°）→ 多初值（RANSAC + 绕两主轴 180°）
   取 fitness 最高；`fitness<0.55` 落 `low_confidence`（不判失败但必须可见）。
 - **M4 对齐要有投影级验收**（ADR-0009 D3）：`accepted` 只管「几何**之间**像不像」，管不了
@@ -100,8 +103,8 @@
   新增指标三处同步：计算处 → 白名单 → 模板。`normal_agreement` 第一次就漏了白名单，闸门成摆设。
 - **口径文字单一实现** = `quality.gate.scope_text`（原来 `quality.run` 与 `build_report`
   各写一遍，加声明那一档时只改了 fallback 那份）。
-- 核验账本候选 = `90_meta/` **和** `阶段成果/output/run_manifest.json`（后者是
-  `RunnerConfig.manifest` 默认值，GUI 一键生成也写这里）。只搜前者会把健康项目判成坏的。
+- 核验账本候选 = `90_meta/` **和** `阶段成果/output/run_manifest.json`（GUI 一键生成写这里）。
+  只搜前者会把健康项目判成坏的。
 - **外部文献的 mm 与我们的 % 不可比**（2026-11-07）：NG-MVSNet 的 0.515 mm 是「到
   HandySCAN 700 真值的距离」，我们的 `rmse_rel` 9.07% 是「模型到自己点云的自洽度」；
   差距首先是**有没有尺子**，不是算法好坏。它 Final RMS 0.3–0.8 mm 说明连评估本身都带
@@ -140,8 +143,8 @@
 
 ## 输出布局（paths.py 唯一出口）
 
-- `阶段成果/`（12 子目录 + `99_runs` + `output`）+ `交付成果/`（`report/`+`<件号>/`）+
-  `输出说明.txt`；GUI/CLI/runner/report 不许自己拼路径。
+- `阶段成果/`（12 子目录 + `99_runs` + `output`）+ `交付成果/`（`report/`+`<件号>/`）；
+  GUI/CLI/runner/report 不许自己拼路径。
 - **`task.root` 下沉为「阶段成果」**。新老判据看「这层是否叫 `阶段成果`」（**不能用 00_raw 在不在**）。
 - **迁移必须有 `looks_like_project()` 闸门**：`output`/`report` 是通用名，否则会把仓库
   `output/` 整棵搬走（167 个 D，踩过）。
@@ -181,9 +184,8 @@
 - **界面文案改完要截图看一眼**：QLabel 是纯文本，`**粗体**` 会原样印星号；
   `ElidedLabel.sizeHint` 在构造未完成/析构途中被 Qt 问到时抛 AttributeError 往 stderr 喷栈
   （windowed 版 stderr=None = 静默）。已各加守卫测试（纯文本 / 可重入）。
-- **读模型必须容错**：Open3D 0.19 的 OBJ/GLB 走 ASSIMP，路径按 ANSI(GBK) → **中文路径必抛
-  `UnicodeDecodeError`**；PLY 无碍。统一走 `gui/meshload`（非 ASCII 复制到临时目录重读，缓存，
-  失败返 None）。
+- **读模型必须容错**：Open3D 0.19 的 OBJ/GLB 走 ASSIMP，按 ANSI(GBK) 解路径 → **中文路径必抛
+  `UnicodeDecodeError`**；PLY 无碍。统一走 `gui/meshload`（非 ASCII 复到临时目录重读，失败返 None）。
 - **Qt 槽里异常不外传**（windowed 版 stderr=None 全静默）→ 槽内关键路径必须 try/except +
   可见日志。踩过：预览抛错 → 槽内后续全不执行 =「跑完了但界面空」。`QThread.run()` 同理。
 - **窗口跳变 = 最小尺寸随文字变**：`QLabel.minimumSizeHint()`=整段文字宽，`QProgressBar.setFormat`
@@ -193,12 +195,11 @@
   有 windowHandle 才问它，否则 `primaryScreen()`。诊断序：faulthandler 抓原生栈 → RSS 探针
   → 组合二分。
 - **约束先确认后运行**：`_confirm_constraints()` 是 `_start_run_inner()` 第 0 步，取消 = 不建
-  目录不写 yaml 不起子进程；落 `runner.constraints` + `confirmed`；运行期输入区隐藏。
+  目录不写 yaml 不起子进程；落 `runner.constraints` + `confirmed`。
 - **交付格式 ⊂ M4 产出格式**：`publish.formats` 要跟 `texture.export_formats` 同步
   （M6 只从 50_tex 复制，请求 M4 没产的 → `formats_missing` 假告警）。
-- **阶段耗时双源**：运行中计墙钟，结束用 manifest `elapsed_s` 覆盖；多件求和、与墙钟分开
-  标注；阶段事件**不能去重**。**进度分母是工作量不是种类**（按耗时加权 S1 .90/M4 .06，
-  S1 跳过换 `W_SCAN`）。预览 PLY 优先、>6 万面先体素简化、打开项目即刷新。
+- **阶段耗时双源**：运行中计墙钟，结束用 `elapsed_s` 覆盖；多件求和、与墙钟分开标注；
+  阶段事件不能去重。**进度分母是工作量不是种类**（按耗时加权；预览 PLY 优先、>6 万面先简化）。
 
 ## X3 / X4（单期异常与时序）
 
@@ -207,8 +208,8 @@
 
 - **UV 图集是 3690 个岛的马赛克 → 局部空间背景处处不成立 → 必须按岛归一化**
   （真机 2.18%/35 处 → 0.24%/7 处）。**阈值方向是死路**，要换与 z 无关的第二类证据。
-- `X3` 在 `M4→P1→X3→M5`，顺序只在 `_reorder_ext_stages` 一处钉；默认开但归
-  `OPTIONAL_STAGES`，**不进质量门**。「N 处」只能读作**待复核处数不是病害数**。
+- `X3` 在 `M4→P1→X3→M5`，顺序只在 `_reorder_ext_stages` 钉；归 `OPTIONAL_STAGES`、
+  **不进质量门**。「N 处」只能读作**待复核处数不是病害数**。
 - X4：五态配对、**ΔE≥5 只卡非稳定态**、照明对齐**必须在 RGB 码值空间**。不做 runner 阶段。
 
 ## 测试坑

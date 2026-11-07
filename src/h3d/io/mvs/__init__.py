@@ -27,11 +27,39 @@ __all__ = [
     "MvsBackend", "MvsPlan", "MvsRequest", "MvsStep",
     "ColmapPatchMatch", "count_depth_maps",
     "GEOMETRIC_SUFFIX", "PHOTOMETRIC_SUFFIX",
-    "get_backend", "BACKENDS",
+    "get_backend", "backend_info", "BACKENDS",
 ]
 
 #: 名字 → 后端类。新增后端只在这里挂一行，业务层不动。
 BACKENDS = {"colmap_patchmatch": ColmapPatchMatch}
+
+
+def backend_info(name: str = "colmap_patchmatch", **kwargs) -> dict:
+    """后端的「身份证」：``{"backend_id", "backend_version"}``。
+
+    P0-3 用它写两处：``CanonicalAsset.params``（给人查）与 ``content_key`` 的
+    params（给机器判能不能复用）。**只写 id 不写 version 等于没写**——同一后端
+    的不同版本「补点」方式不同，产生的偏差是系统性偏置。
+
+    两个字段必须成对出现，所以只留这一个入口。
+    """
+    backend = get_backend(name, **kwargs)
+    return {"backend_id": backend.backend_id,
+            "backend_version": backend.backend_version}
+
+
+def backend_info(name: str = "colmap_patchmatch", **kwargs) -> dict:
+    """后端的「身份证」：``{"backend_id", "backend_version"}``。
+
+    P0-3 用它写两处：``CanonicalAsset.params``（给人查）与 ``content_key`` 的
+    params（给机器判能不能复用）。**只写 id 不写 version 等于没写**——同一后端
+    的不同版本「补点」方式不同，产生的偏差是系统性偏置。
+
+    两个字段必须成对出现，所以只留这一个入口。
+    """
+    backend = get_backend(name, **kwargs)
+    return {"backend_id": backend.backend_id,
+            "backend_version": backend.backend_version}
 
 
 def get_backend(name: str, **kwargs) -> MvsBackend:

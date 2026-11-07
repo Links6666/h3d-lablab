@@ -681,6 +681,41 @@ def _run_task_worker(cfg_dict: dict, task: Task, stages: dict,
 # ---------------------------------------------------------------------------
 # 批量处理器
 # ---------------------------------------------------------------------------
+def _dense_backend_identity(task, manifest) -> dict:
+    """本件稠密重建的后端身份：``{"backend_id", "backend_version"}``，取不到返回空字典。
+
+    为什么两个来源都要认：
+      * 本次运行跑了 S1 —— 身份在 ``task.results["S1"].metrics`` 里（刚算出来的）；
+      * 断点续跑跳过了 S1 —— results 里没有它，但账本里有（上次算出来的）。
+
+    只认一处会得到「续跑的项目档案里没后端标识」，而那恰好是最需要追溯的场景。
+
+    取不到时返回**空字典**而不是 ``{"backend_id": None}``：空字典能干净地
+    ``{**base, **identity}``；带 None 会污染内容键，还会让「没跑过」与
+    「跑了但没记」看起来一样。
+    """
+    def _pick(metrics) -> dict:
+        m = metrics or {}
+        # 账本 entry 有两种形状：扁平（record(**metrics) 写出来的）与嵌套
+        # （{"metrics": {...}}，delivery_verify 里在读的那种）。只认一种会得到
+        # 「跑过但读不到」，而那恰好是最需要追溯的场景。
+        if isinstance(m.get("metrics"), dict):
+            m = m["metrics"]
+        if not m.get("backend_id"):
+            return {}
+        return {"backend_id": str(m["backend_id"]),
+                "backend_version": str(m.get("backend_version") or "unknown")}
+
+    res = (getattr(task, "results", None) or {}).get("S1")
+    got = _pick(getattr(res, "metrics", None) if res is not None else None)
+    if got:
+        return got
+    if manifest is not None:
+        entry = (manifest.stages.get(f"{task.item_id}/S1") or {})
+        return _pick(entry)
+    return {}
+
+
 class BatchProcessor:
     """M0 编排内核：按注册阶段调度队列，失败隔离 + 断点续跑 + manifest 溯源。"""
 
@@ -1081,13 +1116,18 @@ class BatchProcessor:
                 log.warning("图集登记失败（继承将不可用）：%s（%s）",
                             task.item_id, exc)
 
+            # 后端标识（P0-3 / ADR-0028）：跨期第六项约定的落地前提。
+            # 只写进 params 不写进 content_key 等于没写——复用与对比仍按旧键命中。
+            identity = _dense_backend_identity(task, manifest)
+
             asset = CanonicalAsset(
                 epoch_id=base.epoch_id, version=1,
                 content_key=_archive_key(
-                    inputs, {"pipeline": 1, "stages": stage_keys}),
+                    inputs, {"pipeline": 1, "stages": stage_keys, **identity}),
                 mesh_path=_rel(mesh), cloud_path=None, texture_path=_rel(tex),
                 uv_atlas_ref=atlas_ref, cameras_path=_rel(cam),
-                params={"pipeline": "runner", "stage_keys": stage_keys},
+                params={"pipeline": "runner", "stage_keys": stage_keys,
+                        **identity},
                 created_at=datetime.now().isoformat(timespec="seconds"))
             saved = arch.register(asset)
             log.info("档案登记：%s %s v%d（产物 %d 项）",

@@ -279,6 +279,41 @@ def atlas_expectation(m4_entries):
     return "unknown"
 
 
+def dense_backend_gaps(root, man) -> list[str]:
+    """有稠密产物、但账本里查不到 ``backend_id`` 的件号。
+
+    为什么这条要存在（P0-3 / ADR-0028）：跨期比对的前提是「同一条对比链内重建
+    后端版本一致」。不同后端（或同后端不同版本）在弱纹理区「补点」的方式不同，
+    偏差是系统性偏置——LOD 吃不掉，整片区域会被判成「变化」。
+
+    判据取「有 ``fused_dense.ply`` **且** 有 S1 记录」：只跑稀疏的项目不该被要求
+    标后端，纯激光件项目（无 S1）也不该。
+
+    旧账本会命中：那是**真的缺**，不是误报——修法是重跑 S1，或者接受它在报表上
+    一直显示（这一项是 WARN 不是 FAIL）。
+    """
+    st = stages_of(man or {})
+    gaps: list[str] = []
+    try:
+        from h3d.core import paths as _paths
+
+        dense_root = os.path.join(_paths.stage_root(root),
+                                  _paths.STAGE_DIRS["dense"])
+    except Exception:  # noqa: BLE001 - 算不出路径就没有判据，别让核验崩
+        return gaps
+    for key in sorted(st):
+        if not str(key).endswith("/S1"):
+            continue
+        entry = st[key] or {}
+        inner = entry["metrics"] if isinstance(entry.get("metrics"), dict) else entry
+        if inner.get("backend_id"):
+            continue
+        item = str(key).rsplit("/", 1)[0]
+        if os.path.isfile(os.path.join(dense_root, item, "fused_dense.ply")):
+            gaps.append(item)
+    return gaps
+
+
 def stages_of(man):
     st = man.get("stages") or man.get("items") or {}
     if isinstance(st, dict):
@@ -538,6 +573,12 @@ def main(root, quiet: bool = False):
             hit = label in txt or stage in txt
             warn(hit, f"HTML 覆盖 {stage}",
                  f"HTML 里没有 {stage} 行（对外名「{label}」也没找到）")
+
+    # ---------- 4b) 稠密产物的后端标识（P0-3 / ADR-0028）----------
+    gaps = dense_backend_gaps(root, man)
+    warn(not gaps, "稠密产物均已标注重建后端",
+         f"{len(gaps)} 件的稠密产物缺 backend 标识（跨期无法判断是否同后端）："
+         f"{'、'.join(gaps[:3])}")
 
     # ---------- 5) 报表数字能否从 manifest 复算 ----------
     cov = None

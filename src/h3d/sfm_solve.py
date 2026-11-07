@@ -1449,6 +1449,15 @@ def run_sfm_solve(task, cfg):
             max_image_size=cfg.sfm_solve.dense_max_image_size,
             geom_consistency=cfg.sfm_solve.dense_geom_consistency,
             force_clear=cfg.sfm_solve.force_redense)
+        # 后端标识（P0-3 / ADR-0028）：跨期第六项约定（后端版本冻结）的落地前提。
+        # **只写 id 不写 version 等于没写**——同一后端的不同版本「补点」方式不同，
+        # 产生的偏差是系统性偏置，LOD 吃不掉，整片弱纹理区会被判成「变化」。
+        # 探不到版本时落 "unknown"（不抛），不能因为元数据缺失让建模失败。
+        from h3d.io.mvs import backend_info
+
+        _ident = backend_info("colmap_patchmatch", exe=colmap)
+        metrics["backend_id"] = _ident["backend_id"]
+        metrics["backend_version"] = _ident["backend_version"]
         # 质量门（P2）：离群剔除 + 密度过滤，保证合并稳健
         gate_metrics = {}
         if cfg.sfm_solve.dense_gate:

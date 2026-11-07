@@ -15,6 +15,8 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from functools import lru_cache
+from functools import lru_cache
 
 from .base import MvsBackend, MvsPlan, MvsRequest, MvsStep
 
@@ -38,11 +40,16 @@ def count_depth_maps(dense_dir: str, suffix: str) -> int:
         return 0
 
 
+@lru_cache(maxsize=8)
+@lru_cache(maxsize=8)
 def _probe_version(exe: str) -> str:
     """问一次 ``colmap --version``；任何异常都降级成 ``unknown``。
 
-    不缓存到磁盘、不阻断：版本只是元数据（P0-3 用来判「两期是不是同一后端版本」），
+    不落盘、不阻断：版本只是元数据（P0-3 用来判「两期是不是同一后端版本」），
     拿不到时宁可标 unknown，也不能让稠密重建因为探测失败而跑不起来。
+
+    进程内缓存（``lru_cache``）：批量跑时每件都会问一次身份，每次都起一个
+    ``colmap -h`` 子进程会让批量白等十几秒。
     """
     path = shutil.which(exe) or (exe if os.path.exists(exe) else "")
     if not path:
