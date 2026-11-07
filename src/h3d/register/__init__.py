@@ -31,6 +31,7 @@ from h3d.core import RegistrationError, RegisterConfig, get_logger
 from .feature import compute_fpfh, ensure_normals
 from .ransac import global_registration
 from .icp import icp_refine
+from .normals import MIN_USABLE_CONSISTENCY, normal_consistency, normal_quality
 from .evaluate import (
     evaluate_registration,
     fitness,
@@ -60,6 +61,11 @@ _LOW_CONFIDENCE_FITNESS = 0.55
 #: 因此偶发失败）。真机翻转解 −0.37~−0.60、正解 +0.85~+0.98，这条 0.2 的死区
 #: 只损失「明确性」，不损失判定力。
 _FLIP_MARGIN = 0.2
+
+#: 按法向一致性筛选时，筛完至少要留下这个比例的点（ADR-0030）。
+#: 低于它说明「半个模型都被判成法向不一致」——那多半是法向本身不可靠，
+#: 此时硬筛等于「用半件去配整件」，比不筛更差。
+_MIN_KEEP_FRACTION = 0.5
 
 #: RANSAC 的随机种子**已下沉到** ``register.ransac.global_registration``
 #: （谁消费随机谁定种子），此处不再重复定义。不定种子的后果见 ADR-0024。
@@ -179,21 +185,62 @@ def run(source, target, cfg: RegisterConfig) -> dict:
     # 单一 RANSAC 初值在近似轴对称物体上会解到「翻转 180° 的版本」：点位对得
     # 上、方向反了。1.1.12 端到端验证实测注入 30°，恢复出 166.6°、fitness
     # 0.336，而失败门 0.2 —— 一路"合格"。多初值让正确朝向凭 fitness 胜出。
+    # 按局部法向一致性剔除 source 点（ADR-0030，P0-2）。
+    # **默认关闭**（normal_filter=0）：关闭时这段完全不碰 source，行为与旧版逐位相同。
+    # 叫 filter 不叫 weight：Open3D 的 registration_icp 不收逐点权重，只能剔除。
+    src_icp = source
+    filter_thr = float(getattr(cfg, "normal_filter", 0.0) or 0.0)
+    nq = normal_quality(source, radius=cfg.fpfh_radius)
+    nq_metrics = {"normal_quality_median": round(float(nq["median"]), 4),
+                  "normal_quality_frac_low": round(float(nq["frac_low"]), 4)}
+    if filter_thr > 0:
+        # P1-1 闸门：法向本身不可靠时**放弃筛选**。用一个不可靠的量去筛点，
+        # 可能比不筛更差——论文表 6（GT .280 / MiDaS .295 / 无先验 .309）
+        # 说明先验质量会传进结果。
+        min_q = float(getattr(cfg, "normal_min_quality", 0.7) or 0.0)
+        need = max(min_q, MIN_USABLE_CONSISTENCY)
+        if nq["median"] < need:
+            log.warning(
+                "法向不可靠（一致性中位 %.3f < %.3f），放弃筛选、按原始点云配准",
+                nq["median"], need)
+            nq_metrics["normal_filter_skipped"] = "low_quality"
+        else:
+            keep = normal_consistency(source, cfg.fpfh_radius) >= filter_thr
+            frac = float(keep.mean())
+            if frac < _MIN_KEEP_FRACTION:
+                log.warning("按法向一致性筛选后只剩 %.1f%% 的点（< %.0f%%），"
+                            "放弃筛选", frac * 100, _MIN_KEEP_FRACTION * 100)
+                nq_metrics["normal_filter_skipped"] = "too_few"
+            else:
+                src_icp = source.select_by_index(np.where(keep)[0])
+                nq_metrics["normal_filter_kept"] = round(frac, 4)
+
     icp, icp_init, icp_trials = _icp_multi_init(
-        source, target, ransac.transformation, cfg)
+        src_icp, target, ransac.transformation, cfg)
     if icp is None:  # 所有初值都抛错：退回单次，让下面按失败处理
-        icp = icp_refine(source, target, ransac.transformation,
+        icp = icp_refine(src_icp, target, ransac.transformation,
                          cfg.icp_distance, cfg.max_iter, point_to_plane=True)
         icp_init, icp_trials = "ransac", []
 
+    # **筛选只用于求变换**：fitness = 内点数 / 总点数，分母必须回到原始点数。
+    # 否则剔除掉低一致性点会让分子分母同时变小、fitness 虚高，
+    # 读起来像「配得更好」，其实只是把难配的点藏了。
+    fit_eff = float(icp.fitness)
+    if src_icp is not source:
+        fit_eff = (fit_eff * len(src_icp.points)
+                   / max(1, len(source.points)))
+
     # 4) 质量判定：精配准后 fitness 过低 = 重叠不足 / 配准失败（《设计书》33.4）
-    if icp.fitness < _MIN_FITNESS:
+    if fit_eff < _MIN_FITNESS:
         raise RegistrationError(
-            f"配准失败（重叠不足，ICP fitness={icp.fitness:.3f} < "
+            f"配准失败（重叠不足，ICP fitness={fit_eff:.3f} < "
             f"{_MIN_FITNESS}）")
 
     # 5) 质量评估
     metrics = evaluate_registration(icp)
+    metrics.update(nq_metrics)
+    if src_icp is not source:
+        metrics["fitness"] = fit_eff
     # 朝向判据（2026-11-05，ADR-0025）：fitness 只回答「贴不贴」，回答不了
     # 「方向对不对」。近似轴对称的造像被解成 179° 翻转时，几何贴合得很好
     # （中位间距 0.75% 对角线）、fitness 也可能不低，只有法线方向是反的。

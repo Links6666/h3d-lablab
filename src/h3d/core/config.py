@@ -256,6 +256,11 @@ class RegisterConfig(_ConfigBase):
     ransac_distance: float = Field(dtype=float, default=0.05, low=0.0)
     icp_distance: float = Field(dtype=float, default=0.02, low=0.0)
     max_iter: int = Field(dtype=int, default=2000, low=1)
+    #: 按局部法向一致性剔除 source 点（ADR-0030）。0 = 关闭（默认，行为与旧版逐位相同）。
+    #: **叫 filter 不叫 weight**：Open3D 的 ICP 不收逐点权重，这里只能做剔除。
+    normal_filter: float = Field(dtype=float, default=0.0, low=0.0)
+    #: 法向可靠性的闸门：一致性中位数低于它就不筛（P1-1）。
+    normal_min_quality: float = Field(dtype=float, default=0.7, low=0.0)
 
 
 class ChangeConfig(_ConfigBase):

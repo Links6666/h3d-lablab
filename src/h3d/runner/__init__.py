@@ -428,6 +428,16 @@ def _stage_register(task: Task, cfg) -> StageResult:
         # 是手写挑选的（r16 那个坑：上游算得再对，不写进这里报表也读不到）。
         metrics[f"normal_agreement_s{i:02d}"] = res.get("normal_agreement")
         metrics["normal_agreement"] = metrics[f"normal_agreement_s{i:02d}"]
+        # 法向可靠性 + 筛选结果（ADR-0030）：**同样必须显式转手**。
+        # 这是手写白名单的第 N 次复现——`register.run` 里算了，不写进这里
+        # 脚本/报表一律读不到，而一切看起来正常。
+        for _k in ("normal_quality_median", "normal_quality_frac_low",
+                   "normal_filter_kept", "normal_filter_skipped"):
+            if res.get(_k) is not None:
+                metrics[f"{_k}_s{i:02d}"] = res.get(_k)
+        for _k in ("normal_quality_median", "normal_quality_frac_low",
+                   "normal_filter_kept", "normal_filter_skipped"):
+            metrics[_k] = metrics.get(f"{_k}_s01")
         metrics["icp_init"] = metrics[f"icp_init_s{i:02d}"]
         metrics["low_confidence"] = bool(
             metrics["low_confidence"] or res.get("low_confidence"))
