@@ -54,11 +54,13 @@
 - **施加刚体变换 ≠ 造出两站**：M2 判据是**文件数**（`len(cleaned)<2` 单站直通）。验证配准
   必须 00_raw 里有两份错位几何 → `scripts/verify_registration_e2e.py --angle 30 --noise 0.002`。
 - **单站直通 ≠ 配准通过**：日志「M2 完成」在单站时意味着一次变换都没做。r25 已在开跑前
-  显式提示（ADR-0021，对话框 + 日志各一版，份数口径复用 `runner.discover_items`）。
-- **配准单次成功率只有 60~100%**（r34 实测）：7° **6/10**、30° 4/5、
-  120° 4/5、180° 5/5。**r28 那张「五档 ≤0.04°」是单次抽样**——5 次全对判不了 20~40%
-  的失败率。已排除：法线估计确定（3 次跨进程哈希同）、输入构造确定；根因仍是 RANSAC
-  并行归约不受种子约束（r28 那条）。**比 P1-2/P2 更该先处理。**
+  提示（ADR-0021，对话框 + 日志各一版，复用 `runner.discover_items`）。
+- **配准不确定性的根因是 OpenMP 并行归约，不是种子**（r35，ADR-0031）：四段拆分实测
+  （`scripts/diagnose_register_steps.py`）——FPFH 确定 / **RANSAC 3 种** / ICP 确定。
+  `OMP_NUM_THREADS=1` 后 6 次唯一。**关键陷阱：import open3d 之后再设无效**，必须落在
+  包入口 `h3d/__init__.py` 顶部。代价 RANSAC 0.30→0.47s。**7° 档现「稳定地失败」**
+  （30.00°/fit .2588）——r34 的「6/10 通过」是多线程随机蒙对的。**7° 难是 FPFH 分辨率
+  极限**，要改 FPFH 不是改种子。30/90/120/180 无回归。**7° 的 FAIL 不许改绿。**
 - **`normal_filter` 只能剔除不能加权**（r34，ADR-0030）：Open3D ICP 不收逐点权重。
   点云用 `|n̂·n̄|` 而非 `(dot+1)/2`（符号逐点随机）；**先 orient 再算更糟**（散点云 c 被
   抹到 0.9+）。**筛选只用于求变换**，fitness 分母必须回原始点数。默认 0（关闭）。
@@ -69,7 +71,7 @@
   `seed_rng(`/`sample_surface(`——它第一次跑就抓到 `ransac.py`。
 - **RANSAC 定种子前 17 次里 3 次解出 179° 翻转解**（ADR-0024）：fitness 0.52、中位间距
   仍只 0.75% 所以间距判据放行。**翻转候选从 RANSAC 解派生** → 初值一歪三个候选一起歪。
-  已定种子，但**初值选择仍有进程间差异**（r34 实测 7° 仍 4/10 失败）。
+  进程间差异的根因见上条（OpenMP），r35 已修。
 - **朝向用「法线一致性」拦，不拿 fitness 一刀切**（ADR-0025，用户选的 C 方案）：
   `normal_agreement` = ICP 内点上两云法线（各自归一到外向约定）点积均值；
   闸门 = `na < -0.2 且 fitness < 0.55`。真机正解 +0.98/+0.85（低重叠 0.23）、翻转 −0.37~−0.60。
@@ -96,25 +98,24 @@
   而 M1 判出 `raw_looks_like_sfm` → 仍不主张米制 + `declared_source_conflict` + WARN。
   声明是把判断权交回用户，**不是**后门。
 - `metric_units_reason` 必须与布尔一起落盘（manifest + `qc_metrics.json`）：只落布尔的话，
-  「机器猜的 auto」与「人声明的 photogrammetry」事后长得一模一样。判门失败时 manifest 不写，
+  「机器猜的 auto」与「人声明的 photogrammetry」事后一样。判门失败时 manifest 不写，
   `qc_metrics.json` 是唯一留档。
 - **自证闭环**：`dense_novel_ratio<0.15` 且有 00_raw → `dual_source_duplicate=True`、
   `dense_source=raw_looks_like_sfm`，配准/精度/覆盖率三项都不可引用。
 - **`texture_carrier` ≠ `_delivered`**：M4 自动补导 OBJ（carrier 恒 obj），M6 只复制
   `publish.formats`；只勾 ply 时图集 PNG 孤立（报表须显示「无（图集孤立）」）。
 - **诊断文本走 `|safe`**：`autoescape` 会把 `<b>` 印成实体；文本里禁裸 `<`。
-- **手写白名单陷阱**（r16 根因，已踩三次）：`runner.manifest_metrics`、M2 的 metrics、
+- **手写白名单陷阱**（r16，已踩三次）：`runner.manifest_metrics`、M2 的 metrics、
   阶段清单都是**手写挑选**，上游算得再对，不写进白名单就等于没算，而报表照样正常。
   新增指标三处同步：计算处 → 白名单 → 模板。`normal_agreement` 第一次就漏了白名单，闸门成摆设。
 - **口径文字单一实现** = `quality.gate.scope_text`（原来 `quality.run` 与 `build_report`
   各写一遍，加声明那一档时只改了 fallback 那份）。
 - 核验账本候选 = `90_meta/` **和** `阶段成果/output/run_manifest.json`（GUI 一键生成写这里）。
   只搜前者会把健康项目判成坏的。
-- **外部文献的 mm 与我们的 % 不可比**（2026-11-07）：NG-MVSNet 的 0.515 mm 是「到
-  HandySCAN 700 真值的距离」，我们的 `rmse_rel` 9.07% 是「模型到自己点云的自洽度」；
-  差距首先是**有没有尺子**，不是算法好坏。它 Final RMS 0.3–0.8 mm 说明连评估本身都带
-  0.3 mm 不确定度 → 被测差异小于它时「提升 0.006 mm」不成立。**先解决尺子再谈精度。**
-  另：文献评估出的行动项**不带判据就会消失**（v1.1.11 期提 5 条，只落地 1 条）。
+- **外部文献的 mm 与我们的 % 不可比**（r34 期）：0.515 mm 是「到 HandySCAN 真值的距离」，
+  `rmse_rel` 9.07% 是「模型到自己点云的自洽度」——差距首先是**有没有尺子**。它 Final RMS
+  0.3–0.8 mm 说明评估本身都带 0.3 mm 不确定度 → 更小的「提升」不成立。**先解决尺子。**
+  另：文献评估的行动项**不带判据就会消失**（v1.1.11 提 5 条只落地 1 条）。
 - **覆盖产物前先确认账本非空**：`RunManifest.load` 对坏路径静默返回空账本，用它重生成报表
   会把好报表覆盖成空表（r31 踩过，verify 从 23/0/0 掉到 21/2）。
 
@@ -147,9 +148,8 @@
 
 ## 输出布局（paths.py 唯一出口）
 
-- `阶段成果/`（12 子目录 + `99_runs` + `output`）+ `交付成果/`（`report/`+`<件号>/`）；
-  GUI/CLI/runner/report 不许自己拼路径。
-- **`task.root` 下沉为「阶段成果」**。新老判据看「这层是否叫 `阶段成果`」（**不能用 00_raw 在不在**）。
+- `阶段成果/` + `交付成果/`（`report/`+`<件号>/`）由 `paths.py` 唯一出口，各处不许自己拼。
+- **`task.root` 下沉为「阶段成果」**；新老判据看这层是否叫它（**不是看 00_raw 在不在**）。
 - **迁移必须有 `looks_like_project()` 闸门**（`output`/`report` 是通用名，否则整棵搬走，踩过）。
 
 ## 贴图 / 几何
