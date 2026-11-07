@@ -624,15 +624,6 @@ def dense_timeout_budget(n_views: int, megapixels: float,
     return int(max(1800, round(budget)))
 
 
-def _count_depth_maps(dense_dir: str, suffix: str) -> int:
-    """统计已生成的深度图数量（超时诊断用：已完成多少、还要多少）。"""
-    dm = os.path.join(dense_dir, "stereo", "depth_maps")
-    try:
-        return sum(1 for f in os.listdir(dm) if f.endswith(suffix))
-    except OSError:
-        return 0
-
-
 def run_dense_stereo(photo_dir: str, sparse_model: str, workspace: str,
                      colmap: str, min_pixels: int = 2,
                      max_pixels: int = 20, timeout_s: int = 0,
@@ -651,8 +642,20 @@ def run_dense_stereo(photo_dir: str, sparse_model: str, workspace: str,
                   fusion 改用 photometric 深度图。
     force_clear:  强制丢弃既有深度图（默认只在与当前位姿不匹配时才清）。
     返回 fused.ply 路径；任一步失败抛 SfmError（GPU 不可用时明确报错）。
+
+    命令由 ``h3d.io.mvs`` 的后端产生（ADR-0028）：这里只负责**执行、超时与诊断**，
+    不再拼 COLMAP 参数。换后端 = 换 ``get_backend`` 的名字，业务层不动。
     """
-    dense_dir = os.path.join(workspace, "dense")
+    from h3d.io.mvs import (GEOMETRIC_SUFFIX, PHOTOMETRIC_SUFFIX,
+                            MvsRequest, count_depth_maps, get_backend)
+
+    plan = get_backend("colmap_patchmatch", exe=colmap).plan(MvsRequest(
+        photo_dir=photo_dir, sparse_model=sparse_model, workspace=workspace,
+        exe=colmap,
+        options={"min_pixels": min_pixels, "max_pixels": max_pixels,
+                 "geom_consistency": geom_consistency,
+                 "max_image_size": max_image_size}))
+    dense_dir = plan.dense_dir
     stereo = os.path.join(dense_dir, "stereo")
     fp_path = os.path.join(dense_dir, ".h3d_pose_fp")
 
@@ -674,8 +677,8 @@ def run_dense_stereo(photo_dir: str, sparse_model: str, workspace: str,
             shutil.rmtree(stereo, ignore_errors=True)
             log.info("S1 丢弃旧 stereo 深度图（sparse 位姿已变）：%s", stereo)
         else:
-            n_p = _count_depth_maps(dense_dir, ".photometric.bin")
-            n_g = _count_depth_maps(dense_dir, ".geometric.bin")
+            n_p = count_depth_maps(dense_dir, PHOTOMETRIC_SUFFIX)
+            n_g = count_depth_maps(dense_dir, GEOMETRIC_SUFFIX)
             log.info("S1 复用既有深度图（位姿未变，断点续算）："
                      "photometric %d 张 / geometric %d 张", n_p, n_g)
     try:
@@ -686,56 +689,32 @@ def run_dense_stereo(photo_dir: str, sparse_model: str, workspace: str,
         log.warning("S1 位姿指纹落盘失败（不影响本次重建）：%s", exc)
 
     passes = 2 if geom_consistency else 1
-    pm_cmd = [colmap, "patch_match_stereo",
-              "--workspace_path", dense_dir,
-              "--workspace_format", "COLMAP",
-              "--PatchMatchStereo.geom_consistency",
-              "true" if geom_consistency else "false",
-              "--PatchMatchStereo.gpu_index", "0"]
-    if max_image_size and max_image_size > 0:
-        pm_cmd += ["--PatchMatchStereo.max_image_size", str(int(max_image_size))]
-    steps = [
-        [colmap, "image_undistorter",
-         "--image_path", photo_dir,
-         "--input_path", sparse_model,
-         "--output_path", dense_dir,
-         "--output_type", "COLMAP"],
-        pm_cmd,
-        [colmap, "stereo_fusion",
-         "--workspace_path", dense_dir,
-         "--workspace_format", "COLMAP",
-         "--input_type", "geometric" if geom_consistency else "photometric",
-         "--output_path", os.path.join(dense_dir, "fused.ply"),
-         "--StereoFusion.min_num_pixels", str(min_pixels),
-         "--StereoFusion.max_num_pixels", str(max_pixels)],
-    ]
     n_views = _count_photos(photo_dir)
     mp = _photos_megapixels(photo_dir, max_image_size)
     budget = int(timeout_s) if timeout_s and timeout_s > 0 else \
         dense_timeout_budget(n_views, mp, passes=passes)
-    for i, cmd in enumerate(steps, 1):
-        log.info("S1 dense[%d/3]: %s", i, " ".join(cmd[:4]) + " ...")
-        step_timeout = budget if i == 2 else max(600, budget // 4)
+    n_steps = len(plan.steps)
+    for i, (step, step_timeout) in enumerate(
+            zip(plan.steps, plan.budgets(budget)), 1):
+        cmd = list(step.argv)
+        log.info("S1 dense[%d/%d]: %s", i, n_steps, " ".join(cmd[:4]) + " ...")
         try:
             proc = run_external(cmd, cwd=workspace, timeout=step_timeout,
                                 on_line=_ProgressLogger("S1"))
         except subprocess.TimeoutExpired as exc:
             # 超时是最容易误诊的失败：必须说清「预算多少、算到哪、会不会重来」，
             # 否则用户只看到一句 TimeoutExpired（实机曾误判为需要 CUDA GPU）。
-            n_p = _count_depth_maps(dense_dir, ".photometric.bin")
-            n_g = _count_depth_maps(dense_dir, ".geometric.bin")
             partial = getattr(exc, "output", "") or ""
             log_path = ""
             if partial:
                 log_path = _dump_text_log(workspace, 10 + i, list(cmd),
                                           str(partial))
             where = f"；完整日志：{log_path}" if log_path else ""
-            if i == 2:
+            if step.heavy:
                 raise SfmError(
-                    f"dense[2/3] 稠密深度图超时：预算 {step_timeout}s 用尽"
+                    f"dense[{i}/{n_steps}] 稠密深度图超时：预算 {step_timeout}s 用尽"
                     f"（{n_views} 张 × {mp:.2f} MP × {passes} 遍）。"
-                    f"已完成 photometric {n_p}/{n_views}、"
-                    f"geometric {n_g}/{n_views}；"
+                    f"已完成 {plan.progress()}（共 {n_views} 张）；"
                     "产物已保留，重跑会从断点续算（位姿未变时不再重算）。\n"
                     "加速建议：① 降低 sfm_solve.dense_max_image_size"
                     f"（当前 {max_image_size or '跟随输入'}）；"
@@ -743,19 +722,19 @@ def run_dense_stereo(photo_dir: str, sparse_model: str, workspace: str,
                     "③ 显式设置 sfm_solve.dense_timeout_s 放宽预算。"
                     f"{where}") from exc
             raise SfmError(
-                f"dense[{i}/3] 超时：预算 {step_timeout}s 用尽{where}") from exc
+                f"dense[{i}/{n_steps}] 超时：预算 {step_timeout}s 用尽{where}") from exc
         log_path = _dump_step_log(workspace, 10 + i, list(cmd), proc)
         if proc.returncode != 0:
             err = _error_tail((proc.stderr or "") + "\n" + (proc.stdout or ""))
             where = f"；完整日志：{log_path}" if log_path else ""
-            if i == 2 and ("CUDA" in err or "cuda" in err):
+            if step.heavy and ("CUDA" in err or "cuda" in err):
                 raise SfmError(
                     "dense 需要可用 CUDA GPU（patch_match_stereo 为 GPU-only）；"
                     f"请确认 NVIDIA 驱动 >= CUDA 13{where}。详情: {err}")
             raise SfmError(
                 f"dense 步骤 {i} 失败 (exit={proc.returncode}){where}\n{err}")
-        log.info("S1 dense[%d/3] 完成", i)
-    fused = os.path.join(dense_dir, "fused.ply")
+        log.info("S1 dense[%d/%d] 完成", i, n_steps)
+    fused = plan.fused_path
     if not os.path.exists(fused):
         raise SfmError("dense 未生成 fused.ply（融合点数过少）")
     return fused

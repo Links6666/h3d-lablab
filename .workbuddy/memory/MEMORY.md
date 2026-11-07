@@ -31,10 +31,14 @@
   质检判别力不足（`coverage_threshold=0.3` 实测 81.8% 形同虚设）；镂空/内侧缺覆盖 →
   泊松留洞 + 22.3% 纹素靠反面填充，需补低机位/俯拍；稀疏特征弱（30 张 13,990 点、
   track 3.95）→ 补侧向硬光/偏振。**对标文献每类 100–200 张，30 张是最大单点差距。**
-- **后端契约未建**：`io/mvs`（`MvsBackend.reconstruct(images,K,R,t,cfg)`）与
-  `backend_id/backend_version` 进资产元数据**都没做**，后者是 X1 第六项约定（后端版本
-  冻结）的前置——不同后端的偏差是系统性偏置，LOD 吃不掉，整片弱纹理区会被判成「变化」。
-- **X3 灵敏度**：≥80 texel 大斑块检不出（需降采样版大窗口）；图斑明细只进 CSV。
+- **`io/mvs` 契约已建**（r32，ADR-0028）：`plan(req) -> MvsPlan(steps/fused_path/
+  progress)`，命令只在 `io/mvs` 里拼（AST 守卫拦回填）。**`backend_id/version` 还没进
+  资产元数据**——那是 X1 第六项约定（后端版本冻结）的前置。
+- **COLMAP 稠密重建不可逐位复现**（r32）：同输入同代码两次，点数 130,921 vs **130,929**、
+  1.87% 点位置不同、max **1.0e-3 × 对角线** → `fused.ply` **哈希相同不能当判据**（正常输入
+  上恒假）；改统计口径（点数差 ≤0.1% + 中位距离 0 + max ≤2e-3 diag，
+  `scripts/compare_point_sets.py`）。**X1 硬约束**：300mm 件 = 0.3mm 噪声（X1 检 0.5mm
+  级形变）→ **不能靠重跑某期修正数据**。
 - **未覆盖用例**：`force_rerun` 是布尔整批；窗口缺「拉缩后再跑」/1366×768/150% 缩放。
 
 ## 配准 / 对齐（硬约束）
@@ -63,9 +67,8 @@
   **必须先做外向归一**（source/target 符号可能整体相反，实测 +1/−1，不归一会把正解算成 −0.98）。
   **近凸/轴对称物上判不出**（翻转与正解几何等价）——已知边界，不拦。
   查「是不是回归」时 3 次样本不够：本例失败率 18%，r23 的 4 次全对只是运气。
-- **ICP 单初值在轴对称物上解出翻转解**（30°→166.58°，fitness 0.336 还越过 0.2 失败门）→
-  多初值（RANSAC + 绕两主轴 180°）取 fitness 最高；`fitness<0.55` 落 `low_confidence`
-  （不判失败但必须可见）。修复后 7/30/90/120/180° ≤0.04°。
+- **ICP 单初值在轴对称物上解出翻转解**（30°→166.58°）→ 多初值（RANSAC + 绕两主轴 180°）
+  取 fitness 最高；`fitness<0.55` 落 `low_confidence`（不判失败但必须可见）。
 - **M4 对齐要有投影级验收**（ADR-0009 D3）：`accepted` 只管「几何**之间**像不像」，管不了
   「还在不在**相机视野里**」。真机实测走对齐 coverage 21.22%→1.16%、相机 20→3，闸门却判通过。
   已加 `in_frame_ratio` 前后对比，**掉一半以上就回退恒等**（相对判据；不对齐的基线才 14.5%）。
@@ -125,8 +128,7 @@
 - **续跑判据是输入指纹不只是状态**（`runner/fingerprint.py` → manifest `input_key`）=
   外部输入摘要 + 上游阶段键 + 参数快照，**配置用减法**（只剔 `project`/`runner`；
   白名单漏一段就是「改参数不重跑」）。**并行 `workers>1` 不做续跑判定**（已补 WARNING 未修）。
-- **同照片多件**按「名+大小+SHA-1」比对，命中复制 `fused_dense.ply`+`capture_meta.json`；
-  开关 `sfm_solve.reuse_identical_photos`。
+- **同照片多件**按「名+大小+SHA-1」比对（`sfm_solve.reuse_identical_photos`）。
 - **禁静默降级 / `except: pass`**：兜底须同时写 metrics + WARNING（novel 曾被吞数周）。
   配置读 `utf-8-sig`（→`[E001]`）；`validate` 0 件 rc=1；子进程走 `proc.run_external`；
   派生状态原子写；`STAGE_ORDER` 必须与 `STAGE_REGISTRY` 一致（漏 P1→KeyError 被 Qt 吞）。
@@ -160,8 +162,7 @@
 - **`texture_overlap` 必须与 `multiview_color_std` 配对读**（ADR-0022）：色差小 + 重叠度高
   = 融合稳；色差小 + 重叠度≈1 = **只有一台相机在看**（没分歧自然没色差）——最该报警的
   情况恰好是色差最漂亮的时候。按纹素去重（不是相机×纹素事件），只在真着色纹素上算
-  （不外扩不填洞），缺键是 None 不是 0。真机 relic_001：overlap 5.77 / multi 98.4% /
-  color_std 40.44 → 根子不是「看不到」而是 11 台之间色调差太多。
+  （不外扩不填洞），缺键是 None 不是 0。
 - **质量口径**：`coverage_ratio`=图集像素利用率、`atlas_utilization`=岛占比、
   `fill_ratio`=两者之比；真判据看**岛内填充率**（<85% 才是法线/遮挡/位姿问题）。
   碎片化 `component_metrics`（>3 块且最大 <60% WARNING）；三平面 RANSAC 27.8%→86.6%（未实装）。
@@ -195,10 +196,9 @@
   目录不写 yaml 不起子进程；落 `runner.constraints` + `confirmed`；运行期输入区隐藏。
 - **交付格式 ⊂ M4 产出格式**：`publish.formats` 要跟 `texture.export_formats` 同步
   （M6 只从 50_tex 复制，请求 M4 没产的 → `formats_missing` 假告警）。
-- **阶段耗时双源**：运行中「▲开始/√完成」计墙钟，结束用 manifest `elapsed_s` 覆盖；多件
-  **求和**并与墙钟分开标注；`runner.py` 阶段事件**不能去重**。
-- **进度分母是工作量不是种类**：每件独立计分、整批平均、按耗时加权（S1 .90/M4 .06）；
-  S1 跳过换 `W_SCAN` 归一。预览 **PLY 优先**；>6 万面先体素简化；打开项目即刷新。
+- **阶段耗时双源**：运行中计墙钟，结束用 manifest `elapsed_s` 覆盖；多件求和、与墙钟分开
+  标注；阶段事件**不能去重**。**进度分母是工作量不是种类**（按耗时加权 S1 .90/M4 .06，
+  S1 跳过换 `W_SCAN`）。预览 PLY 优先、>6 万面先体素简化、打开项目即刷新。
 
 ## X3 / X4（单期异常与时序）
 
@@ -218,12 +218,12 @@
 - **pytest-timeout 没装**（`--timeout=` 直接 unrecognized argument）。
 - **尺度类测试的容差按 MPS 表达**，不要硬编码毫米数：M3C2 的法向搜索半径是 `10×MPS`，
   曲面上邻域把法向拉平 → 固有偏差 ≈0.4×MPS（R=100mm 实测偏 4%）。
+- **磁盘满会让 `test_batch_dry_run` 挂**（assert 1 == 0，日志是 `h3d.health`
+  「盘仅剩 x GB」）→ **先清 C 盘别改代码**；`rm -rf $TEMP/...` 被 safe-delete 拦，
+  用 `[System.IO.Directory]::Delete($p,$true)`。
 - **flaky 比失败更危险**：会训练人「红了就重跑」。判据用 `atol`（浮点末位 1e-32 不是「结果不同」），
   且同一用例至少跑 3 次再下结论。
 
 ## 拆出去的细节
-
-- **B1 档案层与图集**（布局/只读强制/空时相/图集件级幂等/引用体检/继承不重展开 UV/
-  相机变换/版本冻结）与 **S1 双场景、COLMAP 稠密** → `.workbuddy/memory/MEMORY_S1_B1.md`。
-- **X3/X4** 全部数字与失败路径 → `.workbuddy/memory/MEMORY_X3_X4.md`。
-- **PDF 渲染 / 打包 / push 代理** → `.workbuddy/memory/MEMORY_OPS.md`。
+- B1 档案/图集、S1 双场景与 COLMAP 稠密 → `MEMORY_S1_B1.md`；X3/X4 全部数字 →
+  `MEMORY_X3_X4.md`；PDF 渲染/打包/push 代理 → `MEMORY_OPS.md`。

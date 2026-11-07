@@ -16,6 +16,6 @@
 #: 现在只有这一行是真的，另外两处要么派生、要么由测试对着它校验。
 #: 改版本时：改这一行 + 在 CHANGELOG 顶部加同号条目（`tests/test_version_single_source.py`
 #: 会拦住漏改）。
-__version__ = "1.1.25"
+__version__ = "1.1.26"
 
 __all__ = ["__version__"]
